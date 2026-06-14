@@ -1,0 +1,63 @@
+{
+  "feedback": [
+    {
+      "vuln_id": "1b79cb50-2f1e-4ab2-a8bc-3de7b95f2fbc",
+      "vuln_type": "unknown",
+      "endpoint_pattern": "http://testphp.vulnweb.com/showimage.php?file=1&file=%3Cscript%3Ealert('XSS')%3C/script%3E",
+      "param": "file",
+      "payload_pattern": "",
+      "is_true_positive": false,
+      "explanation": "nao disparou alerta de XSS e parece ser mais um possivel Path Transversal aqui",
+      "severity": "medium",
+      "domain": "http://testphp.vulnweb.com/showimage.php?file=1&file=%3Cscript%3Ealert('XSS')%3C/script%3E",
+      "timestamp": "2026-02-16T20:41:38.817732"
+    },
+    {
+      "vuln_id": "836fd546-ee28-4869-a9fe-1c2cd37a3f41",
+      "vuln_type": "unknown",
+      "endpoint_pattern": "http://testphp.vulnweb.com/hpp/?pp=12&pp=%3Cscript%3Ealert('XSS')%3C/script%3E",
+      "param": "pp",
+      "payload_pattern": "",
+      "is_true_positive": false,
+      "explanation": "Parece ser mais DOM XSS",
+      "severity": "medium",
+      "domain": "http://testphp.vulnweb.com/hpp/?pp=12&pp=%3Cscript%3Ealert('XSS')%3C/script%3E",
+      "timestamp": "2026-02-16T20:42:01.342162"
+    }
+  ],
+  "patterns": {
+    "unknown": [
+      {
+        "endpoint_pattern": "http://testphp.vulnweb.com/showimage.php?file=1&file=%3Cscript%3Ealert('XSS')%3C/script%3E",
+        "vuln_type": "unknown",
+        "indicators": [
+          "file"
+        ],
+        "is_false_positive": true,
+        "confidence": 0.5,
+        "feedback_count": 1,
+        "domain": "http://testphp.vulnweb.com/showimage.php?file=1&file=%3Cscript%3Ealert('XSS')%3C/script%3E",
+        "explanation_summary": "nao disparou alerta de XSS e parece ser mais um possivel Path Transversal aqui",
+        "last_updated": "2026-02-16T20:41:38.817738"
+      },
+      {
+        "endpoint_pattern": "http://testphp.vulnweb.com/hpp/?pp=12&pp=%3Cscript%3Ealert('XSS')%3C/script%3E",
+        "vuln_type": "unknown",
+        "indicators": [
+          "pp"
+        ],
+        "is_false_positive": true,
+        "confidence": 0.5,
+        "feedback_count": 1,
+        "domain": "http://testphp.vulnweb.com/hpp/?pp=12&pp=%3Cscript%3Ealert('XSS')%3C/script%3E",
+        "explanation_summary": "Parece ser mais DOM XSS",
+        "last_updated": "2026-02-16T20:42:01.342167"
+      }
+    ]
+  },
+  "metadata": {
+    "total_feedback": 2,
+    "total_patterns": 2,
+    "last_updated": "2026-02-16T20:42:01.342235"
+  }
+}

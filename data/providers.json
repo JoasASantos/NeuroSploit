@@ -1,0 +1,269 @@
+{
+  "claude_code": {
+    "id": "claude_code",
+    "name": "Claude Code",
+    "auth_type": "oauth",
+    "api_format": "anthropic",
+    "base_url": "https://api.anthropic.com",
+    "tier": 1,
+    "default_model": "claude-sonnet-4-5-20250929",
+    "accounts": {
+      "acct_36f54de8": {
+        "id": "acct_36f54de8",
+        "label": "Claude Code (credentials file)",
+        "source": "cli_detect",
+        "credential_type": "oauth",
+        "created_at": "2026-02-16T18:46:19Z",
+        "last_used": null,
+        "tokens_used": 0,
+        "is_active": true,
+        "expires_at": 1771822745.308,
+        "model_override": null
+      }
+    },
+    "env_key": null,
+    "enabled": true
+  },
+  "codex_cli": {
+    "id": "codex_cli",
+    "name": "OpenAI Codex CLI",
+    "auth_type": "oauth",
+    "api_format": "openai_compat",
+    "base_url": "https://api.openai.com/v1",
+    "tier": 1,
+    "default_model": "gpt-4o",
+    "accounts": {},
+    "env_key": null,
+    "enabled": true
+  },
+  "gemini_cli": {
+    "id": "gemini_cli",
+    "name": "Gemini CLI",
+    "auth_type": "oauth",
+    "api_format": "gemini_code_assist",
+    "base_url": "https://cloudcode-pa.googleapis.com",
+    "tier": 1,
+    "default_model": "gemini-2.5-flash",
+    "accounts": {
+      "acct_ad76c781": {
+        "id": "acct_ad76c781",
+        "label": "Gemini CLI",
+        "source": "cli_detect",
+        "credential_type": "oauth",
+        "created_at": "2026-02-16T18:45:22Z",
+        "last_used": "2026-02-18T14:59:29Z",
+        "tokens_used": 5009,
+        "is_active": true,
+        "expires_at": 1771461656.003,
+        "model_override": null
+      }
+    },
+    "env_key": null,
+    "enabled": true
+  },
+  "cursor": {
+    "id": "cursor",
+    "name": "Cursor",
+    "auth_type": "oauth",
+    "api_format": "openai_compat",
+    "base_url": "https://api2.cursor.sh/v1",
+    "tier": 1,
+    "default_model": "cursor-fast",
+    "accounts": {},
+    "env_key": null,
+    "enabled": true
+  },
+  "copilot": {
+    "id": "copilot",
+    "name": "GitHub Copilot",
+    "auth_type": "oauth",
+    "api_format": "openai_compat",
+    "base_url": "https://api.githubcopilot.com",
+    "tier": 1,
+    "default_model": "gpt-4o",
+    "accounts": {},
+    "env_key": null,
+    "enabled": true
+  },
+  "iflow": {
+    "id": "iflow",
+    "name": "iFlow AI",
+    "auth_type": "oauth",
+    "api_format": "openai_compat",
+    "base_url": "https://api.iflow.ai/v1",
+    "tier": 1,
+    "default_model": "kimi-k2",
+    "accounts": {},
+    "env_key": null,
+    "enabled": true
+  },
+  "qwen_code": {
+    "id": "qwen_code",
+    "name": "Qwen Code",
+    "auth_type": "oauth",
+    "api_format": "openai_compat",
+    "base_url": "https://chat.qwen.ai/api/v1",
+    "tier": 1,
+    "default_model": "qwen3-coder",
+    "accounts": {},
+    "env_key": null,
+    "enabled": true
+  },
+  "kiro": {
+    "id": "kiro",
+    "name": "Kiro AI",
+    "auth_type": "oauth",
+    "api_format": "anthropic",
+    "base_url": "https://api.anthropic.com",
+    "tier": 1,
+    "default_model": "claude-sonnet-4-5-20250929",
+    "accounts": {},
+    "env_key": null,
+    "enabled": true
+  },
+  "anthropic": {
+    "id": "anthropic",
+    "name": "Anthropic",
+    "auth_type": "api_key",
+    "api_format": "anthropic",
+    "base_url": "https://api.anthropic.com",
+    "tier": 1,
+    "default_model": "claude-sonnet-4-5-20250929",
+    "accounts": {
+      "acct_eaabc038": {
+        "id": "acct_eaabc038",
+        "label": "Anthropic (env)",
+        "source": "env_var",
+        "credential_type": "api_key",
+        "created_at": "2026-02-16T13:46:47Z",
+        "last_used": "2026-02-16T19:05:03Z",
+        "tokens_used": 114420,
+        "is_active": true,
+        "expires_at": null,
+        "model_override": null
+      }
+    },
+    "env_key": "ANTHROPIC_API_KEY",
+    "enabled": true
+  },
+  "openai": {
+    "id": "openai",
+    "name": "OpenAI",
+    "auth_type": "api_key",
+    "api_format": "openai_compat",
+    "base_url": "https://api.openai.com/v1",
+    "tier": 1,
+    "default_model": "gpt-4o",
+    "accounts": {},
+    "env_key": "OPENAI_API_KEY",
+    "enabled": true
+  },
+  "gemini": {
+    "id": "gemini",
+    "name": "Gemini",
+    "auth_type": "api_key",
+    "api_format": "gemini",
+    "base_url": "https://generativelanguage.googleapis.com/v1beta",
+    "tier": 1,
+    "default_model": "gemini-2.5-flash",
+    "accounts": {},
+    "env_key": "GEMINI_API_KEY",
+    "enabled": true
+  },
+  "openrouter": {
+    "id": "openrouter",
+    "name": "OpenRouter",
+    "auth_type": "api_key",
+    "api_format": "openai_compat",
+    "base_url": "https://openrouter.ai/api/v1",
+    "tier": 1,
+    "default_model": "anthropic/claude-sonnet-4-5",
+    "accounts": {},
+    "env_key": "OPENROUTER_API_KEY",
+    "enabled": true
+  },
+  "glm": {
+    "id": "glm",
+    "name": "GLM (Zhipu AI)",
+    "auth_type": "api_key",
+    "api_format": "openai_compat",
+    "base_url": "https://open.bigmodel.cn/api/paas/v4",
+    "tier": 2,
+    "default_model": "glm-4-flash",
+    "accounts": {},
+    "env_key": "GLM_API_KEY",
+    "enabled": true
+  },
+  "kimi": {
+    "id": "kimi",
+    "name": "Kimi (Moonshot)",
+    "auth_type": "api_key",
+    "api_format": "openai_compat",
+    "base_url": "https://api.moonshot.cn/v1",
+    "tier": 2,
+    "default_model": "moonshot-v1-8k",
+    "accounts": {},
+    "env_key": "KIMI_API_KEY",
+    "enabled": true
+  },
+  "minimax": {
+    "id": "minimax",
+    "name": "Minimax",
+    "auth_type": "api_key",
+    "api_format": "openai_compat",
+    "base_url": "https://api.minimax.chat/v1",
+    "tier": 2,
+    "default_model": "abab6.5-chat",
+    "accounts": {},
+    "env_key": "MINIMAX_API_KEY",
+    "enabled": true
+  },
+  "together": {
+    "id": "together",
+    "name": "Together AI",
+    "auth_type": "api_key",
+    "api_format": "openai_compat",
+    "base_url": "https://api.together.xyz/v1",
+    "tier": 2,
+    "default_model": "meta-llama/Llama-3-70b-chat-hf",
+    "accounts": {},
+    "env_key": "TOGETHER_API_KEY",
+    "enabled": true
+  },
+  "fireworks": {
+    "id": "fireworks",
+    "name": "Fireworks AI",
+    "auth_type": "api_key",
+    "api_format": "openai_compat",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "tier": 2,
+    "default_model": "accounts/fireworks/models/llama-v3p1-70b-instruct",
+    "accounts": {},
+    "env_key": "FIREWORKS_API_KEY",
+    "enabled": true
+  },
+  "ollama": {
+    "id": "ollama",
+    "name": "Ollama",
+    "auth_type": "api_key",
+    "api_format": "ollama",
+    "base_url": "http://localhost:11434",
+    "tier": 3,
+    "default_model": "llama3",
+    "accounts": {},
+    "env_key": "OLLAMA_API_KEY",
+    "enabled": true
+  },
+  "lmstudio": {
+    "id": "lmstudio",
+    "name": "LM Studio",
+    "auth_type": "api_key",
+    "api_format": "openai_compat",
+    "base_url": "http://localhost:1234/v1",
+    "tier": 3,
+    "default_model": "local-model",
+    "accounts": {},
+    "env_key": "LMSTUDIO_API_KEY",
+    "enabled": true
+  }
+}

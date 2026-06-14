@@ -1,3 +1,61 @@
+# NeuroSploit v3.3.0 — Release Notes
+
+**Release Date:** June 2026
+**Codename:** Autonomous MD-Agent Engine
+**License:** MIT
+
+---
+
+## TL;DR
+
+NeuroSploit's pentest agent has been **re-modeled into an autonomous,
+markdown-driven engine**. You give it a URL; it composes a master prompt from a
+curated library of **213 markdown agents** and drives a locally-installed
+**agentic CLI backend** (Claude Code / Codex / Grok CLI, or a Claude
+subscription) to run the engagement end-to-end — with **Playwright MCP** for
+proof-of-execution and a **reinforcement-learning** loop that adapts agent
+selection across runs. The old Python orchestration was retired to `legacy/`.
+
+## Highlights
+
+- **New engine `neurosploit_agent/`** + `./neurosploit` terminal launcher.
+  Interactive (`./neurosploit`) or one-shot (`./neurosploit run <url>`).
+- **213-agent markdown library (`agents_md/`)**: **196 vulnerability
+  specialists** (now covering LLM/AI, cloud/K8s, modern API/auth, advanced
+  injection, protocol smuggling, logic/crypto/supply-chain) + **17 meta-agents**.
+- **Meta-agents for quality**: `recon`, `exploit_validator`,
+  `false_positive_filter`, `severity_assessor`, `impact_evaluator`, `reporter`,
+  and `rl_feedback` — the pipeline validates and adversarially refutes every
+  candidate before it can become a finding.
+- **Pluggable agentic CLI backends** with auto-detection: Claude Code, Codex,
+  Grok CLI; **subscription mode** via Claude Code login.
+- **Playwright MCP** wired in (`.mcp.json`) so agents prove client-side execution
+  (XSS/CSTI) and capture DOM/network/screenshots instead of trusting reflection.
+- **Reinforcement learning** (`neurosploit_agent/rl.py` + `meta/rl_feedback.md`):
+  bounded per-agent weights with per-tech-stack affinity, persisted to
+  `data/rl_state.json`.
+- **Latest model registry** (`neurosploit_agent/models.py`): Anthropic Claude
+  4.x, OpenAI, xAI Grok, Gemini, OpenRouter, Ollama, and **NVIDIA NIM** (PR #28,
+  OpenAI-compatible `integrate.api.nvidia.com`, `nvapi-` keys).
+- **Data-driven agent builder** `scripts/build_agents.py` for extending the
+  library without boilerplate.
+
+## Breaking changes
+
+- The monolithic `neurosploit.py` orchestrator and Python agent classes moved to
+  `legacy/` and are no longer the supported entrypoint. Use `./neurosploit`.
+- Primary agent library moved from `prompts/agents/` to `agents_md/` (originals
+  preserved; meta/role prompts split into `agents_md/meta/`).
+
+## Upgrade notes
+
+1. Install at least one agentic CLI: Claude Code, Codex, or Grok CLI.
+2. `npx` (Node) is required for Playwright MCP.
+3. Copy `.env.example` → `.env`; set a provider key (or use Claude subscription).
+4. `./neurosploit backends` to confirm detection, then `./neurosploit`.
+
+---
+
 # NeuroSploit v3.0.0 — Release Notes
 
 **Release Date:** February 2026

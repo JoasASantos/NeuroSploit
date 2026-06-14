@@ -78,3 +78,6 @@ docker/*.env
 # Results (runtime output)
 # ==============================
 results/
+
+# v3.3.0 runtime RL state
+data/rl_state.json
