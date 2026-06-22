@@ -59,6 +59,7 @@ async fn info(State(st): State<Arc<AppState>>) -> Json<Value> {
         "version": "3.4.0",
         "agents": {"vulns": lib.vulns.len(), "meta": lib.meta.len(), "total": lib.total()},
         "providers": provs,
+        "cli_backends": harness::installed_cli_backends(),
     }))
 }
 
@@ -126,6 +127,7 @@ async fn run(State(st): State<Arc<AppState>>, Json(body): Json<Value>) -> Json<V
         let vote_n = body.get("vote_n").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
         let max_agents = body.get("max_agents").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let offline = body.get("offline").and_then(|v| v.as_bool()).unwrap_or(false);
+        let subscription = body.get("subscription").and_then(|v| v.as_bool()).unwrap_or(false);
 
         let lib = agents::load(&base);
         let refs: Vec<ModelRef> = if models.is_empty() {
@@ -133,7 +135,7 @@ async fn run(State(st): State<Arc<AppState>>, Json(body): Json<Value>) -> Json<V
         } else {
             models.iter().map(|s| ModelRef::parse(s)).collect()
         };
-        let pool = ModelPool::new(refs, 8);
+        let pool = ModelPool::with_auth(refs, 8, subscription);
 
         let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(256);
         let stf = st2.clone();
@@ -160,6 +162,7 @@ async fn run(State(st): State<Arc<AppState>>, Json(body): Json<Value>) -> Json<V
             cfg.vote_n = vote_n;
             cfg.max_agents = max_agents;
             cfg.offline = offline;
+            cfg.subscription = subscription;
             let _ = tx.send(format!("=== target: {url} ===")).await;
             let out = harness::run(cfg, &lib, &pool, tx.clone()).await;
             all_findings.extend(out.findings);

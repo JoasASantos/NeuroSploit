@@ -86,7 +86,10 @@
      <div class="field"><label>Validator votes (N)</label><input id="voten" type="number" value="3" min="1" max="9"/></div>
      <div class="field"><label>Max agents (0 = all)</label><input id="maxa" type="number" value="8" min="0"/></div>
     </div>
-    <div class="toggles"><label class="toggle on" id="t-off"><input type="checkbox" id="offline" checked/> Offline (no API calls — pipeline self-test)</label></div>
+    <div class="toggles">
+     <label class="toggle on" id="t-off"><input type="checkbox" id="offline" checked/> Offline (pipeline self-test)</label>
+     <label class="toggle" id="t-sub"><input type="checkbox" id="subscription"/> Use subscription (Claude/Codex login)</label>
+    </div>
     <div class="btns"><button class="run" id="go">▶ Run harness</button></div>
     <div class="term" id="term"></div>
     <div class="sevrow" id="sevrow"></div>
@@ -112,6 +115,7 @@ let INFO=null,AGENTS=[],lastRun=null;
 $$('.nav').forEach(n=>n.onclick=()=>{$$('.nav').forEach(x=>x.classList.remove('on'));n.classList.add('on');
  $$('.view').forEach(v=>v.classList.remove('on'));$('#v-'+n.dataset.v).classList.add('on');});
 $('#t-off').querySelector('input').onchange=e=>$('#t-off').classList.toggle('on',e.target.checked);
+$('#t-sub').querySelector('input').onchange=e=>$('#t-sub').classList.toggle('on',e.target.checked);
 
 async function init(){
  INFO=await (await fetch('/api/info')).json();
@@ -136,7 +140,7 @@ async function run(){
  const targets=$('#targets').value.split('\n').map(s=>s.trim()).filter(Boolean);
  if(!targets.length){$('#targets').focus();$('#targets').style.borderColor='var(--crit)';return;}
  $('#go').disabled=true;$('#term').innerHTML='';$('#sevrow').style.display='none';$('#findings').innerHTML='';
- const body={targets,models:selectedModels(),vote_n:+$('#voten').value,max_agents:+$('#maxa').value,offline:$('#offline').checked};
+ const body={targets,models:selectedModels(),vote_n:+$('#voten').value,max_agents:+$('#maxa').value,offline:$('#offline').checked,subscription:$('#subscription').checked};
  logLine('Queued '+targets.length+' target(s) · panel: '+(body.models.join(', ')||'default'));
  const r=await (await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
  if(r.error){logLine('ERROR: '+r.error);$('#go').disabled=false;return;}

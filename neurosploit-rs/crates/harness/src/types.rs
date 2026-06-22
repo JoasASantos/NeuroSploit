@@ -70,6 +70,10 @@ pub struct RunConfig {
     /// Offline mode: exercise the full pipeline without calling any model API.
     #[serde(default)]
     pub offline: bool,
+    /// Use local agentic CLI subscriptions (Claude Code / Codex / Grok) instead
+    /// of HTTP API keys.
+    #[serde(default)]
+    pub subscription: bool,
 }
 
 fn default_vote() -> usize {
@@ -88,6 +92,7 @@ impl RunConfig {
             concurrency: 8,
             max_agents: 0,
             offline: false,
+            subscription: false,
         }
     }
 }

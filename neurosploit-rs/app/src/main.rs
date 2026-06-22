@@ -33,6 +33,10 @@ enum Cmd {
         /// Exercise the pipeline without calling any model API.
         #[arg(long)]
         offline: bool,
+        /// Use local agentic CLI subscriptions (Claude Code / Codex / Grok)
+        /// instead of HTTP API keys.
+        #[arg(long)]
+        subscription: bool,
     },
     /// Show agent library counts.
     Agents,
@@ -84,18 +88,19 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        Cmd::Run { url, models, max_agents, vote_n, offline } => {
+        Cmd::Run { url, models, max_agents, vote_n, offline, subscription } => {
             let url = if url.starts_with("http") { url } else { format!("https://{url}") };
             let mut cfg = RunConfig::new(&url);
             cfg.max_agents = max_agents;
             cfg.vote_n = vote_n;
             cfg.offline = offline;
+            cfg.subscription = subscription;
             if !models.is_empty() {
                 cfg.models = models;
             }
             let lib = agents::load(&base);
             let refs: Vec<ModelRef> = cfg.models.iter().map(|s| ModelRef::parse(s)).collect();
-            let pool = ModelPool::new(refs, cfg.concurrency);
+            let pool = ModelPool::with_auth(refs, cfg.concurrency, cfg.subscription);
 
             let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(256);
             let printer = tokio::spawn(async move {

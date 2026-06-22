@@ -1,6 +1,9 @@
 use anyhow::{anyhow, Result};
 use serde::Serialize;
+use std::process::Stdio;
 use std::time::Duration;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
 
 /// A model provider exposing an OpenAI-compatible `/chat/completions` endpoint.
 #[derive(Clone, Debug, Serialize)]
@@ -117,6 +120,66 @@ impl ChatClient {
             .ok_or_else(|| anyhow!("no content in response"))?;
         Ok(content.to_string())
     }
+}
+
+impl ChatClient {
+    /// Complete via a locally-installed **agentic CLI subscription** (Claude
+    /// Code / Codex / Grok) instead of an API key. This uses the user's logged-in
+    /// subscription, so no provider key is required.
+    pub async fn chat_cli(&self, provider: &str, model: &str, system: &str, user: &str) -> Result<String> {
+        let bin = cli_binary_for(provider)
+            .ok_or_else(|| anyhow!("no CLI/subscription backend for provider '{}'", provider))?;
+        let prompt = format!("{system}\n\n{user}");
+        let mut cmd = Command::new(bin);
+        match bin {
+            // Claude Code headless print mode (uses the Claude subscription login).
+            "claude" => {
+                cmd.arg("-p").arg("--model").arg(model);
+            }
+            // Codex non-interactive exec (uses the ChatGPT/Codex login), prompt on stdin.
+            "codex" => {
+                cmd.arg("exec").arg("--model").arg(model).arg("-");
+            }
+            // Grok CLI, prompt on stdin (best-effort flags).
+            "grok" => {
+                cmd.arg("--model").arg(model);
+            }
+            _ => {}
+        }
+        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = cmd.spawn().map_err(|e| anyhow!("spawn {} failed: {}", bin, e))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(prompt.as_bytes()).await?;
+            // Drop closes stdin so the CLI processes the prompt and exits.
+        }
+        let out = child.wait_with_output().await?;
+        if !out.status.success() {
+            return Err(anyhow!("{} subscription CLI failed: {}", bin, truncate(&String::from_utf8_lossy(&out.stderr), 200)));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+}
+
+/// Map a provider to its local agentic CLI binary (subscription backend).
+pub fn cli_binary_for(provider: &str) -> Option<&'static str> {
+    match provider {
+        "anthropic" => Some("claude"),
+        "openai" => Some("codex"),
+        "xai" => Some("grok"),
+        _ => None,
+    }
+}
+
+/// Is `name` an executable found on PATH?
+pub fn binary_in_path(name: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).any(|dir| dir.join(name).is_file()))
+        .unwrap_or(false)
+}
+
+/// Which subscription CLI backends are installed locally.
+pub fn installed_cli_backends() -> Vec<&'static str> {
+    ["claude", "codex", "grok"].into_iter().filter(|b| binary_in_path(b)).collect()
 }
 
 impl Default for ChatClient {

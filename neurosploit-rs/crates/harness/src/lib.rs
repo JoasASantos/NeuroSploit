@@ -14,7 +14,9 @@ pub mod report;
 pub mod types;
 
 pub use agents::{Agent, Library};
-pub use models::{provider_for, providers, ChatClient, ModelRef, Provider};
+pub use models::{
+    cli_binary_for, installed_cli_backends, provider_for, providers, ChatClient, ModelRef, Provider,
+};
 pub use pipeline::run;
 pub use pool::ModelPool;
 pub use types::{Finding, RunConfig};

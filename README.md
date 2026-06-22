@@ -29,7 +29,10 @@ and a **reinforcement-learning** loop that gets smarter every run.
 > ./target/release/neurosploit serve            # web dashboard → :8788
 > ./target/release/neurosploit run https://target.example --model anthropic:claude-opus-4-8 --model openai:gpt-5.1
 > ./target/release/neurosploit run https://t.example --offline   # pipeline self-test, no API keys
+> ./target/release/neurosploit run https://t.example --subscription --model anthropic:claude-opus-4-8  # uses Claude Code login, no API key
 > ```
+> Two auth paths: **model APIs** (provider key) or **subscription** — drive your
+> local **Claude Code** / **Codex** / **Grok** logins directly (no API key).
 > 11 OpenAI-compatible providers / 31 models (Claude, GPT, Grok, NVIDIA NIM,
 > DeepSeek, Mistral, Qwen, Groq, Together, OpenRouter, Ollama). Reads the same
 > `agents_md/` library (213 agents).
