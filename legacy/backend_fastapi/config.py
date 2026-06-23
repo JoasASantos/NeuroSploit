@@ -34,8 +34,6 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
     NIM_API_KEY: Optional[str] = os.getenv("NIM_API_KEY")
     NIM_BASE_URL: str = os.getenv("NIM_BASE_URL", "https://integrate.api.nvidia.com/v1/chat/completions")
-    LITELLM_API_KEY: Optional[str] = os.getenv("LITELLM_API_KEY")
-    LITELLM_BASE_URL: str = os.getenv("LITELLM_BASE_URL", "http://localhost:4000/v1")
     OPENROUTER_API_KEY: Optional[str] = os.getenv("OPENROUTER_API_KEY")
     GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
     AZURE_OPENAI_API_KEY: Optional[str] = os.getenv("AZURE_OPENAI_API_KEY")

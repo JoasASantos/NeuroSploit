@@ -72,7 +72,6 @@ class SettingsUpdate(BaseModel):
     anthropic_api_key: Optional[str] = None
     openai_api_key: Optional[str] = None
     nim_api_key: Optional[str] = None
-    litellm_api_key: Optional[str] = None
     openrouter_api_key: Optional[str] = None
     gemini_api_key: Optional[str] = None
     together_api_key: Optional[str] = None
@@ -106,7 +105,6 @@ class SettingsResponse(BaseModel):
     has_anthropic_key: bool = False
     has_openai_key: bool = False
     has_nim_key: bool = False
-    has_litellm_key: bool = False
     has_openrouter_key: bool = False
     has_gemini_key: bool = False
     has_together_key: bool = False
@@ -178,8 +176,6 @@ def _load_settings_from_env() -> dict:
     provider = "claude"
     if os.getenv("NIM_API_KEY"):
         provider = "nim"
-    elif os.getenv("LITELLM_API_KEY"):
-        provider = "litellm"
     elif os.getenv("ANTHROPIC_API_KEY"):
         provider = "claude"
     elif os.getenv("OPENAI_API_KEY"):
@@ -193,7 +189,6 @@ def _load_settings_from_env() -> dict:
         "anthropic_api_key": os.getenv("ANTHROPIC_API_KEY", ""),
         "openai_api_key": os.getenv("OPENAI_API_KEY", ""),
         "nim_api_key": os.getenv("NIM_API_KEY", ""),
-        "litellm_api_key": os.getenv("LITELLM_API_KEY", ""),
         "openrouter_api_key": os.getenv("OPENROUTER_API_KEY", ""),
         "gemini_api_key": os.getenv("GEMINI_API_KEY", ""),
         "together_api_key": os.getenv("TOGETHER_API_KEY", ""),
@@ -235,7 +230,6 @@ async def get_settings():
         has_anthropic_key=bool(_settings["anthropic_api_key"] or os.getenv("ANTHROPIC_API_KEY")),
         has_openai_key=bool(_settings["openai_api_key"] or os.getenv("OPENAI_API_KEY")),
         has_nim_key=bool(_settings.get("nim_api_key") or os.getenv("NIM_API_KEY")),
-        has_litellm_key=bool(_settings.get("litellm_api_key") or os.getenv("LITELLM_API_KEY")),
         has_openrouter_key=bool(_settings["openrouter_api_key"] or os.getenv("OPENROUTER_API_KEY")),
         has_gemini_key=bool(_settings.get("gemini_api_key") or os.getenv("GEMINI_API_KEY")),
         has_together_key=bool(_settings.get("together_api_key") or os.getenv("TOGETHER_API_KEY")),
@@ -292,12 +286,6 @@ async def update_settings(settings_data: SettingsUpdate):
         if settings_data.nim_api_key:
             os.environ["NIM_API_KEY"] = settings_data.nim_api_key
             env_updates["NIM_API_KEY"] = settings_data.nim_api_key
-
-    if settings_data.litellm_api_key is not None:
-        _settings["litellm_api_key"] = settings_data.litellm_api_key
-        if settings_data.litellm_api_key:
-            os.environ["LITELLM_API_KEY"] = settings_data.litellm_api_key
-            env_updates["LITELLM_API_KEY"] = settings_data.litellm_api_key
 
     if settings_data.openrouter_api_key is not None:
         _settings["openrouter_api_key"] = settings_data.openrouter_api_key

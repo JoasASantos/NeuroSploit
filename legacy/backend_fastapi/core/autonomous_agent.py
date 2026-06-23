@@ -370,7 +370,6 @@ class LLMClient:
         self.azure_openai_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "")
         self.codex_key = os.getenv("CODEX_API_KEY", "")
         self.nim_key = os.getenv("NIM_API_KEY", "")
-        self.litellm_key = os.getenv("LITELLM_API_KEY", "")
         self.ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2")
         self.configured_model = os.getenv("DEFAULT_LLM_MODEL", "")  # User-configured model name
         self.client = None
@@ -429,14 +428,6 @@ class LLMClient:
             self.provider = "nim"
             self.model_name = self.configured_model or os.getenv("NIM_MODEL", "openai/gpt-oss-120b")
             print(f"[LLM] NVIDIA NIM initialized (model: {self.model_name})")
-            return
-
-        # 0.5 Try LiteLLM (AI gateway proxy - OpenAI-compatible)
-        if self.litellm_key:
-            self.client = "litellm"
-            self.provider = "litellm"
-            self.model_name = self.configured_model or ""
-            print(f"[LLM] LiteLLM initialized (model: {self.model_name})")
             return
 
         # 1. Try Claude (Anthropic)
@@ -594,7 +585,6 @@ class LLMClient:
             "ollama_available": self._check_ollama(),
             "lmstudio_available": self._check_lmstudio(),
             "has_nim_key": bool(self.nim_key),
-            "has_litellm_key": bool(self.litellm_key),
             "has_google_key": bool(self.google_key),
             "has_together_key": bool(self.together_key),
             "has_fireworks_key": bool(self.fireworks_key),
@@ -667,15 +657,6 @@ class LLMClient:
                     url=os.getenv("NIM_BASE_URL", "https://integrate.api.nvidia.com/v1/chat/completions"),
                     api_key=self.nim_key,
                     model=self.model_name or "openai/gpt-oss-120b",
-                )
-
-            elif self.provider == "litellm":
-                base = os.getenv("LITELLM_BASE_URL", "http://localhost:4000/v1")
-                return await self._generate_openai_compatible(
-                    prompt, system or default_system, max_tokens,
-                    url=f"{base.rstrip('/')}/chat/completions",
-                    api_key=self.litellm_key,
-                    model=self.model_name,
                 )
 
             elif self.provider == "openai":
