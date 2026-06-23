@@ -149,6 +149,13 @@ PROVIDERS: Dict[str, Provider] = {
             Model("x-ai/grok-4", "Grok 4", 256_000),
         ],
     ),
+    # --- LiteLLM (AI gateway proxy) -----------------------------------------
+    "litellm": Provider(
+        key="litellm", label="LiteLLM",
+        env_keys=["LITELLM_API_KEY"],
+        base_url="http://localhost:4000/v1", base_url_env="OPENAI_BASE_URL",
+        models=[],
+    ),
     # --- Local Ollama ------------------------------------------------------
     "ollama": Provider(
         key="ollama", label="Ollama (local)",
