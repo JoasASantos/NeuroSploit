@@ -84,6 +84,13 @@ DEFAULT_PROVIDERS: List[Dict] = [
         "tier": 2, "default_model": os.getenv("NIM_MODEL", "openai/gpt-oss-120b"),
         "env_key": "NIM_API_KEY",
     },
+    # === LiteLLM AI Gateway (Tier 2) ===
+    {
+        "id": "litellm", "name": "LiteLLM", "auth_type": "api_key",
+        "api_format": "openai_compat", "base_url": os.getenv("LITELLM_BASE_URL", "http://localhost:4000/v1"),
+        "tier": 2, "default_model": "",
+        "env_key": "LITELLM_API_KEY",
+    },
     # === OAuth Providers (Tier 1 - Subscription) ===
     {
         "id": "claude_code", "name": "Claude Code", "auth_type": "oauth",
