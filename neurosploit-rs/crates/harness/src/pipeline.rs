@@ -16,6 +16,8 @@ pub struct RunOutput {
     pub agents_ran: Vec<String>,
     pub candidates: usize,
     pub recon: String,
+    /// The run's output directory (runs/ns-<ts>-<target>/).
+    pub workdir: String,
     /// Paths to persisted artifacts (recon/exploit/findings/report), if any.
     pub artifacts: Vec<String>,
 }
@@ -112,7 +114,7 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
         let _ = tx.send(format!("selected {} specialist agents (RL-ranked)", selected.len())).await;
         let _ = tx.send("offline: no exploitation performed (provide API keys or --subscription to run live)".into()).await;
         let artifacts = persist(&cfg, &recon, "", &[]);
-        return RunOutput { target: cfg.target.clone(), findings: vec![], agents_ran: selected.iter().map(|a| a.name.clone()).collect(), candidates: 0, recon, artifacts };
+        return RunOutput { target: cfg.target.clone(), workdir: cfg.workdir.clone().unwrap_or_default(), findings: vec![], agents_ran: selected.iter().map(|a| a.name.clone()).collect(), candidates: 0, recon, artifacts };
     }
 
     // Use the model to pick the agents whose preconditions match the recon —
@@ -218,7 +220,7 @@ pub async fn run_whitebox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: S
 
     if cfg.offline || bytes == 0 {
         let artifacts = persist(&cfg, "{}", &context, &[]);
-        return RunOutput { target: cfg.target.clone(), findings: vec![], agents_ran: selected.iter().map(|a| a.name.clone()).collect(), candidates: 0, recon: String::new(), artifacts };
+        return RunOutput { target: cfg.target.clone(), workdir: cfg.workdir.clone().unwrap_or_default(), findings: vec![], agents_ran: selected.iter().map(|a| a.name.clone()).collect(), candidates: 0, recon: String::new(), artifacts };
     }
 
     let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(selected.iter().cloned())
@@ -326,7 +328,7 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
         let selected: Vec<Agent> = ranked.into_iter().take(cap).collect();
         let _ = tx.send(format!("offline: selected {} agent(s); no live exploitation", selected.len())).await;
         let artifacts = persist(&cfg, &recon, &code_leads, &[]);
-        return RunOutput { target: cfg.target.clone(), findings: vec![],
+        return RunOutput { target: cfg.target.clone(), workdir: cfg.workdir.clone().unwrap_or_default(), findings: vec![],
             agents_ran: selected.iter().map(|a| a.name.clone()).collect(), candidates: 0, recon, artifacts };
     }
 
@@ -570,6 +572,7 @@ async fn finish(cfg: RunConfig, _lib: &Library, recon: String, transcript: Strin
 
     RunOutput {
         target: cfg.target.clone(),
+        workdir: cfg.workdir.clone().unwrap_or_default(),
         candidates: findings.len(),
         findings,
         agents_ran: selected.iter().map(|a| a.name.clone()).collect(),
