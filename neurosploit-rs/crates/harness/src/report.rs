@@ -139,9 +139,10 @@ pub fn typst_report(target: &str, findings: &[Finding], dir: &Path) -> std::io::
     ));
     data.push_str("#let findings = (\n");
     for f in sorted_findings(findings) {
+        let owasp = if f.owasp.is_empty() { f.cwe.clone() } else { f.owasp.clone() };
         data.push_str(&format!(
-            "  (severity: {}, title: {}, agent: {}, cwe: {}, cvss: {}, endpoint: {}, payload: {}, evidence: {}, impact: {}, remediation: {}, votes: {}, confidence: {}),\n",
-            tq(&f.severity), tq(&f.title), tq(&f.agent), tq(&f.cwe), tq(&f.cvss),
+            "  (severity: {}, title: {}, agent: {}, cwe: {}, owasp: {}, cvss: {}, endpoint: {}, payload: {}, evidence: {}, impact: {}, remediation: {}, votes: {}, confidence: {}),\n",
+            tq(&f.severity), tq(&f.title), tq(&f.agent), tq(&f.cwe), tq(&owasp), tq(&f.cvss),
             tq(&f.endpoint), tq(&f.payload), tq(&f.evidence), tq(&f.impact),
             tq(&f.remediation), tq(&f.votes), f.confidence,
         ));

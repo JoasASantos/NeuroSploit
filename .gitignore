@@ -102,3 +102,5 @@ neurosploit-rs/runs/
 v34_gui.png
 data/repl_runs.json
 data/repl_history.txt
+.neurosploit/
+/tmp/*

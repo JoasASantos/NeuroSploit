@@ -359,6 +359,7 @@ pub(crate) struct Spawned {
     pub task: tokio::task::JoinHandle<RunOutput>,
     pub rx: tokio::sync::mpsc::Receiver<String>,
     pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub soft: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub workdir: PathBuf,
 }
 
@@ -408,6 +409,7 @@ pub(crate) fn spawn_engagement(base: &Path, mut cfg: RunConfig, mcp: bool, mode:
     let refs: Vec<ModelRef> = cfg.models.iter().map(|s| ModelRef::parse(s)).collect();
     let pool = ModelPool::with_auth(refs, cfg.concurrency, cfg.subscription, mcp_config);
     let cancel = pool.cancel_handle();
+    let soft = pool.soft_handle();
     let (tx, rx) = tokio::sync::mpsc::channel::<String>(256);
     let task = tokio::spawn(async move {
         match mode {
@@ -417,7 +419,25 @@ pub(crate) fn spawn_engagement(base: &Path, mut cfg: RunConfig, mcp: bool, mode:
             Mode::Black => harness::run(cfg, &lib, &pool, tx).await,
         }
     });
-    Spawned { task, rx, cancel, workdir }
+    Spawned { task, rx, cancel, soft, workdir }
+}
+
+/// Absolute file:// URL of a run's report (PDF if present, else HTML).
+pub(crate) fn report_url(workdir: &Path) -> String {
+    let pdf = workdir.join("report.pdf");
+    let f = if pdf.is_file() { pdf } else { workdir.join("report.html") };
+    let abs = f.canonicalize().unwrap_or(f);
+    format!("file://{}", abs.display())
+}
+
+/// Generate a report directly from raw (unvalidated) findings — used by the REPL
+/// when the user chooses "report without validating" on /stop.
+pub(crate) fn report_raw(target: &str, findings: &[harness::types::Finding], workdir: &Path) {
+    let mut fs = findings.to_vec();
+    harness::attack_graph::enrich(&mut fs);
+    std::fs::write(workdir.join("findings.json"), serde_json::to_string_pretty(&fs).unwrap_or_default()).ok();
+    let _ = harness::report::typst_report(target, &fs, workdir);
+    write_status(workdir, "stopped-raw", &format!("\"findings\":{}", fs.len()));
 }
 
 /// Generate the report + final status for a finished run, ensuring the workdir
@@ -433,7 +453,7 @@ pub(crate) fn finalize_run(mut out: RunOutput, workdir: &Path) -> RunOutput {
 }
 
 async fn run_mode(base: &Path, cfg: RunConfig, mcp: bool, mode: Mode) -> anyhow::Result<RunOutput> {
-    let Spawned { mut task, mut rx, cancel, workdir } = spawn_engagement(base, cfg, mcp, mode);
+    let Spawned { mut task, mut rx, cancel, workdir, .. } = spawn_engagement(base, cfg, mcp, mode);
     let printer = tokio::spawn(async move {
         while let Some(line) = rx.recv().await { render_line(&line); }
     });
@@ -465,7 +485,8 @@ async fn run_mode(base: &Path, cfg: RunConfig, mcp: bool, mode: Mode) -> anyhow:
     }
 
     let out = finalize_run(out, &workdir);
-    println!("  ✓ COMPLETE — {} validated finding(s) · status: {}/status.json", out.findings.len(), workdir.display());
+    println!("  ✓ COMPLETE — {} validated finding(s)", out.findings.len());
+    println!("  \x1b[36mreport: {}\x1b[0m", report_url(&workdir));
     Ok(out)
 }
 
@@ -560,6 +581,7 @@ pub(crate) fn render_compact(raw: &str) -> Option<String> {
         if let Some((label, rest)) = stripped.split_once(' ') { who = format!("[{label}] "); line = rest; }
     }
     let (tag, rest) = line.split_once(": ").unwrap_or(("", line));
+    if tag == "finding_json" { return None; } // captured for /results & /finding, not shown
     let s = match tag {
         "exec" | "danger" => format!("\x1b[33m  ⌘ {who}{}\x1b[0m", trunc1(rest, 110)),
         "net" => format!("\x1b[36m  🌐 {who}{}\x1b[0m", trunc1(rest, 110)),

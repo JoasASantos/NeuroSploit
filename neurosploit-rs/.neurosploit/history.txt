@@ -22,3 +22,10 @@ run
 /results
 /report
 /exit
+/run
+/status
+/help
+/results
+/stop
+/results
+/exit

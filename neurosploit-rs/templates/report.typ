@@ -71,13 +71,32 @@
   )
 ]
 
+#let sorted = findings.sorted(key: f => sevrank(f.severity))
+
+// ---- Vulnerability summary table ----
+#if sorted.len() > 0 [
+  #v(8pt)
+  == Vulnerability Summary
+  #v(4pt)
+  #table(
+    columns: (auto, 1fr, auto, auto, auto),
+    inset: 6pt, align: (left + horizon, left + horizon, center + horizon, center + horizon, center + horizon),
+    stroke: 0.5pt + rgb("#dddddd"),
+    table.header(
+      text(weight: "bold")[\#], text(weight: "bold")[Vulnerability],
+      text(weight: "bold")[Severity], text(weight: "bold")[CVSS], text(weight: "bold")[OWASP / CWE],
+    ),
+    ..sorted.enumerate().map(((i, f)) => (
+      str(i + 1), f.title, sevbadge(f.severity), f.cvss, f.owasp,
+    )).flatten()
+  )
+]
+
 #v(10pt)
 #line(length: 100%, stroke: 0.5pt + gray)
 
-// ---- Findings ----
+// ---- Detailed findings ----
 = Findings
-
-#let sorted = findings.sorted(key: f => sevrank(f.severity))
 #if sorted.len() == 0 [
   #text(fill: gray)[_Nothing to report._]
 ]
@@ -86,14 +105,20 @@
     stroke: (left: 3pt + sevcolor.at(f.severity, default: gray), rest: 0.5pt + rgb("#dddddd")))[
     #sevbadge(f.severity) #h(6pt) #text(12pt, weight: "bold")[#str(i + 1). #f.title]
     #v(4pt)
-    #text(9pt, fill: gray)[
-      agent: #raw(f.agent) · CWE: #f.cwe · CVSS: #f.cvss · votes: #f.votes · confidence: #str(f.confidence)
-    ]
-    #v(2pt) #text(9pt)[Endpoint: #raw(f.endpoint)]
-    #v(5pt) #strong[Payload] #linebreak() #raw(f.payload)
+    #table(
+      columns: (auto, 1fr, auto, 1fr),
+      inset: 4pt, stroke: none, align: left + horizon,
+      text(8pt, fill: gray)[Criticality], text(8pt)[#f.severity],
+      text(8pt, fill: gray)[CVSS], text(8pt)[#f.cvss],
+      text(8pt, fill: gray)[OWASP/CWE], text(8pt)[#f.owasp · #f.cwe],
+      text(8pt, fill: gray)[Confidence], text(8pt)[#f.votes votes · #str(f.confidence)],
+      text(8pt, fill: gray)[Location], text(8pt)[#raw(f.endpoint)],
+      text(8pt, fill: gray)[Agent], text(8pt)[#raw(f.agent)],
+    )
+    #v(4pt) #strong[Description / Impact] #linebreak() #text(9pt)[#f.impact]
+    #v(4pt) #strong[Proof of Concept] #linebreak() #raw(f.payload)
     #v(3pt) #strong[Evidence] #linebreak() #raw(f.evidence)
-    #v(3pt) #strong[Impact:] #f.impact
-    #v(2pt) #strong[Remediation:] #f.remediation
+    #v(3pt) #strong[Remediation] #linebreak() #text(9pt)[#f.remediation]
   ]
   #v(8pt)
 ]

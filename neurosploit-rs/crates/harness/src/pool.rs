@@ -34,9 +34,11 @@ pub struct ModelPool {
     /// Progress channel: when set, the subscription CLI streams structured
     /// activity (tools called, commands run, files read) here live.
     progress: std::sync::Mutex<Option<tokio::sync::mpsc::Sender<String>>>,
-    /// Cooperative cancellation: when set, in-flight model calls short-circuit
-    /// and the pipeline stops launching new agents (graceful stop).
+    /// HARD cancellation: when set, in-flight model calls short-circuit (abort).
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// SOFT stop: stop launching new EXPLOIT agents, but let in-flight finish and
+    /// VALIDATION still run — so "stop and validate what was found" works.
+    soft: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl ModelPool {
@@ -65,6 +67,7 @@ impl ModelPool {
             mcp_config,
             progress: std::sync::Mutex::new(None),
             cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            soft: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -80,12 +83,22 @@ impl ModelPool {
         self.progress.lock().ok().and_then(|g| g.clone())
     }
 
-    /// Handle to request graceful cancellation of an in-progress engagement.
+    /// Handle to request HARD cancellation (abort all model calls).
     pub fn cancel_handle(&self) -> Arc<std::sync::atomic::AtomicBool> {
         self.cancel.clone()
     }
+    /// Handle to request a SOFT stop (stop launching new exploit agents; keep
+    /// validation running).
+    pub fn soft_handle(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        self.soft.clone()
+    }
     pub fn is_cancelled(&self) -> bool {
         self.cancel.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    /// Should the exploit phase stop launching new agents? (hard OR soft stop)
+    pub fn stop_exploiting(&self) -> bool {
+        self.cancel.load(std::sync::atomic::Ordering::Relaxed)
+            || self.soft.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// One completion for a model, via subscription CLI (optionally with MCP) or

@@ -159,7 +159,7 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
             let directives = directives.clone();
             let txc = tx.clone();
             async move {
-                if pool.is_cancelled() {
+                if pool.stop_exploiting() {
                     return (ag.name.clone(), String::new(), vec![]);
                 }
                 if verbose {
@@ -184,6 +184,7 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
                         // Live findings feed: surface each candidate the moment it appears.
                         for c in &f {
                             let _ = txc.send(format!("finding: [{}] {} @ {}", c.severity, c.title, c.endpoint)).await;
+                            if let Ok(j) = serde_json::to_string(c) { let _ = txc.send(format!("finding_json: {j}")).await; }
                         }
                         (ag.name.clone(), text, f)
                     }
@@ -378,7 +379,7 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
             let leads = leads_ctx.clone();
             let txc = tx.clone();
             async move {
-                if pool.is_cancelled() {
+                if pool.stop_exploiting() {
                     return (ag.name.clone(), String::new(), vec![]);
                 }
                 if verbose {
@@ -931,7 +932,7 @@ pub async fn run_host(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sende
             let directives = directives.clone();
             let txc = tx.clone();
             async move {
-                if pool.is_cancelled() { return (ag.name.clone(), String::new(), vec![]); }
+                if pool.stop_exploiting() { return (ag.name.clone(), String::new(), vec![]); }
                 if verbose {
                     let _ = txc.send(format!("  ▶ launching agent: {} ({})", ag.name, ag.title.replace(" Agent", ""))).await;
                 }
@@ -944,7 +945,10 @@ pub async fn run_host(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sende
                     Ok((m, text)) => {
                         let f = extract_findings(&text, &ag.name);
                         let _ = txc.send(format!("test {} via {} → {} candidate(s)", ag.name, m.label(), f.len())).await;
-                        for c in &f { let _ = txc.send(format!("finding: [{}] {} @ {}", c.severity, c.title, c.endpoint)).await; }
+                        for c in &f {
+                            let _ = txc.send(format!("finding: [{}] {} @ {}", c.severity, c.title, c.endpoint)).await;
+                            if let Ok(j) = serde_json::to_string(c) { let _ = txc.send(format!("finding_json: {j}")).await; }
+                        }
                         (ag.name.clone(), text, f)
                     }
                     Err(e) => { let _ = txc.send(format!("test {} failed: {e}", ag.name)).await;

@@ -13,7 +13,7 @@ use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
 use rustyline::history::FileHistory;
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
-use rustyline::{CompletionType, Config, Context, Editor, ExternalPrinter, Helper};
+use rustyline::{Cmd, CompletionType, Config, Context, Editor, ExternalPrinter, Helper, KeyEvent};
 use serde::{Deserialize, Serialize};
 use std::io::IsTerminal;
 use std::path::Path;
@@ -28,7 +28,9 @@ struct RunLive {
     mode: &'static str,
     phase: String,
     started: Instant,
-    findings: Vec<(String, String)>, // sev, title
+    findings: Vec<(String, String)>, // sev, title (summary)
+    full: Vec<Finding>,              // full candidate findings (PoC, evidence) for /finding
+    commands: Vec<String>,           // full untruncated commands for /expand & Ctrl+O
     agents: usize,
     agents_done: usize,
 }
@@ -67,14 +69,30 @@ impl RunLive {
                 }
             }
         }
+        // Full candidate finding (with PoC/evidence) for /results & /finding.
+        if let Some(j) = line.strip_prefix("finding_json: ") {
+            if let Ok(f) = serde_json::from_str::<Finding>(j) { self.full.push(f); }
+        }
+        // Full untruncated command for /expand & Ctrl+O.
+        let cmd_part = line.strip_prefix('@').and_then(|s| s.split_once(' ').map(|(_, r)| r)).unwrap_or(line);
+        if let Some(c) = cmd_part.strip_prefix("exec: ").or_else(|| cmd_part.strip_prefix("danger: ")) {
+            self.commands.push(c.to_string());
+            if self.commands.len() > 100 { self.commands.remove(0); }
+        }
     }
 }
+
+/// What to do when the user stops a run.
+#[derive(Clone, Copy, PartialEq)]
+enum StopMode { Run, Validate, Raw, Discard }
 
 /// A run executing in the background of the REPL.
 struct ActiveRun {
     live: Arc<Mutex<RunLive>>,
     cancel: Arc<AtomicBool>,
+    soft: Arc<AtomicBool>,
     done: Arc<AtomicBool>,
+    choice: Arc<Mutex<StopMode>>,
 }
 
 /// All slash-commands, for Tab completion.
@@ -205,6 +223,8 @@ impl Reader {
                 .completion_type(CompletionType::List).build();
             if let Ok(mut ed) = Editor::<NsHelper, FileHistory>::with_config(cfg) {
                 ed.set_helper(Some(NsHelper));
+                // Ctrl+O pre-fills /expand to dump the last full (untruncated) commands.
+                ed.bind_sequence(KeyEvent::ctrl('o'), Cmd::Insert(1, "/expand".to_string()));
                 let hist = proj_dir().join("history.txt");
                 let _ = ed.load_history(&hist);
                 return Reader::Rl(Box::new(ed), hist);
@@ -376,7 +396,21 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
             }
             "/stop" => {
                 match &active {
-                    Some(a) if !a.done.load(Ordering::Relaxed) => { a.cancel.store(true, Ordering::Relaxed); println!("  ⏸ stopping — finishing in-flight work; a report is generated on completion."); }
+                    Some(a) if !a.done.load(Ordering::Relaxed) => {
+                        println!("  \x1b[1mStop the run — choose:\x1b[0m");
+                        println!("    \x1b[36m1\x1b[0m  validate the findings found so far, then report  \x1b[2m(recommended)\x1b[0m");
+                        println!("    \x1b[36m2\x1b[0m  report NOW without validating (raw findings)");
+                        println!("    \x1b[36m3\x1b[0m  discard (no report)");
+                        let ans = ask_line("  choice [1/2/3]:");
+                        match ans.trim() {
+                            "2" => { *a.choice.lock().unwrap() = StopMode::Raw; a.cancel.store(true, Ordering::Relaxed);
+                                     println!("  ⏹ stopping — generating a RAW report from what was found…"); }
+                            "3" => { *a.choice.lock().unwrap() = StopMode::Discard; a.cancel.store(true, Ordering::Relaxed);
+                                     println!("  🗑 stopping — discarding this run."); }
+                            _   => { *a.choice.lock().unwrap() = StopMode::Validate; a.soft.store(true, Ordering::Relaxed);
+                                     println!("  ⏸ stopping exploitation — validating what was found, then reporting…"); }
+                        }
+                    }
                     _ => println!("  no active run."),
                 }
             }
@@ -394,7 +428,44 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
                     println!("  ↻ retest set up for {} ({} prior finding(s)) — /run to launch", r.target, titles.len());
                 }
             }
-            "/results" => results(&history.lock().unwrap(), arg),
+            "/results" => {
+                // Live findings while a run is active (no arg), else a past run.
+                match &active {
+                    Some(a) if arg.is_empty() && !a.done.load(Ordering::Relaxed) => {
+                        let l = a.live.lock().unwrap();
+                        println!("  ▶ live — {} possible finding(s) so far ({})", l.full.len(), l.phase);
+                        let mut f = l.full.clone();
+                        f.sort_by_key(|x| sev_rank(&x.severity));
+                        for x in &f { println!("  • [{}] {} \x1b[2m({} · {})\x1b[0m", x.severity, x.title, x.agent, x.endpoint); }
+                        if !f.is_empty() { println!("  \x1b[2m/finding — pick one to see the command & PoC\x1b[0m"); }
+                    }
+                    _ => results(&history.lock().unwrap(), arg),
+                }
+            }
+            "/finding" | "/findings" => {
+                // Build the finding pool: live run if active, else a past run.
+                let pool: Vec<Finding> = match &active {
+                    Some(a) if arg.is_empty() && !a.done.load(Ordering::Relaxed) => a.live.lock().unwrap().full.clone(),
+                    _ => { let h = history.lock().unwrap(); pick(&h, arg).map(|r| r.findings.clone()).unwrap_or_default() }
+                };
+                finding_detail(&pool);
+            }
+            "/expand" | "/full" => {
+                // Show full untruncated commands from the active run.
+                match &active {
+                    Some(a) => {
+                        let l = a.live.lock().unwrap();
+                        let n: usize = arg.trim().parse().unwrap_or(5);
+                        let cmds = &l.commands;
+                        if cmds.is_empty() { println!("  no commands captured yet."); }
+                        else {
+                            println!("  ── last {} command(s) (full) ──", n.min(cmds.len()));
+                            for c in cmds.iter().rev().take(n).rev() { println!("  \x1b[33m$ {c}\x1b[0m"); }
+                        }
+                    }
+                    None => println!("  no active run — /expand shows full commands while a run streams."),
+                }
+            }
             "/report" => open_report(&history.lock().unwrap(), arg),
             "/status" => {
                 // Live status if a run is active, else a past run's status.json.
@@ -585,11 +656,14 @@ async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
 
     let live = Arc::new(Mutex::new(RunLive {
         target: target.clone(), mode: mode_s, phase: "starting".into(),
-        started: Instant::now(), findings: vec![], agents: 0, agents_done: 0,
+        started: Instant::now(), findings: vec![], full: vec![], commands: vec![],
+        agents: 0, agents_done: 0,
     }));
     let cancel = sp.cancel.clone();
+    let soft = sp.soft.clone();
     let done = Arc::new(AtomicBool::new(false));
-    let (live2, done2, hist2) = (live.clone(), done.clone(), history);
+    let choice = Arc::new(Mutex::new(StopMode::Run));
+    let (live2, done2, hist2, choice2) = (live.clone(), done.clone(), history, choice.clone());
 
     tokio::spawn(async move {
         let crate::Spawned { task, mut rx, workdir, .. } = sp;
@@ -597,20 +671,40 @@ async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
             live2.lock().unwrap().ingest(&line);
             if let Some(out) = crate::render_compact(&line) { let _ = printer.print(out); }
         }
-        let out = crate::finalize_run(task.await.unwrap_or_default(), &workdir);
+        let task_out = task.await.unwrap_or_default();
+        let mode_choice = *choice2.lock().unwrap();
+
+        if mode_choice == StopMode::Discard {
+            std::fs::remove_dir_all(&workdir).ok();
+            let _ = printer.print(format!("\x1b[33m🗑 run discarded — {}\x1b[0m", workdir.display()));
+            done2.store(true, Ordering::Relaxed);
+            return;
+        }
+
+        // Raw → report from the unvalidated candidates we captured live.
+        let (findings, validated_word) = if mode_choice == StopMode::Raw {
+            let raw = live2.lock().unwrap().full.clone();
+            crate::report_raw(&target, &raw, &workdir);
+            (raw, "unvalidated")
+        } else {
+            let out = crate::finalize_run(task_out, &workdir);
+            (out.findings, "validated")
+        };
+
         let id = {
             let mut h = hist2.lock().unwrap();
             let id = h.len() + 1;
-            h.push(RunRecord { id, mode: mode_s.into(), target, workdir: out.workdir.clone(), findings: out.findings.clone() });
+            h.push(RunRecord { id, mode: mode_s.into(), target, workdir: workdir.display().to_string(), findings: findings.clone() });
             if let Ok(j) = serde_json::to_string_pretty(&*h) { std::fs::write(proj_dir().join("runs.json"), j).ok(); }
             id
         };
         let _ = printer.print(format!(
-            "\x1b[1;32m◀ run #{id} done — {} validated finding(s)\x1b[0m · /results {id} · /report {id}",
-            out.findings.len()));
+            "\x1b[1;32m◀ run #{id} done — {} {} finding(s)\x1b[0m · /results {id} · /finding",
+            findings.len(), validated_word));
+        let _ = printer.print(format!("\x1b[36m  report: {}\x1b[0m", crate::report_url(&workdir)));
         done2.store(true, Ordering::Relaxed);
     });
-    Some(ActiveRun { live, cancel, done })
+    Some(ActiveRun { live, cancel, soft, done, choice })
 }
 
 /// Project-local store: `<cwd>/.neurosploit/` so each project keeps its own
@@ -735,6 +829,51 @@ fn diff_runs(history: &[RunRecord]) {
     for t in b.difference(&a) { println!("  \x1b[32m+ new\x1b[0m   {t}"); }
     for t in a.difference(&b) { println!("  \x1b[31m- gone\x1b[0m  {t}"); }
     if a == b { println!("  (no change in finding titles)"); }
+}
+
+fn sev_rank(s: &str) -> u8 {
+    match s { "Critical" => 0, "High" => 1, "Medium" => 2, "Low" => 3, _ => 4 }
+}
+
+/// Read one line synchronously (for the /stop choice prompt).
+fn ask_line(prompt: &str) -> String {
+    use std::io::Write;
+    print!("{prompt} ");
+    std::io::stdout().flush().ok();
+    let mut s = String::new();
+    std::io::stdin().read_line(&mut s).ok();
+    s
+}
+
+/// Arrow-key selection menu over findings; prints EVERYTHING about the chosen one
+/// (command/PoC, evidence, impact, remediation, votes, confidence).
+fn finding_detail(pool: &[Finding]) {
+    if pool.is_empty() { println!("  no findings to inspect yet."); return; }
+    let mut f = pool.to_vec();
+    f.sort_by_key(|x| sev_rank(&x.severity));
+    let items: Vec<String> = f.iter().map(|x| format!("[{}] {} — {}", x.severity, x.title, x.cwe)).collect();
+    let idx = if std::io::stdin().is_terminal() {
+        match dialoguer::Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Select a finding (↑/↓, enter)").items(&items).default(0).interact_opt() {
+            Ok(Some(i)) => i, _ => return,
+        }
+    } else { 0 };
+    let x = &f[idx];
+    println!("\n  ┌─ \x1b[1m{}\x1b[0m", x.title);
+    println!("  │  severity   : {}", x.severity);
+    println!("  │  cwe / cvss : {} · {}", x.cwe, x.cvss);
+    println!("  │  agent      : {}", x.agent);
+    println!("  │  endpoint   : {}", x.endpoint);
+    println!("  │  votes/conf : {} · {:.2}", x.votes, x.confidence);
+    println!("  ├─ \x1b[33mPayload / PoC\x1b[0m");
+    for l in x.payload.lines() { println!("  │  {l}"); }
+    println!("  ├─ \x1b[36mEvidence (tool output)\x1b[0m");
+    for l in x.evidence.lines() { println!("  │  {l}"); }
+    println!("  ├─ Impact");
+    for l in x.impact.lines() { println!("  │  {l}"); }
+    println!("  ├─ Remediation");
+    for l in x.remediation.lines() { println!("  │  {l}"); }
+    println!("  └─────");
 }
 
 fn run_status(history: &[RunRecord], arg: &str) {

@@ -19,5 +19,12 @@
     "target": "http://testasp.vulnweb.com/",
     "workdir": "",
     "findings": []
+  },
+  {
+    "id": 4,
+    "mode": "black-box",
+    "target": "http://testasp.vulnweb.com/",
+    "workdir": "/opt/NeurosploitFinal/runs/ns-1782353097-testasp_vulnweb_com",
+    "findings": []
   }
 ]
