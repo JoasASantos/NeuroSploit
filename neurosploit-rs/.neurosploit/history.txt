@@ -1,0 +1,13 @@
+#V2
+ola
+/help
+/focus
+/help
+run
+/run
+/target redteamleaders.com
+/run
+/report
+/reports
+/report
+/exit

@@ -249,24 +249,30 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
                 println!("  subscription: {}", onoff(s.subscription));
             }
             "/target" | "/url" => {
-                let t = if arg.starts_with("http") || arg.is_empty() { arg.to_string() } else { format!("https://{arg}") };
-                s.target = if t.is_empty() { None } else { Some(t) };
-                println!("  target: {}", s.target.clone().unwrap_or_else(|| "(none)".into()));
+                if arg.is_empty() { println!("  target: {}", s.target.clone().unwrap_or_else(|| "(none) — set with /target <url>, clear with /target clear".into())); }
+                else if arg == "clear" { s.target = None; println!("  target cleared"); }
+                else { let t = if arg.starts_with("http") { arg.to_string() } else { format!("https://{arg}") };
+                       s.target = Some(t.clone()); println!("  target: {t}"); }
             }
             "/repo" => {
-                s.repo = if arg.is_empty() { None } else { Some(arg.to_string()) };
-                println!("  repo: {}", s.repo.clone().unwrap_or_else(|| "(none)".into()));
+                if arg.is_empty() { println!("  repo: {}", s.repo.clone().unwrap_or_else(|| "(none) — set with /repo <path>, clear with /repo clear".into())); }
+                else if arg == "clear" { s.repo = None; println!("  repo cleared"); }
+                else { s.repo = Some(arg.to_string()); println!("  repo: {arg}"); }
             }
             "/auth" => {
-                s.auth = if arg.is_empty() { None } else { Some(arg.to_string()) };
-                println!("  auth: {}", s.auth.clone().unwrap_or_else(|| "(none)".into()));
+                if arg.is_empty() { println!("  auth: {}", s.auth.clone().unwrap_or_else(|| "(none) — set with /auth <header>, clear with /auth clear".into())); }
+                else if arg == "clear" { s.auth = None; println!("  auth cleared"); }
+                else { s.auth = Some(arg.to_string()); println!("  auth set: {arg}"); }
             }
             "/creds" => {
-                s.creds = if arg.is_empty() { None } else { Some(arg.to_string()) };
-                println!("  creds file: {}", s.creds.clone().unwrap_or_else(|| "(none)".into()));
+                if arg.is_empty() { println!("  creds file: {}", s.creds.clone().unwrap_or_else(|| "(none) — set with /creds <file.yaml>".into())); }
+                else if arg == "clear" { s.creds = None; println!("  creds cleared"); }
+                else { s.creds = Some(arg.to_string()); println!("  creds file: {arg}"); }
             }
             "/focus" | "/instructions" => {
-                s.instructions = if arg.is_empty() { None } else { Some(arg.to_string()) };
+                if arg == "clear" { s.instructions = None; println!("  focus cleared"); continue; }
+                if arg.is_empty() { println!("  focus: {}", s.instructions.clone().unwrap_or_else(|| "(none)".into())); continue; }
+                s.instructions = Some(arg.to_string());
                 println!("  focus: {}", s.instructions.clone().unwrap_or_else(|| "(none)".into()));
             }
             "/attach" => { let n = attach_path(arg.trim_start_matches('@'), &mut s); if n > 0 { println!("  attached ({} total)", s.attachments.len()); } }
@@ -284,7 +290,13 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
             "/votes" => { s.vote_n = arg.parse().unwrap_or(s.vote_n); println!("  votes: {}", s.vote_n); }
             "/agents" => { s.max_agents = arg.parse().unwrap_or(s.max_agents); println!("  max agents: {}", s.max_agents); }
             "/clear" => { print!("\x1b[2J\x1b[H"); }
-            "/run" | "/go" => { save_session(&s); run(base, &s, &mut history).await; save_runs(base, &history); }
+            "/run" | "/go" => {
+                save_session(&s);
+                println!("\n\x1b[1;35m▶ RUNNING engagement\x1b[0m \x1b[2m— output streams below; the REPL prompt returns when it finishes. (For a live interactive run, use:  neurosploit tui <url>)\x1b[0m\n");
+                run(base, &s, &mut history).await;
+                save_runs(base, &history);
+                println!("\n\x1b[1;32m◀ back to the NeuroSploit REPL\x1b[0m \x1b[2m— /results  /report  /runs  /diff  /show\x1b[0m");
+            }
             "/runs" | "/history" => list_runs(&history),
             "/diff" | "/changed" => diff_runs(&history),
             "/retest" => {
@@ -587,7 +599,20 @@ fn show(s: &Session) {
     println!("  │  creds    : {}", s.creds.clone().unwrap_or_else(|| "(none)".into()));
     println!("  │  focus    : {}", s.instructions.clone().unwrap_or_else(|| "(none — tests everything)".into()));
     println!("  │  opts     : mcp={} offline={} votes={} max-agents={}", onoff(s.mcp), onoff(s.offline), s.vote_n, s.max_agents);
-    println!("  └─ /run to launch");
+    // API-key status for the providers your selected models need.
+    if !s.subscription {
+        let provs: std::collections::BTreeSet<String> = s.models.iter()
+            .map(|m| m.split(':').next().unwrap_or("").to_string()).collect();
+        let mut keys = Vec::new();
+        for p in &provs {
+            if let Some(pr) = harness::provider_for(p) {
+                let set = std::env::var(pr.env_key).map(|v| !v.is_empty()).unwrap_or(false);
+                keys.push(format!("{p}={}", if set { "✓" } else { "✗" }));
+            }
+        }
+        if !keys.is_empty() { println!("  │  api keys : {}", keys.join("  ")); }
+    }
+    println!("  └─ /run to launch  ·  edit with /target /repo /auth /creds /focus /model");
 }
 
 fn help() {

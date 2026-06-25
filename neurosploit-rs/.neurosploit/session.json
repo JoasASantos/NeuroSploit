@@ -1,0 +1,14 @@
+{
+  "models": [
+    "anthropic:claude-opus-4-8"
+  ],
+  "subscription": true,
+  "mcp": false,
+  "vote_n": 3,
+  "max_agents": 0,
+  "target": "https://redteamleaders.com",
+  "repo": null,
+  "auth": null,
+  "creds": null,
+  "instructions": "run"
+}

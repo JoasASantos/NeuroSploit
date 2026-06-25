@@ -1,0 +1,9 @@
+[
+  {
+    "id": 1,
+    "mode": "black-box",
+    "target": "https://redteamleaders.com",
+    "workdir": "",
+    "findings": []
+  }
+]
