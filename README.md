@@ -11,8 +11,9 @@
   <img src="https://img.shields.io/badge/Version-3.5.1-blue?style=flat-square">
   <img src="https://img.shields.io/badge/Harness-Rust%20%7C%20tokio-e6b673?style=flat-square">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
-  <img src="https://img.shields.io/badge/MD%20Agents-303-red?style=flat-square">
+  <img src="https://img.shields.io/badge/MD%20Agents-329-red?style=flat-square">
   <img src="https://img.shields.io/badge/Models-12%20providers-success?style=flat-square">
+  <img src="https://img.shields.io/badge/Modes-Black%20%7C%20White%20%7C%20Grey%20%7C%20Host-9cf?style=flat-square">
   <img src="https://img.shields.io/badge/Auth-API%20key%20%7C%20Subscription-orange?style=flat-square">
 </p>
 
@@ -20,58 +21,83 @@
 <i>by Joas A Santos &amp; Red Team Leaders</i></p>
 
 > ⭐ If this is useful, **star the repo** — it helps a lot.
+>
+> 📖 **New here? Read the [full Tutorial & User Guide →](TUTORIAL.md)** — every mode, flag, config and example explained.
 
 ---
 
-## 🆕 v3.5.1 — POMDP belief & grounded anti-hallucination
+**NeuroSploit** turns a URL, a source repository, a running app, or a host/IP into
+an autonomous security engagement. A Rust harness (`tokio`) drives a **pool of
+LLMs** — via **API key** or local **subscription** (Claude Code / Codex / Gemini /
+Grok) — recons the target, **intelligently selects only the agents that match the
+discovered surface**, runs them in parallel, **chains** findings into deeper
+impact, and **validates every claim by cross-model voting + tool-receipt
+grounding** before reporting. It ships **329 markdown agents** and a **Mission
+Control TUI**.
 
-The target is only **partially observable**, so v3.5.1 stops treating findings as
-booleans and tracks a **belief**:
+### Engagement modes
 
-- **Belief world model** (`belief.rs`) — a property graph whose nodes
-  (host / service / vuln / exploit / credential) each carry a *probability*, not a
-  boolean. Observations update them with a Bayesian step; per-node **Shannon
-  entropy** measures how diffuse the belief still is.
-- **Value-of-information planner** (`pomdp.rs`) — "scan more vs exploit now" is
-  not a heuristic: when a node's belief is diffuse, the expected value of an
-  observation (recon) exceeds the risk-adjusted value of an exploit. The
-  `may_assert` gate is the **mathematical anti-hallucination rule** — the agent
-  may not claim exploitability while the belief is diffuse; it must observe first.
-- **Grounding / verification engine** (`grounding.rs`) — a hard rule: **no claim
-  enters the world model without a tool receipt** (raw tool output, not the LLM's
-  paraphrase). Black-box grounding is *empirical* (a real HTTP response / OOB
-  callback / error oracle); white-box is *symbolic* (a `file:line` into the
-  reviewed source). Ungrounded claims are demoted and flagged `receipt_missing`.
-- **Regimes** — black-box runs a true POMDP (diffuse priors that sharpen with
-  observation); white-box collapses toward a near-deterministic MDP (the world
-  model is built from SAST/dataflow, so uncertainty migrates to *path
-  reachability*, not state).
+| Mode | Command | What it does |
+|------|---------|-------------|
+| **Black-box** | `neurosploit run <url>` | recon → select → exploit → vote → report |
+| **White-box** | `neurosploit whitebox <repo>` | source/SAST review (file:line evidence) |
+| **Grey-box** | `neurosploit greybox <repo> --url <app>` | code review **+** live exploitation together |
+| **Host/Infra** | `neurosploit host <ip> --creds creds.yaml` | Linux / Windows / Active Directory testing |
+| **Mission Control** | `neurosploit tui <url>` | live TUI panels + composer during the run |
+| **Interactive** | `neurosploit` | persistent REPL session (resumes per project) |
 
-> Roadmap (in progress on this branch): infra targets (IP + SSH/Windows/AD) with
-> Linux/Windows/AD host agents, a contextual-bandit tool router, and
-> value-of-information reward shaping.
+### Highlights
 
----
+- 🧠 **POMDP belief + value-of-information** — the target is partially observable,
+  so findings aren't booleans: a property-graph **belief** carries probabilities,
+  and "scan more vs exploit now" falls out of belief entropy. The `may_assert`
+  gate is a **mathematical anti-hallucination rule** (don't claim exploitability
+  while the belief is diffuse).
+- 🧾 **Grounding** — hard rule: **no claim without a tool receipt** (raw tool
+  output, not paraphrase). Empirical for black-box, symbolic (`file:line`) for
+  white-box; ungrounded claims are demoted.
+- 🔗 **Attack chaining** — 12 multi-stage chain agents (SQLi→RCE→LPE, SSRF→AWS
+  creds, upload→LFI→RCE→LPE, default-creds→domain, …); each stage proven before
+  advancing.
+- 🗺️ **Attack graph & kill chain** — findings mapped to OWASP / CWE / MITRE
+  ATT&CK / stage; rendered as a Mermaid graph in the report.
+- ✅ **Cross-model validation** — a different model adjudicates each finding;
+  RL-weighted, recon-aware agent selection.
+- 🛰️ **Mission Control TUI** — live header/feed/findings/targets panels + a
+  composer you can type in *while the run streams* (`summary`, `pause`, …).
+- 💾 **Per-project memory** — `<cwd>/.neurosploit/` keeps session, run history and
+  command history; the REPL **resumes** on reopen. No database required.
+- 🪙 **Token/cost telemetry**, per-agent attribution, graceful Ctrl-C → report or
+  discard, Typst/HTML/JSON/MD reports.
 
-**Autonomous, multi-model penetration-testing harness — Rust, CLI-only.**
-
-This branch is the **slim, Rust-only** distribution: the `neurosploit-rs/` workspace
-plus the `agents_md/` agent library. It turns a URL (black-box) or a code
-repository (white-box) into an autonomous engagement that drives a pool of LLMs
-— via **API key** or local **subscription** (Claude Code / Codex / Gemini / Grok)
-— recons the target, **intelligently selects only the agents matching the
-discovered surface**, runs them in parallel, then validates every finding by
-**cross-model voting** before reporting.
-
-> The full project (Python engine, web GUIs, history) lives on the `main` branch.
+> This is the **slim, Rust-only** distribution (`neurosploit-rs/` + `agents_md/`).
+> The earlier Python engine and web GUIs live on the older `v3.4.0` branch.
 
 ---
 
 ## 📦 Install (one line)
 
+**Linux / macOS** (x64 & arm64):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/JoasASantos/NeuroSploit/main/setup.sh | bash
 ```
+
+**Windows** (PowerShell, x64 & arm64):
+```powershell
+irm https://raw.githubusercontent.com/JoasASantos/NeuroSploit/main/install.ps1 | iex
+```
+
+### Supported platforms
+
+| OS | x64 | arm64 |
+|----|-----|-------|
+| **Linux** (Kali recommended) | ✅ | ✅ |
+| **macOS** | ✅ | ✅ (Apple Silicon) |
+| **Windows** | ✅ | ✅ |
+
+Pure Rust + stdlib, so it builds natively everywhere a stable Rust toolchain runs.
+The installer auto-detects OS/arch and installs Rust if missing. On native Windows
+use `install.ps1`; under WSL2 / Git Bash the `setup.sh` one-liner also works.
 
 The installer auto-installs Rust if needed, clones the repo to `~/.neurosploit`,
 builds the release binary, and links `neurosploit` into `~/.local/bin`. Re-run it

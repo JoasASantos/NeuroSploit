@@ -25,14 +25,33 @@ cat <<'BANNER'
 
    ███╗   ██╗███████╗██╗   ██╗██████╗  ██████╗
    ████╗  ██║██╔════╝██║   ██║██╔══██╗██╔═══██╗   NeuroSploit installer
-   ██╔██╗ ██║█████╗  ██║   ██║██████╔╝██║   ██║   v3.5.0 — Rust harness
+   ██╔██╗ ██║█████╗  ██║   ██║██████╔╝██║   ██║   v3.5.1 — Rust harness
    ██║╚██╗██║██╔══╝  ██║   ██║██╔══██╗██║   ██║   by Joas A Santos
    ██║ ╚████║███████╗╚██████╔╝██║  ██║╚██████╔╝   & Red Team Leaders
    ╚═╝  ╚═══╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝ ╚═════╝
 BANNER
 
-OS="$(uname -s)"
-say "Detected OS: $OS"
+# ---- platform detection (Linux / macOS / Windows-via-WSL/MSYS · x64 / arm64) ----
+OS_RAW="$(uname -s)"
+ARCH_RAW="$(uname -m)"
+case "$OS_RAW" in
+  Linux*)             OS="Linux" ;;
+  Darwin*)            OS="macOS" ;;
+  MINGW*|MSYS*|CYGWIN*) OS="Windows" ;;
+  *)                  OS="$OS_RAW" ;;
+esac
+case "$ARCH_RAW" in
+  x86_64|amd64)   ARCH="x64" ;;
+  arm64|aarch64)  ARCH="arm64" ;;
+  *)              ARCH="$ARCH_RAW" ;;
+esac
+say "Platform: $OS / $ARCH"
+if [ "$OS" = "Windows" ]; then
+  warn "On native Windows, run this in WSL2, Git Bash or MSYS2. (Or build with: cargo build --release)"
+fi
+if [ "$OS" != "Linux" ] && [ "$OS" != "macOS" ] && [ "$OS" != "Windows" ]; then
+  warn "Unrecognized OS '$OS_RAW' — attempting a generic Rust build anyway."
+fi
 
 # 1) git
 command -v git >/dev/null 2>&1 || die "git is required. Install git and re-run."
