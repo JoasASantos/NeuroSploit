@@ -1,3 +1,63 @@
+# NeuroSploit v3.5.2 — Release Notes
+
+**Release Date:** June 2026
+**Codename:** Exploitation Depth & Report Hygiene
+**License:** MIT
+**Credits:** Joas A Santos & Red Team Leaders
+
+---
+
+## TL;DR
+
+v3.5.2 hard-codes the discipline that separates a great pentest from a noisy
+one — distilled from reviewing real AI-pentest output that kept stopping at
+*"exposed"* instead of *"exploited"*. The engine now pushes every exposure to
+demonstrated impact, **chains** findings, decodes/fingerprints artifacts and
+correlates CVEs, audits tokens, and keeps the final report honest (deduplicated
+and severity-calibrated).
+
+## Highlights
+
+- **DEPTH doctrine (exploit, don't just expose).** A new doctrine is injected
+  into every exploitation prompt (black/grey/chain): any info-disclosure,
+  exposed service/catalog/WSDL, leaked credential/token, or reachable dev host
+  **must be USED** before it can be a finding — call it, decode it, log in, hit
+  the dev host. If it was only observed, it's reported as a **lead**, not a
+  confirmed High/Critical.
+- **Finding chaining.** Reuse any session/JWT/cookie/credential obtained in one
+  step across all other modules; pivot access into IDOR/privesc/exfil and report
+  the **chain**, not isolated parts (e.g. captcha-bypass→admin JWT→authenticated
+  surface; enum + no-rate-limit→password spraying).
+- **Decode & fingerprint → CVE.** Decode opaque tokens/paths (base64/JSON/marshal)
+  and pin exact library/gem/plugin/CMS versions, then correlate to known CVEs and
+  attempt a safe PoC.
+- **Token auditor.** JWT alg-confusion (RS→HS), `alg:none`, kid/jku injection,
+  real signature verification, **weak HS256 secret cracking**, and token
+  lifecycle (logout/expiry/refresh).
+- **Report-hygiene & depth pass (deterministic, in the harness).** After
+  validation the run now:
+  - **calibrates severity to proven impact** — an unproven High/Critical
+    (hedged language, no payload, thin evidence) is capped to Medium and
+    re-titled "(potential)";
+  - flags **"exposed → exploited" gaps** — exposures on a host with no actual
+    exploit get an advisory to go use them;
+  - advises **consolidating hygiene** classes (headers/cookies/TLS/HSTS/
+    clickjacking/disclosure) repeated across many assets into ONE finding with
+    an affected-asset table, instead of inflating the count one-per-host.
+- **5 new doctrine meta-agents** (`agents_md/meta/`): `exploit_depth_doctrine`,
+  `finding_chainer`, `artifact_decoder`, `token_auditor`, `report_calibrator`
+  (meta agents 17 → 22; total library 343 → 348).
+
+## Notes
+
+- Pure-additive and back-compatible: existing modes, REPL, TUI, pause/continue,
+  crash-recovery and reports are unchanged. The hygiene pass only annotates and
+  down-calibrates unproven severities — it never invents or drops findings.
+- New unit tests cover the calibration and depth-audit logic
+  (`harness::hygiene`).
+
+---
+
 # NeuroSploit v3.5.1 — Release Notes
 
 **Release Date:** June 2026

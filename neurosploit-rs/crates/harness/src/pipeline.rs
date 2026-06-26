@@ -69,6 +69,16 @@ const REACT_DOCTRINE: &str = "METHOD (ReAct): work in explicit Thought → Actio
 Each Action runs ONE concrete tool command (e.g. a curl request); read its real Observation before the next Thought. \
 Base every claim on an actual observed response — never assume. Stop when you've either proven an issue or exhausted reasonable checks. Be token-efficient: no filler, no repetition.\n\n";
 
+/// DEPTH doctrine (v3.5.2): push past detection to demonstrated impact, and
+/// chain. Distilled from reviewing real AI-pentest output that kept stopping at
+/// "exposed" instead of "exploited".
+const DEPTH_DOCTRINE: &str = "DEPTH (exploit, don't just expose):\n\
+- Exposed → exploited: any info-disclosure, exposed service/catalog/WSDL, leaked credential/token, or non-prod (dev/staging) host you find MUST be USED before you report it — call the exposed endpoint, decode the leaked artifact, log in with the leaked credential, hit the dev host. If you only observed it but never used it, report it as a LEAD (low confidence), not a confirmed finding.\n\
+- Chain across steps: reuse any session/JWT/cookie/credential you obtain in one step against every other module; if one bug yields access, pivot it into IDOR/privesc/data-exfil and report the CHAIN, not isolated parts.\n\
+- Decode & fingerprint → CVE: decode opaque tokens/paths (base64/JSON/marshal) and fingerprint the stack (server, framework, library/gem/plugin versions); map exact versions to known CVEs and attempt a safe, non-destructive PoC.\n\
+- Audit tokens: for any JWT, check alg-confusion (RS→HS), alg:none, kid/jku injection, whether the signature is actually verified, and weak/guessable HS256 secrets.\n\
+- Calibrate honestly: claim High/Critical ONLY when impact is DEMONSTRATED; unproven DoS/abuse is Low/Info or a lead, never inflated.\n\n";
+
 /// Black-box web engagement: recon → parallel exploit → N-model vote → report.
 pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<String>) -> RunOutput {
     pool.set_progress(tx.clone());
@@ -168,12 +178,13 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
                 let user = format!(
                     "AUTHORIZED engagement — you have explicit permission to test {target}. \
                      Do not ask for confirmation — proceed and PROVE each issue.\n\n\
-                     {directives}{react}{doctrine}{body}\n\nWhen done, reply with ONLY a JSON array of confirmed findings (may be empty []). \
+                     {directives}{react}{depth}{doctrine}{body}\n\nWhen done, reply with ONLY a JSON array of confirmed findings (may be empty []). \
                      Each item: {{id,title,severity,cwe,endpoint,payload,evidence,impact,remediation,confidence}}. \
                      `evidence` must contain the concrete proof (request/response excerpt).",
                     target = target,
                     directives = directives,
                     react = REACT_DOCTRINE,
+                    depth = DEPTH_DOCTRINE,
                     doctrine = tool_doctrine(mcp_on),
                     body = ag.user.replace("{target}", &target).replace("{recon_json}", &recon),
                 );
@@ -387,11 +398,11 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
                 }
                 let user = format!(
                     "AUTHORIZED greybox engagement on {target} — you also have the source review below. \
-                     Proceed and PROVE each issue against the LIVE app.\n\n{directives}{leads}{react}{doctrine}{body}\n\n\
+                     Proceed and PROVE each issue against the LIVE app.\n\n{directives}{leads}{react}{depth}{doctrine}{body}\n\n\
                      Reply ONLY a JSON array of confirmed findings (may be []): \
                      {{id,title,severity,cwe,endpoint,payload,evidence,impact,remediation,confidence}}.",
                     target = target, directives = directives, leads = leads,
-                    react = REACT_DOCTRINE, doctrine = tool_doctrine(mcp_on),
+                    react = REACT_DOCTRINE, depth = DEPTH_DOCTRINE, doctrine = tool_doctrine(mcp_on),
                     body = ag.user.replace("{target}", &target).replace("{recon_json}", &recon),
                 );
                 match pool.complete_routed(Task::Exploit, &ag.name, &ag.system, &user).await {
@@ -439,12 +450,12 @@ async fn chain_round(pool: &ModelPool, target: &str, recon: &str, directives: &s
     let _ = tx.send(format!("chaining {} confirmed finding(s) for deeper impact…", confirmed.len())).await;
     let recon_ctx: String = recon.chars().take(2500).collect();
     let user = format!(
-        "AUTHORIZED engagement on {target}.\n\n{directives}{react}{doctrine}{recipe_block}\
+        "AUTHORIZED engagement on {target}.\n\n{directives}{react}{depth}{doctrine}{recipe_block}\
          CONFIRMED FINDINGS TO CHAIN:\n{summary}\n\nRecon:\n{recon_ctx}\n\n\
          Chain these into deeper impact (e.g. SQLi→RCE→LPE, SSRF→cloud creds, upload→LFI→RCE) and PROVE each stage. \
          Reply ONLY a JSON array of NEW findings \
          (may be []): {{id,title,severity,cwe,endpoint,payload,evidence,impact,remediation,confidence}}.",
-        react = REACT_DOCTRINE, doctrine = tool_doctrine(pool.mcp_config.is_some()),
+        react = REACT_DOCTRINE, depth = DEPTH_DOCTRINE, doctrine = tool_doctrine(pool.mcp_config.is_some()),
     );
     match pool.complete_routed(Task::Exploit, "chain", CHAIN_SYS, &user).await {
         Ok((m, text)) => {
@@ -621,6 +632,20 @@ async fn finish(cfg: RunConfig, _lib: &Library, recon: String, transcript: Strin
     findings = kept;
     if demoted > 0 {
         let _ = tx.send(format!("grounding gate: demoted {demoted}/{before} ungrounded claim(s) (no tool receipt)")).await;
+    }
+
+    // --- v3.5.2 report-hygiene & exploitation-depth pass ---
+    // Calibrate inflated/unproven High-Critical to Medium, flag exposures that
+    // were never exploited ("exposed → exploited"), and advise consolidating
+    // hygiene findings duplicated across many assets.
+    for n in crate::hygiene::calibrate(&mut findings) {
+        let _ = tx.send(format!("calibrate: {n}")).await;
+    }
+    for n in crate::hygiene::depth_audit(&findings) {
+        let _ = tx.send(format!("notify: {n}")).await;
+    }
+    for n in crate::hygiene::hygiene_summary(&findings) {
+        let _ = tx.send(format!("notify: {n}")).await;
     }
 
     // --- POMDP belief: build from grounded findings, report residual uncertainty ---

@@ -1,4 +1,4 @@
-<h1 align="center">🧠 NeuroSploit v3.5.1</h1>
+<h1 align="center">🧠 NeuroSploit v3.5.2</h1>
 
 <p align="center">
   <a href="https://github.com/JoasASantos/NeuroSploit/stargazers"><img src="https://img.shields.io/github/stars/JoasASantos/NeuroSploit?style=for-the-badge&logo=github&color=8b5cf6" alt="Stars"></a>
@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-3.5.1-blue?style=flat-square">
+  <img src="https://img.shields.io/badge/Version-3.5.2-blue?style=flat-square">
   <img src="https://img.shields.io/badge/Harness-Rust%20%7C%20tokio-e6b673?style=flat-square">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
   <img src="https://img.shields.io/badge/MD%20Agents-329-red?style=flat-square">
@@ -23,6 +23,13 @@
 > ⭐ If this is useful, **star the repo** — it helps a lot.
 >
 > 📖 **New here? Read the [full Tutorial & User Guide →](TUTORIAL.md)** — every mode, flag, config and example explained.
+
+> 🆕 **New in v3.5.2 — Exploitation Depth & Report Hygiene:** a **DEPTH doctrine**
+> makes the engine *use* what it finds (exposed → exploited), **chain** findings
+> across modules, decode/fingerprint artifacts → CVEs, and **audit tokens** (JWT
+> alg-confusion / weak HS256 secrets). A deterministic post-pass **calibrates
+> severity to proven impact** and **consolidates duplicated hygiene** findings.
+> See [RELEASE.md](RELEASE.md).
 
 ---
 

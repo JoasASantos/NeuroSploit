@@ -1,4 +1,4 @@
-//! NeuroSploit v3.5.1 — TUI "Mission Control" mode.
+//! NeuroSploit v3.5.2 — TUI "Mission Control" mode.
 //!
 //! Concurrent panels that update live while the engagement runs in the
 //! background, with a composer input that stays active during execution:
