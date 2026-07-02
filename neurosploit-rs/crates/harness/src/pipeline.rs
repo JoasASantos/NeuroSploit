@@ -195,11 +195,22 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
         .await;
 
     // ---- 1. Recon ------------------------------------------------------
+    // 1a. Deterministic HTTP probe (real request/response facts) — grounds the
+    // model recon and every downstream decision. Best-effort, skipped offline.
+    let probe_facts = if cfg.offline {
+        String::new()
+    } else {
+        let p = crate::probe::probe(&cfg.target).await;
+        let _ = tx.send(crate::probe::probe_summary(&p)).await;
+        crate::probe::probe_json(&p)
+    };
     let recon = if cfg.offline {
         let _ = tx.send("recon: offline mode — skipping model calls".into()).await;
         "{}".to_string()
     } else {
-        let recon_user = format!("{}{}Target: {}", operator_directives(&cfg), tool_doctrine(pool.mcp_config.is_some()), cfg.target);
+        let recon_user = format!(
+            "{}{}OBSERVED HTTP PROBE (real request/response facts — build on these, verify, and go deeper):\n{}\n\nTarget: {}",
+            operator_directives(&cfg), tool_doctrine(pool.mcp_config.is_some()), probe_facts, cfg.target);
         match pool.complete_routed(Task::Recon, "recon", RECON_SYS, &recon_user).await {
             Ok((m, t)) => {
                 let _ = tx.send(format!("recon complete via {}", m.label())).await;
@@ -207,11 +218,13 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
                     let snip: String = t.chars().take(280).collect();
                     let _ = tx.send(format!("  recon> {}", snip.replace('\n', " "))).await;
                 }
-                t
+                // Keep the deterministic probe facts alongside the model recon so
+                // exploitation agents always see the observed evidence.
+                format!("{}\n\nMODEL RECON:\n{}", probe_facts, t)
             }
             Err(e) => {
-                let _ = tx.send(format!("recon failed ({e}) — continuing with empty recon")).await;
-                "{}".to_string()
+                let _ = tx.send(format!("recon failed ({e}) — continuing with probe facts only")).await;
+                probe_facts.clone()
             }
         }
     };
@@ -398,14 +411,18 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
     let _ = tx.send(format!("GREYBOX · live: {} · repo: {} · {} code agents",
         cfg.target, repo, lib.code.len())).await;
 
-    // ---- 1. Recon the live target -------------------------------------
+    // ---- 1. Recon the live target (deterministic probe + model) -------
     let recon = if cfg.offline {
         "{}".to_string()
     } else {
+        let p = crate::probe::probe(&cfg.target).await;
+        let _ = tx.send(crate::probe::probe_summary(&p)).await;
+        let facts = crate::probe::probe_json(&p);
         match pool.complete_routed(Task::Recon, "recon", RECON_SYS,
-            &format!("{}{}Target: {}", operator_directives(&cfg), tool_doctrine(pool.mcp_config.is_some()), cfg.target)).await {
-            Ok((m, t)) => { let _ = tx.send(format!("recon complete via {}", m.label())).await; t }
-            Err(e) => { let _ = tx.send(format!("recon failed ({e})")).await; "{}".to_string() }
+            &format!("{}{}OBSERVED HTTP PROBE (real facts — build on these):\n{}\n\nTarget: {}",
+                operator_directives(&cfg), tool_doctrine(pool.mcp_config.is_some()), facts, cfg.target)).await {
+            Ok((m, t)) => { let _ = tx.send(format!("recon complete via {}", m.label())).await; format!("{facts}\n\nMODEL RECON:\n{t}") }
+            Err(e) => { let _ = tx.send(format!("recon failed ({e}) — probe facts only")).await; facts }
         }
     };
 

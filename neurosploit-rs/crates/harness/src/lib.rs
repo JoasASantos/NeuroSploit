@@ -17,6 +17,7 @@ pub mod pomdp;
 pub mod models;
 pub mod pipeline;
 pub mod pool;
+pub mod probe;
 pub mod report;
 pub mod rl;
 pub mod types;

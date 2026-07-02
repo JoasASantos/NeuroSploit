@@ -59,6 +59,16 @@ interactive line-editing.
 
 ## Deeper recon & analysis (agent prompts)
 
+- **Deterministic HTTP probe (native, `harness::probe`).** Before the model
+  recon, the harness performs a **real** request/response analysis of the target
+  and injects the observed facts into recon so agent-selection and exploitation
+  decisions are grounded in evidence (more robust — works even when the model's
+  recon is weak): status & redirect, `Server`/`X-Powered-By`/content-type, the 6
+  security headers (present/missing), **cookie flags** (HttpOnly/Secure/SameSite),
+  **CORS reflection** test (arbitrary Origin + credentials), tech fingerprint,
+  linked scripts, form count, a **404 baseline** for soft-404 differentials, and
+  a few high-signal paths (`/robots.txt`, `/.git/config`, `/.env`, …). Best-effort
+  (never fatal), honors the identifying User-Agent and the Burp/ZAP proxy.
 - **RECON_SYS** now crawls pages/params/headers/cookies, **downloads the linked
   JavaScript and analyzes it** (API endpoints, hidden params, GraphQL, secrets /
   keys / tokens, `sourceMappingURL` → recover original source), fingerprints

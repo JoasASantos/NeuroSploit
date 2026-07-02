@@ -68,6 +68,11 @@ Control TUI**.
 - 🧾 **Grounding** — hard rule: **no claim without a tool receipt** (raw tool
   output, not paraphrase). Empirical for black-box, symbolic (`file:line`) for
   white-box; ungrounded claims are demoted.
+- 🔬 **Deterministic HTTP probe** — before the model recon, the harness runs a
+  **real** request/response analysis (status/redirects, security headers, cookie
+  flags, CORS reflection, tech fingerprint, linked JS, 404 baseline, high-signal
+  paths) and feeds those observed facts into recon, so agent selection and
+  exploitation decisions are grounded in evidence — not the model's guess.
 - 🔗 **Attack chaining** — 12 multi-stage chain agents (SQLi→RCE→LPE, SSRF→AWS
   creds, upload→LFI→RCE→LPE, default-creds→domain, …); each stage proven before
   advancing.
