@@ -122,6 +122,21 @@ fn ua_line() -> String {
 /// hard to silently re-badge NeuroSploit's output as someone else's work.
 const ATTRIBUTION: &str = "Identified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.";
 
+/// Re-validate a set of candidate findings (N-model voting + adversarial refute)
+/// WITHOUT re-running recon/exploitation — for recovered/interrupted runs, so the
+/// operator can filter false positives on what was already found. Streams
+/// progress and returns the surviving, attribution-stamped findings.
+pub async fn revalidate(findings: Vec<Finding>, pool: &ModelPool, vote_n: usize, tx: Sender<String>) -> Vec<Finding> {
+    pool.set_progress(tx.clone());
+    let _ = tx.send(format!("re-validating {} recovered finding(s) by {}-model vote…", findings.len(), vote_n)).await;
+    let deduped = dedup_findings(findings);
+    let mut v = validate(deduped, pool, VOTE_SYS, vote_n, &tx).await;
+    v = refute_pass(v, pool, vote_n, &tx).await;
+    stamp_attribution(&mut v);
+    let _ = tx.send(format!("re-validation done — {} finding(s) survived", v.len())).await;
+    v
+}
+
 /// Append the NeuroSploit attribution to each finding's impact (idempotent).
 pub fn stamp_attribution(findings: &mut [Finding]) {
     for f in findings.iter_mut() {

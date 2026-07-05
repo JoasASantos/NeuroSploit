@@ -120,7 +120,7 @@ const COMMANDS: &[&str] = &[
     "/help", "/show", "/config", "/providers", "/model", "/key", "/sub", "/target",
     "/repo", "/auth", "/creds", "/focus", "/attach", "/context", "/mcp", "/offline",
     "/votes", "/chain", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/theme", "/clear", "/run", "/stop", "/continue", "/runs", "/results", "/report",
-    "/status", "/diff", "/retest", "/finding", "/expand", "/integrations", "/quit",
+    "/status", "/diff", "/retest", "/validate", "/finding", "/expand", "/integrations", "/quit",
 ];
 
 /// rustyline helper: Tab-completes `/commands` and `@filesystem-paths`,
@@ -304,7 +304,7 @@ impl Reader {
                     }
                     Some(l)
                 }
-                Err(ReadlineError::Interrupted) => Some(String::new()), // Ctrl-C: cancel line
+                Err(ReadlineError::Interrupted) => Some(CTRL_C.to_string()), // Ctrl-C → confirm in loop
                 Err(_) => None,                                          // Ctrl-D / error: exit
             },
             Reader::Plain(stdin) => {
@@ -375,6 +375,33 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
         }
         println!("{}", context_prompt(&s)); // dim context line above the prompt
         let Some(line) = reader.read(PROMPT) else { println!("\n  bye."); break };
+        // Ctrl-C → confirm before doing anything drastic (don't lose a live run).
+        if line == CTRL_C {
+            let run_active = active.as_ref().map(|a| !a.done.load(Ordering::Relaxed)).unwrap_or(false);
+            if run_active {
+                println!("  \x1b[33m⚠ a test is running.\x1b[0m  [\x1b[36ms\x1b[0m] stop & validate/report · [\x1b[36mq\x1b[0m] quit (keep the run's findings) · [enter] keep running");
+                match ask_line("  choice [s/q/enter]:").trim() {
+                    "s" | "stop" => {
+                        if let Some(a) = &active {
+                            *a.choice.lock().unwrap() = StopMode::Validate;
+                            a.soft.store(true, Ordering::Relaxed);
+                            println!("  ⏸ stopping — validating what was found, then reporting…");
+                        }
+                    }
+                    "q" | "quit" => {
+                        if let Some(a) = &active { a.cancel.store(true, Ordering::Relaxed); }
+                        save_session(&s); println!("  session saved → {} · findings checkpointed. bye.", proj_dir().display()); break;
+                    }
+                    _ => println!("  (keep running — /status to check, /stop to halt)"),
+                }
+            } else {
+                match ask_line("  exit NeuroSploit? [y/N]:").trim().to_lowercase().as_str() {
+                    "y" | "yes" | "q" => { save_session(&s); println!("  session saved → {} · bye.", proj_dir().display()); break; }
+                    _ => {}
+                }
+            }
+            continue;
+        }
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -594,20 +621,61 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
                     println!("  ↻ retest set up for {} ({} prior finding(s)) — /run to launch", r.target, titles.len());
                 }
             }
-            "/results" => {
-                // Live findings while a run is active (no arg), else a past run.
-                match &active {
-                    Some(a) if arg.is_empty() && !a.done.load(Ordering::Relaxed) => {
-                        let l = a.live.lock().unwrap();
-                        println!("  ▶ live — {} possible finding(s) so far ({})", l.full.len(), l.phase);
-                        let mut f = l.full.clone();
-                        f.sort_by_key(|x| sev_rank(&x.severity));
-                        for x in &f { println!("  • [{}] {} \x1b[2m({} · {})\x1b[0m", x.severity, x.title, x.agent, x.endpoint); }
-                        if !f.is_empty() { println!("  \x1b[2m/finding — pick one to see the command & PoC\x1b[0m"); }
+            "/validate" | "/revalidate" => {
+                // Re-run false-positive validation (voting + adversarial refute) on
+                // a recovered/past run's findings WITHOUT re-testing the target.
+                let (target, workdir, cands) = {
+                    let h = history.lock().unwrap();
+                    match pick(&h, arg) {
+                        Some(r) => (r.target.clone(), r.workdir.clone(), r.findings.clone()),
+                        None => { continue; }
                     }
-                    // No arg + interactive → the full navigation browser (target → vuln → detail, Esc back).
-                    _ if arg.is_empty() && std::io::stdin().is_terminal() => browse_results(&history.lock().unwrap()),
-                    _ => results(&history.lock().unwrap(), arg),
+                };
+                if cands.is_empty() { println!("  that run has no findings to validate."); continue; }
+                if s.offline { println!("  \x1b[31mvalidation needs a model — turn /offline off (and set a model/login).\x1b[0m"); continue; }
+                println!("  \x1b[1;35m▶ validating {} finding(s) from {}\x1b[0m (voting + adversarial refute)…", cands.len(), target);
+                let refs: Vec<ModelRef> = s.models.iter().map(|m| ModelRef::parse(m)).collect();
+                let pool = harness::pool::ModelPool::with_auth(refs, 3, s.subscription, None);
+                let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(256);
+                let vote_n = s.vote_n;
+                let task = tokio::spawn(async move { harness::pipeline::revalidate(cands, &pool, vote_n, tx).await });
+                while let Some(line) = rx.recv().await {
+                    if let Some(out) = crate::render_compact(&line) { println!("{out}"); }
+                }
+                let validated = task.await.unwrap_or_default();
+                // Persist: rewrite the run's findings + report, save history.
+                {
+                    let mut h = history.lock().unwrap();
+                    if let Some(r) = h.iter_mut().find(|r| r.workdir == workdir || (arg.trim().parse::<usize>().ok() == Some(r.id))) {
+                        r.findings = validated.clone();
+                    }
+                    save_runs(base, &h);
+                }
+                if !workdir.is_empty() {
+                    crate::report_raw(&target, &validated, std::path::Path::new(&workdir));
+                }
+                println!("  \x1b[1;32m✓ validation complete — {} finding(s) confirmed\x1b[0m · report refreshed · /results to browse", validated.len());
+            }
+            "/results" => {
+                // With an explicit run number, or piped stdin → plain print.
+                if !arg.is_empty() || !std::io::stdin().is_terminal() {
+                    results(&history.lock().unwrap(), arg);
+                } else {
+                    // Interactive: ALWAYS show the run/test picker (target → vuln →
+                    // detail, Esc back). Includes the live run (if any) at the top so
+                    // you can browse every test, not just the current one.
+                    let mut runs: Vec<RunRecord> = Vec::new();
+                    if let Some(a) = &active {
+                        if !a.done.load(Ordering::Relaxed) {
+                            let l = a.live.lock().unwrap();
+                            runs.push(RunRecord {
+                                id: 0, mode: format!("{} ▶live", l.mode), target: l.target.clone(),
+                                workdir: String::new(), findings: l.full.clone(),
+                            });
+                        }
+                    }
+                    runs.extend(history.lock().unwrap().iter().rev().cloned()); // newest-first
+                    browse_results(&runs);
                 }
             }
             "/finding" | "/findings" => {
@@ -1210,16 +1278,20 @@ fn browse_results(history: &[RunRecord]) {
         let run_items: Vec<String> = history.iter().map(|r| {
             let c = sev_counts(&r.findings);
             let sev = if c.is_empty() { "0".into() } else { c.iter().map(|(k, v)| format!("{k}:{v}")).collect::<Vec<_>>().join(" ") };
-            format!("#{} {:<9} {:<40} [{}]", r.id, r.mode, trunc(&r.target, 40), sev)
+            let id = if r.id == 0 { "live".to_string() } else { format!("#{}", r.id) };
+            format!("{:<5} {:<14} {:<40} [{}]", id, r.mode, trunc(&r.target, 40), sev)
         }).collect();
         let ri = match dialoguer::Select::with_theme(&ColorfulTheme::default())
-            .with_prompt("Results — select a target/run (Esc to return to the session)")
-            .items(&run_items).default(run_items.len().saturating_sub(1)).interact_opt() {
+            .with_prompt("Results — select a test/run (↑/↓, enter · Esc returns to the session)")
+            .items(&run_items).default(0).interact_opt() {
             Ok(Some(i)) => i,
             _ => { println!("  ← back to session"); return; }
         };
         let r = &history[ri];
-        if r.findings.is_empty() { println!("  run #{} — no validated findings.", r.id); continue; }
+        if r.findings.is_empty() {
+            println!("  {} — no findings yet.", if r.id == 0 { "live run".into() } else { format!("run #{}", r.id) });
+            continue;
+        }
         let mut f = r.findings.clone();
         f.sort_by_key(|x| sev_rank(&x.severity));
         // Level 2 — pick a vulnerability (Esc → back to target list).
@@ -1325,7 +1397,8 @@ fn help() {
     h("/report [n]",        "open a run's report (menu if several)");
     h("/runs",              "list all runs");
     h("/diff",              "what changed vs the last run");
-    h("/retest [n]",        "re-verify a past run's findings");
+    h("/retest [n]",        "re-verify a past run's findings (re-runs the test)");
+    h("/validate [n]",      "false-positive validate a recovered/past run (no re-test)");
 
     println!("\n  \x1b[2mINTEGRATIONS\x1b[0m");
     h("/integrations",      "show · enable/disable github|gitlab|jira · setup <name>");
@@ -1425,6 +1498,10 @@ fn context_prompt(s: &Session) -> String {
 /// The actual readline prompt — plain text so rustyline measures its width
 /// correctly; color is applied by the Highlighter, not embedded here.
 const PROMPT: &str = "neurosploit› ";
+
+/// Sentinel returned by the reader on Ctrl-C so the loop can confirm before
+/// exiting (instead of losing an active run to a stray interrupt).
+const CTRL_C: &str = "\u{0}__ctrl_c__";
 
 /// Split the session target into one or more URLs (comma-separated list).
 fn session_targets(s: &Session) -> Vec<String> {
