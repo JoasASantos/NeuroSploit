@@ -233,9 +233,13 @@ enum Cmd {
 
 /// Locate the repo root that holds `agents_md/`.
 fn find_base() -> PathBuf {
+    // 1) Explicit override (set by the installer for a global, run-from-anywhere install).
     if let Ok(b) = std::env::var("NEUROSPLOIT_BASE") {
-        return PathBuf::from(b);
+        if !b.trim().is_empty() {
+            return PathBuf::from(b);
+        }
     }
+    // 2) Walk up from the current directory (running inside a checkout).
     if let Ok(cwd) = std::env::current_dir() {
         let mut dir = cwd.as_path();
         for _ in 0..6 {
@@ -248,6 +252,28 @@ fn find_base() -> PathBuf {
             }
         }
     }
+    // 3) Next to the ACTUAL executable (a global install ships the binary and
+    // agents_md/ together). current_exe() resolves the PATH symlink to the real
+    // install dir — so `neurosploit` works from any folder without any env var.
+    if let Ok(exe) = std::env::current_exe() {
+        let real = std::fs::canonicalize(&exe).unwrap_or(exe);
+        for cand in [real.parent(), real.parent().and_then(|p| p.parent())].into_iter().flatten() {
+            if cand.join("agents_md").is_dir() {
+                return cand.to_path_buf();
+            }
+        }
+    }
+    // 4) Common install locations (matches setup.sh / install.ps1 defaults).
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        for c in [home.join(".neurosploit-app"), home.join(".local/share/neurosploit")] {
+            if c.join("agents_md").is_dir() { return c; }
+        }
+    }
+    if let Some(la) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+        let c = la.join("NeuroSploit");
+        if c.join("agents_md").is_dir() { return c; }
+    }
+    // 5) Last resort: the build-time layout.
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|p| p.parent())
