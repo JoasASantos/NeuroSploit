@@ -102,6 +102,22 @@ interactive line-editing.
 - **Rate-limit testing** is a first-class control check (small non-disruptive
   burst → look for 429/lockout/Retry-After), never a DoS.
 
+## EOL / End-of-Support exploitation
+
+- **+8 EOL agents** (library **397**) that detect components past their vendor
+  end-of-life / end-of-support window and exploit the CVEs that pile up once
+  patches stop — high-value because the bugs are public and unfixed. Each pins the
+  **exact version**, checks it against public EOL data (endoflife.date) + CVE
+  feeds, and proves exploitability with a **safe** PoC:
+  - `eol_stack_detection` — fingerprint every EOL component across the stack.
+  - `eol_runtime_exploitation` — EOL PHP/Python/Node/Java/.NET/Ruby runtimes.
+  - `eol_framework_exploitation` — EOL Struts/Spring/Rails/Django/Laravel/AngularJS.
+  - `eol_cms_exploitation` — EOL WordPress/Drupal/Joomla/Magento core & plugins.
+  - `eol_client_library` — EOL front-end libs (jQuery/AngularJS/Lodash/…).
+  - `eol_webserver_exploitation` — EOL Apache/nginx/IIS/Tomcat/JBoss/WebLogic.
+  - `eol_os_service` — EOL OS & services (old OpenSSH/OpenSSL/Samba, SMBv1).
+  - `eol_tls_protocol` — deprecated TLS (SSLv3/1.0/1.1) & legacy protocols.
+
 ## Decision-driven deep exploitation
 
 - **DECISION doctrine** injected into every exploit/grey/chain prompt: analyse

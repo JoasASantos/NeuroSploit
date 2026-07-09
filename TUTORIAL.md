@@ -40,7 +40,7 @@ You give NeuroSploit a **target** (URL, repo, app, or host/IP). It:
 
 1. **Recons** the target with real tools (curl/nmap/…).
 2. **Intelligently selects** only the agents whose preconditions match the recon
-   (it does *not* blindly run all 389).
+   (it does *not* blindly run all 397).
 3. **Exploits** in parallel — each agent works in a ReAct loop and must prove its
    claim with a **tool receipt** (raw output).
 4. **Validates** every candidate by **cross-model voting** (a different model
@@ -99,7 +99,7 @@ Agents **degrade gracefully**: if `rustscan` is absent they use `nmap`; if neith
 
 ```bash
 neurosploit --version          # neurosploit 3.5.5
-neurosploit agents             # {"vulns":196,...,"chains":12,"total":389}
+neurosploit agents             # {"vulns":196,...,"chains":12,"total":397}
 neurosploit models             # all providers & models
 ```
 
@@ -535,7 +535,7 @@ built from SAST/dataflow), so uncertainty becomes *path reachability*, not state
 
 ## 13. The agent library
 
-`agents_md/` holds **389** markdown agents in categories:
+`agents_md/` holds **397** markdown agents in categories:
 
 | Category | Dir | Count | Purpose |
 |----------|-----|-------|---------|
