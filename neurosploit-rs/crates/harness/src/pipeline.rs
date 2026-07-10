@@ -241,25 +241,8 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
         let _ = tx.send("recon: offline mode — skipping model calls".into()).await;
         "{}".to_string()
     } else {
-        let recon_user = format!(
-            "{}{}OBSERVED HTTP PROBE (real request/response facts — build on these, verify, and go deeper):\n{}\n\nTarget: {}",
-            operator_directives(&cfg), tool_doctrine(pool.mcp_config.is_some()), probe_facts, cfg.target);
-        match pool.complete_routed(Task::Recon, "recon", RECON_SYS, &recon_user).await {
-            Ok((m, t)) => {
-                let _ = tx.send(format!("recon complete via {}", m.label())).await;
-                if cfg.verbose {
-                    let snip: String = t.chars().take(280).collect();
-                    let _ = tx.send(format!("  recon> {}", snip.replace('\n', " "))).await;
-                }
-                // Keep the deterministic probe facts alongside the model recon so
-                // exploitation agents always see the observed evidence.
-                format!("{}\n\nMODEL RECON:\n{}", probe_facts, t)
-            }
-            Err(e) => {
-                let _ = tx.send(format!("recon failed ({e}) — continuing with probe facts only")).await;
-                probe_facts.clone()
-            }
-        }
+        // Intense, multi-round active recon (installs tools, expands the surface).
+        deep_recon(&cfg, pool, &probe_facts, &tx).await
     };
 
     // ---- 2. Intelligent, RL-ranked agent selection ---------------------
@@ -1302,6 +1285,78 @@ encodings, multi-turn/crescendo, indirect via retrieved/tool content). PROVE eac
 and the model's own response. Map every finding to OWASP LLM Top 10 (2025) and, where relevant, MCP threats / OWASP AI \
 Exchange. NON-DESTRUCTIVE: never exfiltrate real user data or weaponise the model against third parties — a redacted, \
 minimal proof is enough. Chain findings (e.g. system-prompt leak → tailored injection → excessive-agency tool abuse).\n\n";
+
+/// Recon-phase directive by intensity — tells the agent HOW HARD to recon and
+/// to INSTALL the tools it needs (the user wants an intense, active recon, not a
+/// quick one-shot). Best on Kali; degrades to curl/nc if installs fail.
+fn recon_intensity_directive(level: usize) -> String {
+    let (label, rounds, extra) = match level {
+        0 | 1 => ("QUICK", "one focused pass", ""),
+        2 => ("STANDARD", "crawl + JS + params", ""),
+        3 => ("DEEP", "multi-angle active enumeration",
+            "Go WIDE and DEEP — do NOT stop after the homepage. This should take real effort."),
+        _ => ("EXHAUSTIVE", "leave no stone unturned",
+            "Be EXHAUSTIVE — enumerate everything, brute wordlists, chase every referenced host/asset."),
+    };
+    format!(
+        "RECON INTENSITY: {label} — {rounds}. {extra}\n\
+         INSTALL WHAT YOU NEED (authorized): if a recon tool is missing, install it before falling back — \
+         `apt-get install -y <t>`, `pip install <t>`, `go install <pkg>@latest`, `npm i -g <t>`, or `cargo install <t>`. \
+         Recommended arsenal: subfinder/amass/assetfinder (subdomains), httpx/httprobe (probe live), \
+         gau/waybackurls/katana/hakrawler/gospider (URL harvest & crawl), gf (pattern-filter urls), \
+         arjun/paramspider (params), ffuf/feroxbuster/dirsearch (content discovery), nuclei (targeted templates), \
+         nmap/rustscan/naabu (ports), dnsx (dns), subjs/linkfinder/getjs (JS endpoints), whatweb/wappalyzer (fingerprint), \
+         nikto (server issues), testssl.sh/sslscan (TLS). Chain them: subfinder→httpx→katana/gau→gf→ffuf.\n\
+         COVER, at this intensity: (1) subdomain & vhost enumeration + resolve live; (2) full crawl + historical \
+         URLs (wayback/gau) + JS analysis (endpoints, params, secrets, source maps); (3) content & parameter \
+         discovery with wordlists; (4) port/service scan; (5) tech + EXACT version fingerprinting; (6) auth/API \
+         (REST+GraphQL) mapping; (7) classic exposures (.git/.env/backups/swagger/actuator, dangling CNAMEs); \
+         (8) TLS/headers/cookies. Report counts (how many subdomains/urls/params/endpoints you actually found).\n\n")
+}
+
+/// Intense, multi-round recon: an initial deep pass, then follow-up rounds that
+/// EXPAND the surface (chase discovered subdomains/endpoints/params, install
+/// tools, dig where the previous round found signal). Returns the merged recon
+/// text. Rounds scale with `recon_intensity` (2→1 extra, 3→2, 4→3).
+async fn deep_recon(cfg: &RunConfig, pool: &ModelPool, probe_facts: &str, tx: &Sender<String>) -> String {
+    let intensity = cfg.recon_intensity.max(1);
+    let extra_rounds = intensity.saturating_sub(1).min(3);
+    let doctrine = tool_doctrine(pool.mcp_config.is_some());
+    let intensity_dir = recon_intensity_directive(intensity);
+    let dir = operator_directives(cfg);
+    let mut accum = format!("OBSERVED HTTP PROBE:\n{probe_facts}");
+
+    // Initial deep pass.
+    let user = format!("{dir}{intensity_dir}{doctrine}OBSERVED HTTP PROBE (build on these, verify, go deeper):\n{probe_facts}\n\nTarget: {}", cfg.target);
+    let _ = tx.send(format!("recon: intensity {} — actively enumerating (installing tools as needed)…", intensity)).await;
+    match pool.complete_routed(Task::Recon, "recon", RECON_SYS, &user).await {
+        Ok((m, t)) => { let _ = tx.send(format!("recon round 1 complete via {}", m.label())).await; accum.push_str(&format!("\n\nMODEL RECON (round 1):\n{t}")); }
+        Err(e) => { let _ = tx.send(format!("recon round 1 failed ({e}) — probe facts only")).await; return accum; }
+    }
+
+    // Follow-up expansion rounds — each digs further using what's known so far.
+    for r in 0..extra_rounds {
+        if pool.stop_exploiting() { break; }
+        let round = r + 2;
+        let known: String = accum.chars().rev().take(3000).collect::<String>().chars().rev().collect();
+        let follow = format!(
+            "{dir}{intensity_dir}{doctrine}CONTINUE the recon — this is round {round}. Here is what recon has found so far:\n{known}\n\n\
+             Now EXPAND: pick the most promising leads and go deeper — resolve & probe any NEW subdomains/hosts, crawl \
+             and harvest URLs for endpoints not yet mapped, run content/parameter discovery where you saw interesting \
+             paths, fingerprint exact versions of anything unclear, and enumerate the API/GraphQL further. Install any \
+             tool you still need. Report ONLY the NEW facts found this round as the same COMPACT JSON schema. No repetition of prior facts.",
+        );
+        match pool.complete_routed(Task::Recon, "recon", RECON_SYS, &follow).await {
+            Ok((m, t)) => {
+                let novel = t.trim();
+                if novel.len() > 20 { let _ = tx.send(format!("recon round {round} via {} — expanded surface", m.label())).await; accum.push_str(&format!("\n\nMODEL RECON (round {round}):\n{novel}")); }
+                else { let _ = tx.send(format!("recon round {round}: no new surface — recon converged")).await; break; }
+            }
+            Err(e) => { let _ = tx.send(format!("recon round {round} failed ({e})")).await; break; }
+        }
+    }
+    accum
+}
 
 /// AI recon system prompt.
 const AI_RECON_SYS: &str = "You are an AI-security recon specialist on an AUTHORIZED engagement. Probe the AI endpoint: \

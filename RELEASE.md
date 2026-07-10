@@ -41,6 +41,20 @@ and pick your engagement type up front in a new **onboarding wizard**. Library
   Skills/Plugins/n8n** — then the box type (black/white/grey for web) and the
   minimal setup, so a plain `/run` does the right thing. Scope shown in `/show`.
 
+## Intense, multi-round recon
+
+- Recon is no longer a single quick pass. **`deep_recon`** runs an initial deep
+  enumeration then **follow-up expansion rounds** that chase what the previous
+  round found (new subdomains/hosts, unmapped endpoints, promising paths/params),
+  converging when nothing new appears.
+- Agents are told to **install the tools they need** (apt/pip/go/npm/cargo) —
+  subfinder/amass, httpx, gau/waybackurls/katana/hakrawler, gf, arjun/paramspider,
+  ffuf/feroxbuster, nuclei, nmap/rustscan, dnsx, linkfinder, whatweb, nikto,
+  testssl — and chain them (subfinder→httpx→katana/gau→gf→ffuf).
+- **`/recon <1-4>`** (REPL) and **`--recon <1-4>`** (CLI) set the intensity:
+  1 quick · 2 standard · 3 deep (default) · 4 exhaustive — more rounds + wider
+  enumeration at higher levels. Best on Kali; degrades to curl/nc if installs fail.
+
 ## Models
 
 - Added **`anthropic:claude-sonnet-5`** and **`xai:grok-4.5`**.

@@ -49,6 +49,9 @@ enum Cmd {
         /// Attack-chaining rounds (post-exploitation pivots; 0 disables).
         #[arg(long, default_value_t = 2)]
         chain_depth: usize,
+        /// Recon intensity 1-4 (1 quick .. 4 exhaustive; installs tools).
+        #[arg(long, default_value_t = 3)]
+        recon: usize,
         #[arg(long)]
         offline: bool,
         /// Use local agentic CLI subscription (Claude/Codex/Gemini/Grok login).
@@ -85,6 +88,9 @@ enum Cmd {
         /// Attack-chaining rounds (post-exploitation pivots; 0 disables).
         #[arg(long, default_value_t = 2)]
         chain_depth: usize,
+        /// Recon intensity 1-4 (1 quick .. 4 exhaustive; installs tools).
+        #[arg(long, default_value_t = 3)]
+        recon: usize,
         #[arg(long)]
         offline: bool,
         #[arg(long)]
@@ -117,6 +123,9 @@ enum Cmd {
         /// Attack-chaining rounds (post-exploitation pivots; 0 disables).
         #[arg(long, default_value_t = 2)]
         chain_depth: usize,
+        /// Recon intensity 1-4 (1 quick .. 4 exhaustive; installs tools).
+        #[arg(long, default_value_t = 3)]
+        recon: usize,
         #[arg(long)]
         offline: bool,
         #[arg(long)]
@@ -145,6 +154,9 @@ enum Cmd {
         /// Attack-chaining rounds (post-exploitation pivots; 0 disables).
         #[arg(long, default_value_t = 2)]
         chain_depth: usize,
+        /// Recon intensity 1-4 (1 quick .. 4 exhaustive; installs tools).
+        #[arg(long, default_value_t = 3)]
+        recon: usize,
         #[arg(long)]
         subscription: bool,
         #[arg(long)]
@@ -169,6 +181,9 @@ enum Cmd {
         /// Attack-chaining rounds (post-exploitation pivots; 0 disables).
         #[arg(long, default_value_t = 2)]
         chain_depth: usize,
+        /// Recon intensity 1-4 (1 quick .. 4 exhaustive; installs tools).
+        #[arg(long, default_value_t = 3)]
+        recon: usize,
         #[arg(long)]
         offline: bool,
         #[arg(long)]
@@ -228,6 +243,9 @@ enum Cmd {
         /// Attack-chaining rounds (post-exploitation pivots; 0 disables).
         #[arg(long, default_value_t = 2)]
         chain_depth: usize,
+        /// Recon intensity 1-4 (1 quick .. 4 exhaustive; installs tools).
+        #[arg(long, default_value_t = 3)]
+        recon: usize,
         #[arg(long)]
         subscription: bool,
         /// Post a summary comment back on the PR (needs github integration on).
@@ -349,12 +367,13 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        Cmd::Run { url, models, max_agents, vote_n, chain_depth, offline, subscription, mcp, creds, focus, jira, verbose } => {
+        Cmd::Run { url, models, max_agents, vote_n, chain_depth, recon, offline, subscription, mcp, creds, focus, jira, verbose } => {
             let url = if url.starts_with("http") { url } else { format!("https://{url}") };
             let mut cfg = RunConfig::new(&url);
             cfg.max_agents = max_agents;
             cfg.vote_n = vote_n;
             cfg.chain_depth = chain_depth;
+            cfg.recon_intensity = recon;
             cfg.offline = offline;
             cfg.subscription = subscription;
             cfg.verbose = verbose;
@@ -368,12 +387,13 @@ async fn main() -> anyhow::Result<()> {
             let ig = harness::integrations::Integrations::load(&repl::proj_dir());
             post_integrations(&ig, &url, &out, jira, false, None).await;
         }
-        Cmd::Whitebox { path, models, max_agents, vote_n, chain_depth, offline, subscription, jira, verbose } => {
+        Cmd::Whitebox { path, models, max_agents, vote_n, chain_depth, recon, offline, subscription, jira, verbose } => {
             let path = resolve_source(&base, &path)?; // local path OR github URL/owner/repo
             let mut cfg = RunConfig::new(&path);
             cfg.max_agents = max_agents;
             cfg.vote_n = vote_n;
             cfg.chain_depth = chain_depth;
+            cfg.recon_intensity = recon;
             cfg.offline = offline;
             cfg.subscription = subscription;
             cfg.verbose = verbose;
@@ -385,7 +405,7 @@ async fn main() -> anyhow::Result<()> {
             let ig = harness::integrations::Integrations::load(&repl::proj_dir());
             post_integrations(&ig, &path, &out, jira, false, None).await;
         }
-        Cmd::Greybox { repo, url, models, creds, focus, max_agents, vote_n, chain_depth, offline, subscription, mcp, verbose } => {
+        Cmd::Greybox { repo, url, models, creds, focus, max_agents, vote_n, chain_depth, recon, offline, subscription, mcp, verbose } => {
             let repo = resolve_source(&base, &repo)?; // local path OR github URL/owner/repo
             let url = if url.starts_with("http") { url } else { format!("https://{url}") };
             let mut cfg = RunConfig::new(&url);
@@ -393,6 +413,7 @@ async fn main() -> anyhow::Result<()> {
             cfg.max_agents = max_agents;
             cfg.vote_n = vote_n;
             cfg.chain_depth = chain_depth;
+            cfg.recon_intensity = recon;
             cfg.offline = offline;
             cfg.subscription = subscription;
             cfg.verbose = verbose;
@@ -404,13 +425,14 @@ async fn main() -> anyhow::Result<()> {
             let out = run_greybox_engagement(&base, cfg, mcp).await?;
             print_findings(&out);
         }
-        Cmd::Tui { url, models, repo, creds, focus, max_agents, vote_n, chain_depth, subscription, mcp } => {
+        Cmd::Tui { url, models, repo, creds, focus, max_agents, vote_n, chain_depth, recon, subscription, mcp } => {
             let repo = match repo { Some(r) => Some(resolve_source(&base, &r)?), None => None }; // github URL ok
             let url = if url.starts_with("http") { url } else { format!("https://{url}") };
             let mut cfg = RunConfig::new(&url);
             cfg.max_agents = max_agents;
             cfg.vote_n = vote_n;
             cfg.chain_depth = chain_depth;
+            cfg.recon_intensity = recon;
             cfg.subscription = subscription;
             cfg.instructions = focus;
             cfg.repo = repo.clone();
@@ -421,11 +443,12 @@ async fn main() -> anyhow::Result<()> {
             let mode = if repo.is_some() { Mode::Grey } else { Mode::Black };
             tui::run(&base, cfg, mcp, mode).await?;
         }
-        Cmd::Host { target, models, creds, focus, max_agents, vote_n, chain_depth, offline, subscription, verbose } => {
+        Cmd::Host { target, models, creds, focus, max_agents, vote_n, chain_depth, recon, offline, subscription, verbose } => {
             let mut cfg = RunConfig::new(&target);
             cfg.max_agents = max_agents;
             cfg.vote_n = vote_n;
             cfg.chain_depth = chain_depth;
+            cfg.recon_intensity = recon;
             cfg.offline = offline;
             cfg.subscription = subscription;
             cfg.verbose = verbose;
@@ -462,7 +485,7 @@ async fn main() -> anyhow::Result<()> {
             let out = run_mode(&base, cfg, false, Mode::Skills).await?;
             print_findings(&out);
         }
-        Cmd::Pr { repo, number, models, vote_n, chain_depth, subscription, comment, jira, verbose } => {
+        Cmd::Pr { repo, number, models, vote_n, chain_depth, recon, subscription, comment, jira, verbose } => {
             let ig = harness::integrations::Integrations::load(&repl::proj_dir());
             let owner_repo = normalize_repo(&repo);
             let path = clone_pr(&base, &ig, &owner_repo, number)?;
@@ -470,6 +493,7 @@ async fn main() -> anyhow::Result<()> {
             let mut cfg = RunConfig::new(&path);
             cfg.vote_n = vote_n;
             cfg.chain_depth = chain_depth;
+            cfg.recon_intensity = recon;
             cfg.subscription = subscription;
             cfg.verbose = verbose;
             cfg.instructions = Some(format!("This is the code of pull request #{number} of {owner_repo}. Focus on vulnerabilities introduced or touched by this change."));

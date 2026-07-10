@@ -119,7 +119,7 @@ struct LiveCheckpoint {
 const COMMANDS: &[&str] = &[
     "/help", "/onboard", "/show", "/config", "/providers", "/model", "/key", "/sub", "/target",
     "/repo", "/auth", "/creds", "/focus", "/attach", "/context", "/mcp", "/offline",
-    "/votes", "/chain", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/theme", "/clear", "/run", "/stop", "/continue", "/runs", "/results", "/report",
+    "/votes", "/chain", "/recon", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/theme", "/clear", "/run", "/stop", "/continue", "/runs", "/results", "/report",
     "/status", "/diff", "/retest", "/validate", "/finding", "/expand", "/integrations", "/quit",
 ];
 
@@ -214,6 +214,7 @@ struct Session {
     vote_n: usize,
     max_agents: usize,
     chain_depth: usize,
+    recon_intensity: usize,
     /// Idle guardrail: stop a run if no NEW finding lands in this many seconds
     /// (0 = disabled). Set in minutes via `/timeout <mins>`.
     idle_secs: u64,
@@ -244,6 +245,7 @@ impl Default for Session {
             vote_n: 3,
             max_agents: 0,
             chain_depth: 2,
+            recon_intensity: 3,
             idle_secs: 300, // 5-minute idle guardrail by default
             proxy: None,
             user_agent: None,
@@ -566,6 +568,11 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
             "/chain" => {
                 if arg.is_empty() { println!("  attack-chain depth: {} (0 disables) — set with /chain <n>", s.chain_depth); }
                 else { s.chain_depth = arg.parse().unwrap_or(s.chain_depth); println!("  attack-chain depth: {}", s.chain_depth); }
+            }
+            "/recon" => {
+                let lvl = |n: usize| ["", "quick", "standard", "deep", "exhaustive"].get(n).copied().unwrap_or("deep");
+                if arg.is_empty() { println!("  recon intensity: {} ({}) — set with /recon <1-4>  [1 quick · 2 standard · 3 deep · 4 exhaustive]", s.recon_intensity, lvl(s.recon_intensity)); }
+                else { s.recon_intensity = arg.parse::<usize>().unwrap_or(s.recon_intensity).clamp(1, 4); println!("  recon intensity: {} ({}) — more rounds, more enumeration, auto-installs tools", s.recon_intensity, lvl(s.recon_intensity)); }
             }
             "/agents" => {
                 if arg == "list" || arg == "ls" {
@@ -932,6 +939,7 @@ async fn run(base: &Path, s: &Session, history: &mut Vec<RunRecord>) {
     cfg.subscription = s.subscription;
     cfg.vote_n = s.vote_n;
     cfg.chain_depth = s.chain_depth;
+    cfg.recon_intensity = s.recon_intensity;
     cfg.proxy = s.proxy.clone();
     cfg.user_agent = s.user_agent.clone();
     cfg.max_agents = s.max_agents;
@@ -1007,6 +1015,7 @@ async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
     cfg.subscription = s.subscription;
     cfg.vote_n = s.vote_n;
     cfg.chain_depth = s.chain_depth;
+    cfg.recon_intensity = s.recon_intensity;
     cfg.proxy = s.proxy.clone();
     cfg.user_agent = s.user_agent.clone();
     cfg.max_agents = s.max_agents;
@@ -1467,8 +1476,8 @@ fn show(s: &Session) {
     println!("  │  proxy    : {}", s.proxy.clone().unwrap_or_else(|| "(none — /proxy for Burp/ZAP)".into()));
     println!("  │  user-agent: {}", s.user_agent.clone().unwrap_or_else(|| "NeuroSploit (default)".into()));
     println!("  │  focus    : {}", s.instructions.clone().unwrap_or_else(|| "(none — tests everything)".into()));
-    println!("  │  opts     : mcp={} offline={} votes={} chain-depth={} max-agents={} idle-stop={}",
-        onoff(s.mcp), onoff(s.offline), s.vote_n, s.chain_depth, s.max_agents,
+    println!("  │  opts     : mcp={} offline={} votes={} recon={} chain-depth={} max-agents={} idle-stop={}",
+        onoff(s.mcp), onoff(s.offline), s.vote_n, s.recon_intensity, s.chain_depth, s.max_agents,
         if s.idle_secs == 0 { "off".to_string() } else { format!("{}m", s.idle_secs / 60) });
     // Integrations at a glance (see /integrations for detail).
     {
@@ -1535,6 +1544,7 @@ fn help() {
     h("/offline on|off",    "pipeline self-test (no API keys / no model calls)");
     h("/votes <n>",         "number of validator votes per finding");
     h("/chain <n>",         "attack-chain depth (post-exploitation pivots; 0 = off)");
+    h("/recon <1-4>",       "recon intensity: 1 quick · 2 standard · 3 deep · 4 exhaustive (installs tools)");
     h("/timeout <min>",     "idle guardrail: stop if no new finding in <min> (0 = off)");
     h("/proxy <url>|off",   "route agent HTTP through Burp/ZAP  (/burp = default :8080)");
     h("/ua <string>",       "identifying User-Agent for NeuroSploit traffic (default = NeuroSploit)");

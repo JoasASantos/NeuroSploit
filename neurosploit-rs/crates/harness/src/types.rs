@@ -137,9 +137,17 @@ pub struct RunConfig {
     /// Defaults to the NeuroSploit UA when unset.
     #[serde(default)]
     pub user_agent: Option<String>,
+    /// Recon intensity (1=quick, 2=standard, 3=deep, 4=exhaustive). Higher =
+    /// more recon rounds, more active enumeration, and auto-installing tools.
+    #[serde(default = "default_recon")]
+    pub recon_intensity: usize,
 }
 
 fn default_vote() -> usize {
+    3
+}
+
+fn default_recon() -> usize {
     3
 }
 
@@ -170,6 +178,7 @@ impl RunConfig {
             chain_depth: 2,
             proxy: None,
             user_agent: None,
+            recon_intensity: 3,
         }
     }
 }
