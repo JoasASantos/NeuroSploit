@@ -89,10 +89,13 @@ fn tool_doctrine(mcp_on: bool) -> String {
            Keep bursts small and non-disruptive — this is a control check, not a DoS.\n\
          - TOOL DOWNLOAD (authorized): when a public PoC or scanner is needed you MAY `git clone` a specific PoC/exploit \
            repo or download a tool (`git clone`, `wget`, `pip install`, `go install`, `cargo install`) — use pinned, \
-           reputable sources; review before running; never run destructive payloads.\n\
+           reputable sources; review before running; never run destructive payloads. ALWAYS time-box downloads/installs \
+           (`timeout 90 <install> || echo skip`) and try each at most once — if it fails, isn't packaged, has no network \
+           or hangs, SKIP it and fall back to curl/nc/dig/python3. A missing or un-downloadable tool is NEVER a reason \
+           to stall: move on with what you have.\n\
          - {browser}\n\
          - {ua}{proxy}{pocs}\
-         Use only what is installed; degrade gracefully. Never run destructive or DoS actions.\n\n",
+         Use only what is installed; degrade gracefully. Never block on a single tool install. Never run destructive or DoS actions.\n\n",
         ua = ua_line(),
         proxy = proxy_line(),
         pocs = pocs_line(),
@@ -1300,8 +1303,15 @@ fn recon_intensity_directive(level: usize) -> String {
     };
     format!(
         "RECON INTENSITY: {label} — {rounds}. {extra}\n\
-         INSTALL WHAT YOU NEED (authorized): if a recon tool is missing, install it before falling back — \
-         `apt-get install -y <t>`, `pip install <t>`, `go install <pkg>@latest`, `npm i -g <t>`, or `cargo install <t>`. \
+         INSTALL WHAT YOU NEED (authorized), BUT NEVER GET STUCK ON AN INSTALL: if a recon tool is missing, \
+         try to install it — but TIME-BOX every install and move on if it fails. Always wrap installs like \
+         `timeout 90 apt-get install -y <t> || timeout 90 go install <pkg>@latest || echo 'skip <t>'` and \
+         run them non-interactively (`DEBIAN_FRONTEND=noninteractive`, `-y`, no prompts). \
+         Try a given tool install AT MOST ONCE — if it errors, is not packaged, needs a different OS, \
+         has no network, or hangs past the timeout, SKIP IT immediately and use an already-installed \
+         alternative or plain `curl`/`nc`/`dig`/`openssl`/`python3`. Do not wait on, retry, or block the \
+         whole recon for any single tool download — a missing tool is never a reason to stall. \
+         Options — `pip install <t>`, `go install <pkg>@latest`, `npm i -g <t>`, or `cargo install <t>` (all time-boxed). \
          Recommended arsenal: subfinder/amass/assetfinder (subdomains), httpx/httprobe (probe live), \
          gau/waybackurls/katana/hakrawler/gospider (URL harvest & crawl), gf (pattern-filter urls), \
          arjun/paramspider (params), ffuf/feroxbuster/dirsearch (content discovery), nuclei (targeted templates), \
