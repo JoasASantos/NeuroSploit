@@ -1,4 +1,4 @@
-<h1 align="center">🧠 NeuroSploit v3.6.2</h1>
+<h1 align="center">🧠 NeuroSploit v3.6.3</h1>
 
 <p align="center">
   <a href="https://trendshift.io/repositories/22624?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-22624" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/22624/daily?language=Python" alt="JoasASantos%2FNeuroSploit | Trendshift" width="250" height="55"/></a>
@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-3.6.2-blue?style=flat-square">
+  <img src="https://img.shields.io/badge/Version-3.6.3-blue?style=flat-square">
   <img src="https://img.shields.io/badge/Harness-Rust%20%7C%20tokio-e6b673?style=flat-square">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
   <img src="https://img.shields.io/badge/MD%20Agents-417-red?style=flat-square">
@@ -28,14 +28,15 @@
 >
 > 📖 **New here? Read the [full Tutorial & User Guide →](TUTORIAL.md)** — every mode, flag, config and example explained.
 
-> 🆕 **New in v3.6.2 — live Codex streaming + full activity feed:**
-> Codex runs now **stream tool-by-tool** (`codex exec --json`) exactly like
-> Claude Code — every command, file edit, MCP call and token count appears live
-> instead of a silent black box, so a long intense recon never looks frozen. The
-> **`/logs`** feed and **`/status`** sign-of-line now capture the *actual
-> commands each agent runs* (subfinder, httpx, nmap, curl…), not just pipeline
-> phases. *(v3.6.1 added GPT-5.6 sol/terra/luna, the Codex exit-1 fix, `/logs`
-> and richer `/status`; v3.6.0 added AI-agent/LLM/MCP/Skills/n8n testing +
+> 🆕 **New in v3.6.3 — resumable interrupted runs + crash-proof browsing:**
+> If a run is interrupted (terminal closed, Ctrl-C, crash), **`/continue` now
+> relaunches it** on the same target and **carries the recovered findings
+> forward** — the offer appears right at launch. And opening **`/results`**,
+> **`/finding`** or **`/report`** while a run streams no longer corrupts the
+> terminal: live output is paused for the picker (still captured in `/logs`) and
+> restored on exit. *(v3.6.2 added live Codex tool-by-tool streaming + the full
+> activity feed in `/logs`/`/status`; v3.6.1 added GPT-5.6 sol/terra/luna and
+> the Codex exit-1 fix; v3.6.0 added AI-agent/LLM/MCP/Skills/n8n testing +
 > onboarding wizard + Cloud scope.)*
 > *(v3.5.4 added robust attack chaining + false-positive reduction; v3.5.3
 > GitHub/GitLab/Jira **[integrations](TUTORIAL-INTEGRATION.md)**; v3.5.2 the DEPTH

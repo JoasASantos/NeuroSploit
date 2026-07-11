@@ -1,13 +1,33 @@
-# NeuroSploit v3.6.2 — Release Notes
+# NeuroSploit v3.6.3 — Release Notes
 
 **Release Date:** July 2026
-**Codename:** Live Codex
+**Codename:** Resume & Recover
 **License:** MIT
 **Credits:** Joas A Santos & Red Team Leaders
 
 ---
 
 ## Highlights
+
+- **Interrupted runs are resumable.** When a run is cut off (terminal closed,
+  Ctrl-C, crash, SSH drop), its findings were already checkpointed live and
+  recovered as a run on the next launch. Now `/continue` (or `/resume`) also
+  **relaunches the engagement** on the same target and **carries those findings
+  forward** — steering agents to widen coverage and chain from what was already
+  found instead of re-reporting it. The offer is shown at launch right under the
+  recovery line. A fresh `/run` supersedes the pending resume.
+- **Browsing no longer kills a live run.** Opening `/results`, `/finding` or
+  `/report` while a run streams used to let the background printer and the
+  full-screen picker fight over the terminal — pressing Ctrl-C to escape could
+  take the whole process down. Live output is now paused while any picker is
+  open (still captured in `/logs`) and restored when you exit, so browsing
+  findings mid-run is safe.
+- Findings merge (dedup by title + endpoint) across the interrupted and
+  continued runs, and the merged report is rewritten to include everything.
+
+---
+
+## Previously in v3.6.2
 
 - **Codex now streams live, tool-by-tool.** `codex exec` is driven with `--json`
   and its JSONL event stream is parsed into the same categorized activity feed

@@ -97,9 +97,9 @@ pub fn html(target: &str, findings: &[Finding]) -> String {
          h4{{margin:12px 0 3px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:#8b5cf6}}\
          .b{{color:#8b5cf6;font-weight:800}}</style></head><body>\
          <h1><span class=b>NeuroSploit</span> Penetration Test Report</h1>\
-         <div class=meta>Target: <b>{t}</b> · v3.6.2 Rust harness · multi-model validated</div>\
+         <div class=meta>Target: <b>{t}</b> · v3.6.3 Rust harness · multi-model validated</div>\
          <div>{chips}</div>{graph_block}<h2>Findings ({n})</h2>{body}\
-         <p class=meta>Authorized testing only. Findings confirmed by multi-model adversarial voting.<br>NeuroSploit v3.6.2 · by <b>Joas A Santos</b> &amp; <b>Red Team Leaders</b></p></body></html>",
+         <p class=meta>Authorized testing only. Findings confirmed by multi-model adversarial voting.<br>NeuroSploit v3.6.3 · by <b>Joas A Santos</b> &amp; <b>Red Team Leaders</b></p></body></html>",
         t = esc(target), chips = chips, n = sorted.len(), body = body, graph_block = graph_block,
     )
 }
@@ -135,7 +135,7 @@ pub fn typst_report(target: &str, findings: &[Finding], dir: &Path) -> std::io::
     let mut data = String::new();
     data.push_str(&format!(
         "#let meta = (target: {}, run_id: {}, generated: {}, model: {})\n",
-        tq(target), tq(&run_id), tq("NeuroSploit v3.6.2"), tq("multi-model")
+        tq(target), tq(&run_id), tq("NeuroSploit v3.6.3"), tq("multi-model")
     ));
     data.push_str("#let findings = (\n");
     for f in sorted_findings(findings) {

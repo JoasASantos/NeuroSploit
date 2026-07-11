@@ -1,4 +1,4 @@
-//! Verification / grounding engine (v3.6.2).
+//! Verification / grounding engine (v3.6.3).
 //!
 //! Hard rule: **no claim enters the world model without a tool receipt** — raw
 //! tool output, not the LLM's paraphrase. This is the empirical anti-hallucination

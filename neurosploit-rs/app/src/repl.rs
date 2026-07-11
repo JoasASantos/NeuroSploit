@@ -1,4 +1,4 @@
-//! NeuroSploit v3.6.2 — interactive session (Claude-Code / Codex / Cursor-CLI style).
+//! NeuroSploit v3.6.3 — interactive session (Claude-Code / Codex / Cursor-CLI style).
 //!
 //! Launched when `neurosploit` runs with no subcommand. A persistent REPL with
 //! real line editing (arrow-key history recall, Ctrl-A/E/K, paste), model
@@ -120,6 +120,10 @@ struct ActiveRun {
     resume: Arc<tokio::sync::Notify>,
     /// Fallback models to try first, pushed by /continue <provider:model>.
     fallback: Arc<Mutex<Vec<ModelRef>>>,
+    /// Suppress live background printing while a full-screen picker (dialoguer)
+    /// is open, so the two don't fight over the terminal and corrupt it. The
+    /// stream is still ingested (feed/checkpoint), just not printed meanwhile.
+    quiet: Arc<AtomicBool>,
 }
 
 /// On-disk checkpoint of an in-flight run's findings/commands, written live so a
@@ -353,7 +357,7 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
     let backends = harness::installed_cli_backends();
     println!("\x1b[1m");
     println!("  ███╗   ██╗███████╗██╗   ██╗██████╗  ██████╗");
-    println!("  ████╗  ██║██╔════╝██║   ██║██╔══██╗██╔═══██╗   NeuroSploit v3.6.2");
+    println!("  ████╗  ██║██╔════╝██║   ██║██╔══██╗██╔═══██╗   NeuroSploit v3.6.3");
     println!("  ██╔██╗ ██║█████╗  ██║   ██║██████╔╝██║   ██║   interactive harness");
     println!("  ██║╚██╗██║██╔══╝  ██║   ██║██╔══██╗██║   ██║   by Joas A Santos");
     println!("  ██║ ╚████║███████╗╚██████╔╝██║  ██║╚██████╔╝   & Red Team Leaders");
@@ -370,6 +374,9 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
     if resumed || past > 0 {
         println!("  ↻ resumed project session from {} — {} past run(s)", proj_dir().display(), past);
     }
+    // A recovered interrupted run, carried in memory so `/continue` can relaunch
+    // the engagement on the same target with these findings folded forward.
+    let mut resumable: Option<(String, Vec<Finding>)> = None;
     // Recover an interrupted run (REPL was quit/crashed mid-engagement): its
     // live findings were checkpointed to disk — fold them into /runs so
     // /results, /finding and /report still work.
@@ -384,6 +391,8 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
             save_runs(base, &h);
             println!("  \x1b[1;33m↻ recovered interrupted run on {} — {} finding(s) saved as run #{}\x1b[0m (/results {id} · /report {id})",
                 cp.target, cp.findings.len(), id);
+            println!("  \x1b[36m  ↳ /continue to keep testing this target — the {} finding(s) carry forward\x1b[0m", cp.findings.len());
+            resumable = Some((cp.target.clone(), cp.findings.clone()));
         }
         clear_checkpoint();
     }
@@ -402,7 +411,7 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
         if !queue.is_empty() && active.as_ref().map(|a| a.done.load(Ordering::Relaxed)).unwrap_or(true) {
             let next = queue.remove(0);
             println!("\n  \x1b[1;35m▶ next target\x1b[0m ({} left): {next}", queue.len());
-            active = start_background(base, &s, &mut reader, history.clone(), Some(&next)).await;
+            active = start_background(base, &s, &mut reader, history.clone(), Some(&next), vec![]).await;
         }
         println!("{}", context_prompt(&s)); // dim context line above the prompt
         let Some(line) = reader.read(PROMPT) else { println!("\n  bye."); break };
@@ -610,6 +619,7 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
                 if active.as_ref().map(|a| !a.done.load(Ordering::Relaxed)).unwrap_or(false) {
                     println!("  a run is already active — /status to check, /stop to halt it.");
                 } else {
+                    resumable = None; // a fresh /run supersedes any recovered interrupted run
                     save_session(&s);
                     // Multiple comma-separated targets → run sequentially (queue the rest).
                     let targets = session_targets(&s);
@@ -620,7 +630,7 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
                     if !queue.is_empty() {
                         println!("  \x1b[1;35m▶ multi-target\x1b[0m: {} URLs — running sequentially", targets.len());
                     }
-                    match start_background(base, &s, &mut reader, history.clone(), first.as_deref()).await {
+                    match start_background(base, &s, &mut reader, history.clone(), first.as_deref(), vec![]).await {
                         Some(a) => { active = Some(a); println!("  \x1b[1;35m▶ running in background\x1b[0m — keep typing · \x1b[36m/status\x1b[0m · \x1b[36m/stop\x1b[0m"); }
                         None => { // no external printer (piped) → blocking fallback
                             let mut h = history.lock().unwrap();
@@ -651,20 +661,46 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
                 }
             }
             "/continue" | "/resume" => {
-                match &active {
-                    Some(a) if a.paused.load(Ordering::Relaxed) => {
-                        if !arg.is_empty() {
-                            let m = ModelRef::parse(arg);
-                            println!("  \x1b[1;35m▶ resuming with fallback model\x1b[0m {}:{}", m.provider, m.model);
-                            a.fallback.lock().unwrap().push(m);
-                        } else {
-                            println!("  \x1b[1;35m▶ resuming\x1b[0m — retrying with the current model(s).");
-                        }
-                        a.paused.store(false, Ordering::Relaxed);
-                        a.resume.notify_waiters();
+                let paused = active.as_ref().map(|a| a.paused.load(Ordering::Relaxed)).unwrap_or(false);
+                let working = active.as_ref().map(|a| !a.done.load(Ordering::Relaxed)).unwrap_or(false);
+                if paused {
+                    let a = active.as_ref().unwrap();
+                    if !arg.is_empty() {
+                        let m = ModelRef::parse(arg);
+                        println!("  \x1b[1;35m▶ resuming with fallback model\x1b[0m {}:{}", m.provider, m.model);
+                        a.fallback.lock().unwrap().push(m);
+                    } else {
+                        println!("  \x1b[1;35m▶ resuming\x1b[0m — retrying with the current model(s).");
                     }
-                    Some(a) if !a.done.load(Ordering::Relaxed) => println!("  run is not paused — it's still working. /status to check."),
-                    _ => println!("  no paused run. (a run pauses automatically if your tokens/quota run out)"),
+                    a.paused.store(false, Ordering::Relaxed);
+                    a.resume.notify_waiters();
+                } else if working {
+                    println!("  run is not paused — it's still working. /status to check.");
+                } else if let Some((tgt, prior)) = resumable.take() {
+                    // Continue an interrupted run: relaunch on the same target, carry
+                    // the prior findings forward, and steer agents to extend coverage
+                    // rather than re-report what was already found.
+                    if s.target.is_none() && s.repo.is_none() { s.target = Some(tgt.clone()); }
+                    let titles: Vec<String> = prior.iter().map(|f| format!("[{}] {}", f.severity, f.title)).collect();
+                    let carry = format!(
+                        "CONTINUE a prior interrupted engagement on this same target. These {} finding(s) are \
+                         ALREADY confirmed — do NOT re-report them; instead widen coverage: chase untested \
+                         endpoints/params/methods, try new agent classes, and chain from these where possible: {}",
+                        prior.len(), titles.join("; "));
+                    s.instructions = Some(match &s.instructions {
+                        Some(prev) if !prev.trim().is_empty() => format!("{prev}\n\n{carry}"),
+                        _ => carry,
+                    });
+                    println!("  \x1b[1;35m▶ continuing interrupted run\x1b[0m on {tgt} — {} prior finding(s) carried forward", prior.len());
+                    match start_background(base, &s, &mut reader, history.clone(), None, prior).await {
+                        Some(a) => { active = Some(a); println!("  \x1b[1;35m▶ running in background\x1b[0m — keep typing · \x1b[36m/status\x1b[0m · \x1b[36m/stop\x1b[0m"); }
+                        None => {
+                            let mut h = history.lock().unwrap();
+                            run(base, &s, &mut h).await; save_runs(base, &h);
+                        }
+                    }
+                } else {
+                    println!("  no paused or interrupted run. (a run pauses on token/quota exhaustion; an interrupted run is offered for /continue at launch)");
                 }
             }
             "/runs" | "/history" => list_runs(&history.lock().unwrap()),
@@ -735,7 +771,12 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
                         }
                     }
                     runs.extend(history.lock().unwrap().iter().rev().cloned()); // newest-first
+                    // Silence live background output while the full-screen picker is
+                    // open (they'd corrupt each other); restore + point to /logs after.
+                    let live_now = active.as_ref().map(|a| { a.quiet.store(true, Ordering::Relaxed); !a.done.load(Ordering::Relaxed) }).unwrap_or(false);
                     browse_results(&runs);
+                    if let Some(a) = &active { a.quiet.store(false, Ordering::Relaxed); }
+                    if live_now { println!("  \x1b[2m(run still streaming in background — /logs for what happened while browsing)\x1b[0m"); }
                 }
             }
             "/finding" | "/findings" => {
@@ -744,7 +785,9 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
                     Some(a) if arg.is_empty() && !a.done.load(Ordering::Relaxed) => a.live.lock().unwrap().full.clone(),
                     _ => { let h = history.lock().unwrap(); pick(&h, arg).map(|r| r.findings.clone()).unwrap_or_default() }
                 };
+                if let Some(a) = &active { a.quiet.store(true, Ordering::Relaxed); }
                 finding_detail(&pool);
+                if let Some(a) = &active { a.quiet.store(false, Ordering::Relaxed); }
             }
             "/expand" | "/full" => {
                 // Show full untruncated commands from the active run.
@@ -762,7 +805,11 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
                     None => println!("  no active run — /expand shows full commands while a run streams."),
                 }
             }
-            "/report" => open_report(&history.lock().unwrap(), arg),
+            "/report" => {
+                if let Some(a) = &active { a.quiet.store(true, Ordering::Relaxed); }
+                open_report(&history.lock().unwrap(), arg);
+                if let Some(a) = &active { a.quiet.store(false, Ordering::Relaxed); }
+            }
             "/status" => {
                 // Live status if a run is active, else a past run's status.json.
                 match &active {
@@ -1026,7 +1073,8 @@ async fn run(base: &Path, s: &Session, history: &mut Vec<RunRecord>) {
 /// external printer while the REPL keeps accepting commands (/status, /stop).
 /// Returns None when no external printer is available (piped) → caller blocks.
 async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
-                          history: Arc<Mutex<Vec<RunRecord>>>, target_override: Option<&str>) -> Option<ActiveRun> {
+                          history: Arc<Mutex<Vec<RunRecord>>>, target_override: Option<&str>,
+                          seed: Vec<Finding>) -> Option<ActiveRun> {
     // `target_override` runs one specific URL (used by the multi-target queue).
     let ov = target_override.map(|t| t.to_string());
     // The onboarding scope steers infra/cloud/ai/skills; otherwise web black/white/grey.
@@ -1084,8 +1132,10 @@ async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
     let fallback = sp.fallback.clone();
     let done = Arc::new(AtomicBool::new(false));
     let choice = Arc::new(Mutex::new(StopMode::Run));
+    let quiet = Arc::new(AtomicBool::new(false));
     let soft_task = soft.clone(); // idle guardrail triggers a soft-stop (validate)
     let cancel_task = cancel.clone();
+    let quiet_task = quiet.clone();
     let sub_mcp = s.subscription && mcp; // for the "browser/tools never engaged" diagnostic
     let (live2, done2, hist2, choice2) = (live.clone(), done.clone(), history, choice.clone());
 
@@ -1111,7 +1161,12 @@ async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
                     // Exploitation has begun once agents launch / vote — only then arm the guardrail.
                     if low.contains("launching agent") || low.starts_with("exploit ") || low.starts_with("test ")
                         || low.starts_with("ai ") || low.starts_with("skill ") || low.starts_with("vote") { exploiting = true; }
-                    if let Some(out) = crate::render_compact(&line) { let _ = printer.print(out); }
+                    // Don't print into the terminal while a full-screen picker is
+                    // open (it would corrupt the picker); the line is still in the
+                    // feed for /logs once the picker closes.
+                    if !quiet_task.load(Ordering::Relaxed) {
+                        if let Some(out) = crate::render_compact(&line) { let _ = printer.print(out); }
+                    }
                     // Checkpoint on each new finding.
                     let snap = {
                         let l = live2.lock().unwrap();
@@ -1161,7 +1216,7 @@ async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
         }
 
         // Raw → report from the unvalidated candidates we captured live.
-        let (findings, validated_word) = if mode_choice == StopMode::Raw {
+        let (mut findings, validated_word) = if mode_choice == StopMode::Raw {
             let raw = live2.lock().unwrap().full.clone();
             crate::report_raw(&target, &raw, &workdir);
             (raw, "unvalidated")
@@ -1169,6 +1224,13 @@ async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
             let out = crate::finalize_run(task_out, &workdir);
             (out.findings, "validated")
         };
+        // Continued run (/continue on an interrupted run): fold the carried-forward
+        // prior findings back in (dedup by title+endpoint) and rewrite the report
+        // so the merged run shows everything found across both sessions.
+        if !seed.is_empty() {
+            findings = merge_findings(seed.clone(), findings);
+            crate::report_raw(&target, &findings, &workdir);
+        }
 
         let id = {
             let mut h = hist2.lock().unwrap();
@@ -1184,7 +1246,19 @@ async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
         let _ = printer.print(format!("\x1b[36m  report: {}\x1b[0m", crate::report_url(&workdir)));
         done2.store(true, Ordering::Relaxed);
     });
-    Some(ActiveRun { live, cancel, soft, done, choice, paused, resume, fallback })
+    Some(ActiveRun { live, cancel, soft, done, choice, paused, resume, fallback, quiet })
+}
+
+/// Merge two finding sets, deduping by (title, endpoint) — used to carry a prior
+/// interrupted run's findings forward into a continued run without duplicating.
+fn merge_findings(prior: Vec<Finding>, mut fresh: Vec<Finding>) -> Vec<Finding> {
+    use std::collections::HashSet;
+    let key = |f: &Finding| format!("{}|{}", f.title.trim().to_lowercase(), f.endpoint.trim().to_lowercase());
+    let seen: HashSet<String> = fresh.iter().map(key).collect();
+    for p in prior {
+        if !seen.contains(&key(&p)) { fresh.push(p); }
+    }
+    fresh
 }
 
 /// Project-local store: `<cwd>/.neurosploit/` so each project keeps its own
@@ -1577,7 +1651,7 @@ fn help() {
     h("/status [n]",        "live progress + findings while running (or a past run #)");
     h("/logs [n]",          "recent activity feed of the running test (recon/tools/findings)");
     h("/stop",              "stop: [1] validate+report  [2] raw report now  [3] discard");
-    h("/continue",          "resume a run paused on token/quota (change /model first to switch)");
+    h("/continue",          "resume a paused (token/quota) OR a recovered interrupted run — carries findings forward");
     h("/results [n]",       "browse findings (target → vuln → detail; Esc = back)");
     h("/finding [n]",       "pick a finding and see its command + PoC + evidence");
     h("/report [n]",        "open a run's report (menu if several)");
