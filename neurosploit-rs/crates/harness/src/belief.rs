@@ -1,4 +1,4 @@
-//! POMDP belief-state world model (v3.6.3).
+//! POMDP belief-state world model (v3.6.4).
 //!
 //! The target is only partially observable, so we don't track booleans — we
 //! track a **belief**: a property graph whose nodes (host / service / vuln /

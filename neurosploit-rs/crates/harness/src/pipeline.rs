@@ -356,7 +356,7 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
     findings.extend(chained);
     findings = dedup_findings(findings);
     let findings = refute_pass(findings, pool, cfg.vote_n, &tx).await;
-    finish(cfg, lib, recon, transcript, findings, selected, &mut rl, tx).await
+    finish(cfg, lib, recon, transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Empirical, String::new(), tx).await
 }
 
 /// White-box engagement: analyse a repository's source for vulnerabilities.
@@ -418,7 +418,7 @@ pub async fn run_whitebox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: S
     let _ = tx.send(format!("{} candidate finding(s) (deduped) — validating", candidates.len())).await;
     let findings = validate(candidates, pool, CODE_VOTE_SYS, cfg.vote_n, &tx).await;
     let findings = refute_pass(findings, pool, cfg.vote_n, &tx).await;
-    finish(cfg, lib, "{}".into(), transcript, findings, selected, &mut rl, tx).await
+    finish(cfg, lib, "{}".into(), transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Symbolic, context, tx).await
 }
 
 /// Greybox engagement: review the source code AND exploit the running app in one
@@ -561,7 +561,7 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
     findings.extend(chained);
     findings = dedup_findings(findings);
     let findings = refute_pass(findings, pool, cfg.vote_n, &tx).await;
-    finish(cfg, lib, recon, transcript, findings, selected, &mut rl, tx).await
+    finish(cfg, lib, recon, transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Either, context, tx).await
 }
 
 const CHAIN_SYS: &str = "You are a post-exploitation & attack-chaining specialist. You are given ONE confirmed foothold plus any loot already gathered. DECIDE the most promising directions to expand from THIS foothold and pursue them with real tools: post-exploitation (loot credentials/tokens/keys/config/source), credential reuse, privilege escalation (horizontal AND vertical), lateral movement to adjacent services/hosts, data exfiltration, and reaching NEW attack surface the foothold exposes (e.g. SSRF→cloud metadata creds→IAM, SQLi→DB dump→credential reuse→admin, arbitrary file read→secrets→RCE, IDOR→account takeover, auth bypass→internal APIs). PROVE each escalated step with a real tool receipt. Report ONLY NEW findings beyond the input, plus any new loot you discovered (creds, tokens, hosts, internal endpoints) so later stages can reuse it. Authorized engagement; never destructive/DoS.";
@@ -912,16 +912,28 @@ async fn refute_pass(findings: Vec<Finding>, pool: &ModelPool, vote_n: usize, tx
 }
 
 async fn finish(cfg: RunConfig, _lib: &Library, recon: String, transcript: String, mut findings: Vec<Finding>,
-                selected: Vec<Agent>, rl: &mut RlState, tx: Sender<String>) -> RunOutput {
-    // --- Grounding gate: no claim without a tool receipt (anti-hallucination) ---
-    // White/grey carry source context; black-box is verified empirically.
-    let whitebox = cfg.repo.is_some() && cfg.target.starts_with('/');
+                selected: Vec<Agent>, rl: &mut RlState, gmode: crate::grounding::GroundMode, source_ctx: String,
+                tx: Sender<String>) -> RunOutput {
+    use crate::grounding::GroundMode;
+    // --- Grounding gate: no claim without a receipt (anti-hallucination) ---
+    // The receipt is empirical (tool output) for black-box, symbolic (file:line
+    // into the reviewed source) for white-box SAST / skills audits, or either for
+    // grey-box. Symbolic grounding is checked against the SOURCE corpus, not the
+    // model transcript, so a code citation is honoured as its own receipt.
+    let ground_ctx = if source_ctx.is_empty() { transcript.as_str() } else { source_ctx.as_str() };
     let before = findings.len();
-    let (kept, demoted) = crate::grounding::gate(findings, &transcript, whitebox);
+    let (kept, demoted) = crate::grounding::gate(findings, ground_ctx, gmode);
     findings = kept;
     if demoted > 0 {
-        let _ = tx.send(format!("grounding gate: demoted {demoted}/{before} ungrounded claim(s) (no tool receipt)")).await;
+        let receipt = match gmode {
+            GroundMode::Symbolic => "no source reference",
+            GroundMode::Either => "no source reference nor tool receipt",
+            GroundMode::Empirical => "no tool receipt",
+        };
+        let _ = tx.send(format!("grounding gate: demoted {demoted}/{before} ungrounded claim(s) ({receipt})")).await;
     }
+    // White-box/skills are symbolic → deterministic belief; grey-box carries source too.
+    let whitebox = matches!(gmode, GroundMode::Symbolic | GroundMode::Either);
 
     // --- v3.5.2 report-hygiene & exploitation-depth pass ---
     // Calibrate inflated/unproven High-Critical to Medium, flag exposures that
@@ -1277,7 +1289,7 @@ pub async fn run_host(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sende
     findings.extend(chained);
     findings = dedup_findings(findings);
     let findings = refute_pass(findings, pool, cfg.vote_n, &tx).await;
-    finish(cfg, lib, recon, transcript, findings, selected, &mut rl, tx).await
+    finish(cfg, lib, recon, transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Empirical, String::new(), tx).await
 }
 
 /// AI-red-team doctrine prepended to every AI/LLM/agent test prompt.
@@ -1397,7 +1409,7 @@ pub async fn run_ai(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<
     let mut rl = cfg.rl_path.as_ref().map(|p| RlState::load(Path::new(p))).unwrap_or_default();
     if cfg.offline {
         let _ = tx.send("offline: no AI exploitation performed".into()).await;
-        return finish(cfg, lib, recon, String::new(), vec![], agents, &mut rl, tx).await;
+        return finish(cfg, lib, recon, String::new(), vec![], agents, &mut rl, crate::grounding::GroundMode::Empirical, String::new(), tx).await;
     }
     let cap = if cfg.max_agents > 0 { cfg.max_agents.min(agents.len()) } else { agents.len() };
     let selected: Vec<Agent> = agents.into_iter().take(cap).collect();
@@ -1444,7 +1456,7 @@ pub async fn run_ai(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<
     findings.extend(chained);
     findings = dedup_findings(findings);
     let findings = refute_pass(findings, pool, cfg.vote_n, &tx).await;
-    finish(cfg, lib, recon, transcript, findings, selected, &mut rl, tx).await
+    finish(cfg, lib, recon, transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Empirical, String::new(), tx).await
 }
 
 /// White-box Skills/plugin audit: read the skill .md file or a folder of them and
@@ -1463,7 +1475,7 @@ pub async fn run_skills_audit(cfg: RunConfig, lib: &Library, pool: &ModelPool, t
     let mut rl = cfg.rl_path.as_ref().map(|p| RlState::load(Path::new(p))).unwrap_or_default();
     if cfg.offline || context.is_empty() {
         let _ = tx.send("offline or empty skills input — nothing audited".into()).await;
-        return finish(cfg, lib, "{}".into(), String::new(), vec![], agents, &mut rl, tx).await;
+        return finish(cfg, lib, "{}".into(), String::new(), vec![], agents, &mut rl, crate::grounding::GroundMode::Symbolic, String::new(), tx).await;
     }
     let directives = operator_directives(&cfg);
     let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(agents.iter().cloned())
@@ -1494,5 +1506,5 @@ pub async fn run_skills_audit(cfg: RunConfig, lib: &Library, pool: &ModelPool, t
     let transcript = transcript_of(&raw);
     let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
     let findings = validate(candidates, pool, CODE_VOTE_SYS, cfg.vote_n, &tx).await;
-    finish(cfg, lib, "{}".into(), transcript, findings, agents, &mut rl, tx).await
+    finish(cfg, lib, "{}".into(), transcript, findings, agents, &mut rl, crate::grounding::GroundMode::Symbolic, context, tx).await
 }

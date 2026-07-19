@@ -1,4 +1,4 @@
-<h1 align="center">🧠 NeuroSploit v3.6.3</h1>
+<h1 align="center">🧠 NeuroSploit v3.6.4</h1>
 
 <p align="center">
   <a href="https://trendshift.io/repositories/22624?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-22624" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/22624/daily?language=Python" alt="JoasASantos%2FNeuroSploit | Trendshift" width="250" height="55"/></a>
@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-3.6.3-blue?style=flat-square">
+  <img src="https://img.shields.io/badge/Version-3.6.4-blue?style=flat-square">
   <img src="https://img.shields.io/badge/Harness-Rust%20%7C%20tokio-e6b673?style=flat-square">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
   <img src="https://img.shields.io/badge/MD%20Agents-417-red?style=flat-square">
@@ -28,16 +28,15 @@
 >
 > 📖 **New here? Read the [full Tutorial & User Guide →](TUTORIAL.md)** — every mode, flag, config and example explained.
 
-> 🆕 **New in v3.6.3 — resumable interrupted runs + crash-proof browsing:**
-> If a run is interrupted (terminal closed, Ctrl-C, crash), **`/continue` now
-> relaunches it** on the same target and **carries the recovered findings
-> forward** — the offer appears right at launch. And opening **`/results`**,
-> **`/finding`** or **`/report`** while a run streams no longer corrupts the
-> terminal: live output is paused for the picker (still captured in `/logs`) and
-> restored on exit. *(v3.6.2 added live Codex tool-by-tool streaming + the full
-> activity feed in `/logs`/`/status`; v3.6.1 added GPT-5.6 sol/terra/luna and
-> the Codex exit-1 fix; v3.6.0 added AI-agent/LLM/MCP/Skills/n8n testing +
-> onboarding wizard + Cloud scope.)*
+> 🆕 **New in v3.6.4 — white-box findings no longer wrongly demoted ([#33](https://github.com/JoasASantos/NeuroSploit/issues/33)):**
+> The grounding gate ran in **empirical** mode for **every** engagement, so
+> white-box SAST & skills-audit findings — whose evidence is a `file:line` code
+> citation, not HTTP/tool output — were demoted as "receipt missing" and dropped
+> from the report even after passing the n-model vote. Grounding is now
+> **mode-aware**: *symbolic* (`file:line` into the reviewed source) for
+> white-box/skills, *empirical* for black-box/host/AI, *either* for grey-box.
+> *(v3.6.3 added resumable interrupted runs + crash-proof mid-run browsing;
+> v3.6.2 live Codex tool-by-tool streaming; v3.6.1 GPT-5.6 sol/terra/luna.)*
 > *(v3.5.4 added robust attack chaining + false-positive reduction; v3.5.3
 > GitHub/GitLab/Jira **[integrations](TUTORIAL-INTEGRATION.md)**; v3.5.2 the DEPTH
 > doctrine + report-hygiene — see [RELEASE.md](RELEASE.md).)*
@@ -71,9 +70,11 @@ Control TUI**.
   and "scan more vs exploit now" falls out of belief entropy. The `may_assert`
   gate is a **mathematical anti-hallucination rule** (don't claim exploitability
   while the belief is diffuse).
-- 🧾 **Grounding** — hard rule: **no claim without a tool receipt** (raw tool
-  output, not paraphrase). Empirical for black-box, symbolic (`file:line`) for
-  white-box; ungrounded claims are demoted.
+- 🧾 **Grounding** — hard rule: **no claim without a receipt** (evidence, not
+  paraphrase). Empirical (raw tool output) for black-box/host/AI, **symbolic**
+  (`file:line` into the reviewed source — a code citation *is* the receipt) for
+  white-box SAST & skills audits, and **either** for grey-box; ungrounded claims
+  are demoted.
 - 🔬 **Deterministic HTTP probe** — before the model recon, the harness runs a
   **real** request/response analysis (status/redirects, security headers, cookie
   flags, CORS reflection, tech fingerprint, linked JS, 404 baseline, high-signal

@@ -1,13 +1,37 @@
-# NeuroSploit v3.6.3 — Release Notes
+# NeuroSploit v3.6.4 — Release Notes
 
 **Release Date:** July 2026
-**Codename:** Resume & Recover
+**Codename:** Symbolic Grounding
 **License:** MIT
 **Credits:** Joas A Santos & Red Team Leaders
 
 ---
 
 ## Highlights
+
+- **Fix ([#33](https://github.com/JoasASantos/NeuroSploit/issues/33)): white-box
+  findings were silently dropped from the report.** The grounding gate — the
+  anti-hallucination step that demotes any claim lacking a receipt — was running
+  in **empirical** mode for *every* engagement. Empirical grounding looks for raw
+  tool output (HTTP responses, error oracles, shell receipts), which a **SAST
+  finding never has**: its receipt is a `file:line` reference into the reviewed
+  source. So white-box (and skills/n8n audit) findings that had *passed* the
+  n-model vote were then demoted as "receipt missing" and never reported.
+  Grounding is now **mode-aware**:
+  - **Symbolic** — white-box SAST & skills audits: a `file:line` (or
+    `file:section`) reference into the reviewed source, or a quote of code that
+    appears in it, IS the receipt. No live target needed.
+  - **Empirical** — black-box / host / AI endpoints: evidence must resemble raw
+    tool output (unchanged behaviour).
+  - **Either** — grey-box: a source citation OR a tool receipt grounds a finding.
+  The symbolic check is run against the reviewed **source corpus** (not the model
+  transcript), and falls back to a structural `file:line` + code-quote check when
+  the corpus isn't available, so a well-formed SAST finding is never dropped on a
+  technicality. Covered by unit tests (including a regression test for #33).
+
+---
+
+## Previously in v3.6.3
 
 - **Interrupted runs are resumable.** When a run is cut off (terminal closed,
   Ctrl-C, crash, SSH drop), its findings were already checkpointed live and

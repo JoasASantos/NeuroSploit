@@ -1,4 +1,4 @@
-# NeuroSploit — Tutorial & User Guide (v3.6.3)
+# NeuroSploit — Tutorial & User Guide (v3.6.4)
 
 A complete, hands-on guide to installing, configuring and running NeuroSploit —
 the autonomous, multi-model penetration-testing harness.
@@ -98,7 +98,7 @@ Agents **degrade gracefully**: if `rustscan` is absent they use `nmap`; if neith
 ### Verify
 
 ```bash
-neurosploit --version          # neurosploit 3.6.3
+neurosploit --version          # neurosploit 3.6.4
 neurosploit agents             # {"vulns":196,...,"chains":12,"total":417}
 neurosploit models             # all providers & models
 ```
@@ -522,8 +522,10 @@ NeuroSploit treats the target as **partially observable** (a POMDP):
   entropy: when a node's belief is diffuse, recon is worth more than exploiting.
 - **Anti-hallucination gate** (`may_assert`) — the agent may **not** claim
   exploitability while the belief is diffuse; it must observe more first.
-- **Grounding** — **no claim without a tool receipt**: empirical for black-box
-  (real HTTP/OOB/error output), symbolic (`file:line`) for white-box. Ungrounded
+- **Grounding** — **no claim without a receipt**: *empirical* for black-box /
+  host / AI (real HTTP/OOB/error output), *symbolic* for white-box SAST & skills
+  audits (a `file:line` reference into the reviewed source — the code citation is
+  the receipt, no live target needed), and *either* for grey-box. Ungrounded
   claims are demoted and flagged.
 - **Chaining** — confirmed findings are chained into deeper impact, each stage
   proven before advancing.

@@ -1,4 +1,4 @@
-//! NeuroSploit v3.6.3 harness — a robust multi-model runtime for the
+//! NeuroSploit v3.6.4 harness — a robust multi-model runtime for the
 //! markdown-driven autonomous pentest engine.
 //!
 //! The harness loads the `agents_md/` library, drives a *pool* of LLM models
