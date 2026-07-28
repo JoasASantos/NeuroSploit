@@ -39,9 +39,7 @@
 > technique across variants, judge whether the guardrail was truly bypassed —
 > proving it with a **benign, redacted** receipt. `neurosploit aitest <ai-url>`.
 > Also adds **Claude Opus 5**, **Claude Sonnet 5**, and **Kimi K3** (new Moonshot
-> provider → 15 providers).
-> *(v3.6.4 fixed white-box grounding [#33](https://github.com/JoasASantos/NeuroSploit/issues/33);
-> v3.6.3 resumable runs; v3.6.2 live Codex streaming — see [RELEASE.md](RELEASE.md).)*
+> provider → 15 providers). Full history in [RELEASE.md](RELEASE.md).
 
 ---
 
