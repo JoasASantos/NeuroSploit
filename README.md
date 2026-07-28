@@ -1,4 +1,4 @@
-<h1 align="center">🧠 NeuroSploit v3.6.4</h1>
+<h1 align="center">🧠 NeuroSploit v3.6.5</h1>
 
 <p align="center">
   <a href="https://trendshift.io/repositories/22624?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-22624" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/22624/daily?language=Python" alt="JoasASantos%2FNeuroSploit | Trendshift" width="250" height="55"/></a>
@@ -12,12 +12,12 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-3.6.4-blue?style=flat-square">
+  <img src="https://img.shields.io/badge/Version-3.6.5-blue?style=flat-square">
   <img src="https://img.shields.io/badge/Harness-Rust%20%7C%20tokio-e6b673?style=flat-square">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
-  <img src="https://img.shields.io/badge/MD%20Agents-417-red?style=flat-square">
-  <img src="https://img.shields.io/badge/Models-14%20providers-success?style=flat-square">
-  <img src="https://img.shields.io/badge/Modes-Black%20%7C%20White%20%7C%20Grey%20%7C%20Host-9cf?style=flat-square">
+  <img src="https://img.shields.io/badge/MD%20Agents-429-red?style=flat-square">
+  <img src="https://img.shields.io/badge/Models-15%20providers-success?style=flat-square">
+  <img src="https://img.shields.io/badge/Modes-Black%20%7C%20White%20%7C%20Grey%20%7C%20Host%20%7C%20AI-9cf?style=flat-square">
   <img src="https://img.shields.io/badge/Auth-API%20key%20%7C%20Subscription-orange?style=flat-square">
 </p>
 
@@ -28,18 +28,20 @@
 >
 > 📖 **New here? Read the [full Tutorial & User Guide →](TUTORIAL.md)** — every mode, flag, config and example explained.
 
-> 🆕 **New in v3.6.4 — white-box findings no longer wrongly demoted ([#33](https://github.com/JoasASantos/NeuroSploit/issues/33)):**
-> The grounding gate ran in **empirical** mode for **every** engagement, so
-> white-box SAST & skills-audit findings — whose evidence is a `file:line` code
-> citation, not HTTP/tool output — were demoted as "receipt missing" and dropped
-> from the report even after passing the n-model vote. Grounding is now
-> **mode-aware**: *symbolic* (`file:line` into the reviewed source) for
-> white-box/skills, *empirical* for black-box/host/AI, *either* for grey-box.
-> *(v3.6.3 added resumable interrupted runs + crash-proof mid-run browsing;
-> v3.6.2 live Codex tool-by-tool streaming; v3.6.1 GPT-5.6 sol/terra/luna.)*
-> *(v3.5.4 added robust attack chaining + false-positive reduction; v3.5.3
-> GitHub/GitLab/Jira **[integrations](TUTORIAL-INTEGRATION.md)**; v3.5.2 the DEPTH
-> doctrine + report-hygiene — see [RELEASE.md](RELEASE.md).)*
+> 🆕 **New in v3.6.5 — LLM red-teaming: jailbreaks & prompt injection across scenarios:**
+> **+12 AI agents (→ 30, 429 total)** that adversarially red-team a live AI
+> system the way [hackagent.dev](https://hackagent.dev)-style tooling does —
+> jailbreak techniques (**AdvPrefix**, **PAIR**, **TAP**, **Crescendo**,
+> many-shot, persona/DAN, encoding/obfuscation, refusal-suppression) and
+> prompt-injection scenarios (direct, **indirect** via RAG/web/email/tool output,
+> **goal hijacking**, tool/function-call abuse, system-prompt exfiltration). Each
+> runs an attacker→**LLM-judge** loop — capture the baseline refusal, apply the
+> technique across variants, judge whether the guardrail was truly bypassed —
+> proving it with a **benign, redacted** receipt. `neurosploit aitest <ai-url>`.
+> Also adds **Claude Opus 5**, **Claude Sonnet 5**, and **Kimi K3** (new Moonshot
+> provider → 15 providers).
+> *(v3.6.4 fixed white-box grounding [#33](https://github.com/JoasASantos/NeuroSploit/issues/33);
+> v3.6.3 resumable runs; v3.6.2 live Codex streaming — see [RELEASE.md](RELEASE.md).)*
 
 ---
 
@@ -49,7 +51,7 @@ LLMs** — via **API key** or local **subscription** (Claude Code / Codex / Gemi
 Grok) — recons the target, **intelligently selects only the agents that match the
 discovered surface**, runs them in parallel, **chains** findings into deeper
 impact, and **validates every claim by cross-model voting + tool-receipt
-grounding** before reporting. It ships **417 markdown agents** and a **Mission
+grounding** before reporting. It ships **429 markdown agents** and a **Mission
 Control TUI**.
 
 ### Engagement modes
@@ -60,6 +62,8 @@ Control TUI**.
 | **White-box** | `neurosploit whitebox <repo>` | source/SAST review (file:line evidence) |
 | **Grey-box** | `neurosploit greybox <repo> --url <app>` | code review **+** live exploitation together |
 | **Host/Infra** | `neurosploit host <ip> --creds creds.yaml` | Linux / Windows / AD **and cloud** (AWS/GCP/Azure) testing |
+| **AI / LLM red-team** | `neurosploit aitest <ai-url>` | jailbreaks & prompt injection + OWASP LLM Top 10 / MCP against a live AI agent |
+| **AI Skills / n8n** | `neurosploit skills <file\|folder>` | white-box audit of Skill/plugin & n8n workflow definitions |
 | **Mission Control** | `neurosploit tui <url>` | live TUI panels + composer during the run |
 | **Interactive** | `neurosploit` | persistent REPL session (resumes per project) |
 
@@ -87,6 +91,14 @@ Control TUI**.
   (`aws`/`gcloud`/`az`). Connect via `creds.yaml`: AWS keys, a Google
   service-account JSON, or an Azure service principal — see
   [Cloud credentials](#cloud-credentials-awsgcpazure).
+- 🤖 **LLM red-teaming** — 30 AI agents that jailbreak & prompt-inject a live AI
+  system across scenarios: **AdvPrefix**, **PAIR**, **TAP**, **Crescendo**,
+  many-shot, persona/DAN, encoding/obfuscation, refusal-suppression; plus
+  **indirect injection** (RAG/web/email/tool output), **goal hijacking**,
+  tool/function-call abuse, and system-prompt exfiltration. Each runs an
+  attacker→**LLM-judge** loop (baseline refusal → technique → verdict) and proves
+  the bypass with a **benign, redacted** receipt. Maps to OWASP LLM Top 10 (2025),
+  MCP threats & OWASP AI Exchange; Skill/plugin & **n8n** files audited white-box.
 - 🧰 **Misconfig & CVE hunting, safely** — dedicated agents for absurd
   misconfigs (exposed `.git`/`.env`, debug/actuator, default creds, dashboards,
   CORS), a **CVE Hunter** (smart, targeted `nuclei`), a **PoC Developer** (writes
@@ -376,6 +388,7 @@ export MISTRAL_API_KEY=...                 # mistral:*
 export DASHSCOPE_API_KEY=...               # qwen:*  (Alibaba DashScope)
 export GROQ_API_KEY=...                    # groq:*
 export TOGETHER_API_KEY=...                # together:*
+export MOONSHOT_API_KEY=...                # moonshot:*  (Kimi K3/K2)
 export OPENROUTER_API_KEY=...              # openrouter:*
 # ollama needs no key (local)
 
@@ -404,6 +417,7 @@ Or put the keys in a `.env` and source it (`cp .env.example .env`; edit; `set -a
 | `qwen:` | `DASHSCOPE_API_KEY` | dashscope-intl.aliyuncs.com |
 | `groq:` | `GROQ_API_KEY` | api.groq.com |
 | `together:` | `TOGETHER_API_KEY` | api.together.xyz |
+| `moonshot:` | `MOONSHOT_API_KEY` | api.moonshot.ai |
 | `openrouter:` | `OPENROUTER_API_KEY` | openrouter.ai |
 | `ollama:` | _(none)_ | localhost:11434 |
 

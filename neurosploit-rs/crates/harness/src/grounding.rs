@@ -1,4 +1,4 @@
-//! Verification / grounding engine (v3.6.4).
+//! Verification / grounding engine (v3.6.5).
 //!
 //! Hard rule: **no claim enters the world model without a receipt** — evidence,
 //! not the LLM's bare assertion. This is the anti-hallucination anchor that

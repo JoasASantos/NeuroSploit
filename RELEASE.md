@@ -1,13 +1,44 @@
-# NeuroSploit v3.6.4 — Release Notes
+# NeuroSploit v3.6.5 — Release Notes
 
 **Release Date:** July 2026
-**Codename:** Symbolic Grounding
+**Codename:** LLM Red Team
 **License:** MIT
 **Credits:** Joas A Santos & Red Team Leaders
 
 ---
 
 ## Highlights
+
+- **LLM red-teaming — jailbreaks & prompt injection across scenarios.** 12 new AI
+  agents (AI category 18 → **30**; total 417 → **429**) that adversarially test a
+  live AI system (LLM app / AI agent / MCP server) the way
+  [hackagent.dev](https://hackagent.dev)-style tooling does. Each agent runs an
+  **attacker → LLM-judge loop**: capture the baseline refusal, apply the technique
+  across several scenarios/variants, then judge with an explicit criterion whether
+  the guardrail was *actually* bypassed — proving it with a **benign, redacted**
+  prompt+response receipt (never real harm).
+  - **Jailbreak techniques:** `AdvPrefix` (adversarial prefix/suffix), `PAIR`
+    (automated iterative refinement), `TAP` (tree-of-attacks with pruning),
+    `Crescendo` (multi-turn escalation), many-shot, persona/DAN roleplay,
+    encoding/obfuscation (base64/ROT13/zero-width/low-resource-language),
+    refusal-suppression / prefix injection.
+  - **Prompt-injection & hijacking scenarios:** direct injection, **indirect**
+    injection via RAG doc / web page / email / tool output, **goal hijacking**,
+    agentic **tool/function-call abuse**, and **system-prompt / secret
+    exfiltration**.
+  - Runs via `neurosploit aitest <ai-url>` (or the REPL **AI Agents & LLMs**
+    onboarding scope). A new `REDTEAM_DOCTRINE` steers every AI test through the
+    baseline→technique→judge loop. Complements the existing OWASP LLM Top 10 (2025),
+    MCP and Skills/n8n agents. Authorized, non-destructive.
+
+- **New models.** Added **Claude Opus 5** and **Claude Sonnet 5** (Anthropic),
+  and a new **Moonshot AI (Kimi)** provider with **Kimi K3** / K2 (`moonshot:kimi-k3`,
+  `MOONSHOT_API_KEY`, OpenAI-compatible) — **15 providers** total. Use any of them
+  as a finder or in the validator voting panel, e.g.
+  `--model anthropic:claude-opus-5 --model moonshot:kimi-k3`.
+
+## Previously in v3.6.4
+
 
 - **Fix ([#33](https://github.com/JoasASantos/NeuroSploit/issues/33)): white-box
   findings were silently dropped from the report.** The grounding gate — the

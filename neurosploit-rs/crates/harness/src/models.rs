@@ -23,7 +23,7 @@ pub struct Provider {
 pub fn providers() -> Vec<Provider> {
     vec![
         Provider { key: "anthropic", label: "Anthropic Claude", base_url: "https://api.anthropic.com/v1", env_key: "ANTHROPIC_API_KEY", kind: "cli",
-            models: vec!["claude-opus-4-8", "claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-4-5"] },
+            models: vec!["claude-opus-5", "claude-sonnet-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"] },
         Provider { key: "openai", label: "OpenAI (ChatGPT)", base_url: "https://api.openai.com/v1", env_key: "OPENAI_API_KEY", kind: "cli",
             models: vec!["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2", "gpt-5.1", "gpt-5.1-codex", "o4"] },
         Provider { key: "xai", label: "xAI Grok", base_url: "https://api.x.ai/v1", env_key: "XAI_API_KEY", kind: "cli",
@@ -42,6 +42,9 @@ pub fn providers() -> Vec<Provider> {
             models: vec!["llama-3.3-70b-versatile", "qwen-2.5-coder-32b"] },
         Provider { key: "together", label: "Together AI", base_url: "https://api.together.xyz/v1", env_key: "TOGETHER_API_KEY", kind: "api",
             models: vec!["Qwen/Qwen2.5-Coder-32B-Instruct", "deepseek-ai/DeepSeek-R1", "meta-llama/Llama-3.3-70B-Instruct-Turbo"] },
+        // Moonshot AI (Kimi). OpenAI-compatible; use api.moonshot.cn for the CN endpoint.
+        Provider { key: "moonshot", label: "Moonshot AI (Kimi)", base_url: "https://api.moonshot.ai/v1", env_key: "MOONSHOT_API_KEY", kind: "api",
+            models: vec!["kimi-k3", "kimi-k2", "moonshot-v1-128k", "moonshot-v1-32k"] },
         // LiteLLM proxy (OpenAI-compatible). Point at your gateway with
         // LITELLM_BASE_URL (default http://localhost:4000/v1); key = LITELLM_API_KEY.
         // Use `litellm:<any-model-the-proxy-routes>` — model names pass through.

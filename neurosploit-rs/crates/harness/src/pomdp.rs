@@ -1,4 +1,4 @@
-//! POMDP decision layer (v3.6.4): value-of-information planning + the
+//! POMDP decision layer (v3.6.5): value-of-information planning + the
 //! anti-hallucination gate.
 //!
 //! The choice "scan more vs exploit now" is **not** a heuristic here — it falls

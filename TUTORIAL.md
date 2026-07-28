@@ -1,4 +1,4 @@
-# NeuroSploit — Tutorial & User Guide (v3.6.4)
+# NeuroSploit — Tutorial & User Guide (v3.6.5)
 
 A complete, hands-on guide to installing, configuring and running NeuroSploit —
 the autonomous, multi-model penetration-testing harness.
@@ -40,7 +40,7 @@ You give NeuroSploit a **target** (URL, repo, app, or host/IP). It:
 
 1. **Recons** the target with real tools (curl/nmap/…).
 2. **Intelligently selects** only the agents whose preconditions match the recon
-   (it does *not* blindly run all 417).
+   (it does *not* blindly run all 429).
 3. **Exploits** in parallel — each agent works in a ReAct loop and must prove its
    claim with a **tool receipt** (raw output).
 4. **Validates** every candidate by **cross-model voting** (a different model
@@ -98,8 +98,8 @@ Agents **degrade gracefully**: if `rustscan` is absent they use `nmap`; if neith
 ### Verify
 
 ```bash
-neurosploit --version          # neurosploit 3.6.4
-neurosploit agents             # {"vulns":196,...,"chains":12,"total":417}
+neurosploit --version          # neurosploit 3.6.5
+neurosploit agents             # {"vulns":240,...,"ai":30,...,"total":429}
 neurosploit models             # all providers & models
 ```
 
@@ -124,6 +124,7 @@ export MISTRAL_API_KEY=...               # mistral:*
 export DASHSCOPE_API_KEY=...             # qwen:*  (Alibaba DashScope)
 export GROQ_API_KEY=...                  # groq:*
 export TOGETHER_API_KEY=...              # together:*
+export MOONSHOT_API_KEY=...              # moonshot:*  (Kimi K3/K2)
 export OPENROUTER_API_KEY=...            # openrouter:*
 # ollama: no key (local)
 # LiteLLM proxy: point at your gateway and route any model through it:
@@ -171,8 +172,9 @@ positives).
 
 A built-in **router** sends fast/cheap models to recon & triage and the strongest
 to exploitation, to save tokens. See `neurosploit models` for the full list
-(Claude 4.x, GPT-5.x incl. Codex, Gemini 3/2.5, Grok, NVIDIA NIM, DeepSeek,
-Mistral, Qwen, Groq, Together, OpenRouter, Ollama).
+(Claude 5 / 4.x incl. Opus 5 & Sonnet 5, GPT-5.x incl. Codex, Gemini 3/2.5, Grok,
+NVIDIA NIM, DeepSeek, Mistral, Qwen, Groq, Together, Moonshot/Kimi K3, OpenRouter,
+Ollama).
 
 ---
 
@@ -266,6 +268,48 @@ neurosploit host 10.0.0.10 --creds creds.yaml \
 Runs infra agents: port/service scan, SMB enum, Linux privesc/sudo/cron/SSH,
 Windows privesc/SMB-signing/WinRM, and AD kerberoasting / AS-REP / ACL abuse /
 DCSync / default-creds.
+
+### 5.5 AI / LLM red-teaming (agents, jailbreaks & prompt injection)
+
+Point NeuroSploit at a **live AI system** — an LLM chat/API endpoint, an AI agent,
+or an MCP server — and it red-teams it the way hackagent.dev-style tooling does:
+**jailbreaks** and **prompt injection** across many scenarios, plus the full OWASP
+LLM Top 10 (2025), MCP threats and OWASP AI Exchange.
+
+```bash
+neurosploit aitest https://your-ai-app.example/api/chat \
+  --auth "Authorization: Bearer <key>" \
+  --focus "jailbreaks and indirect prompt injection" \
+  --subscription --model anthropic:claude-opus-4-8 -v
+```
+
+It runs an attacker→judge loop per technique: capture the **baseline refusal**,
+apply the technique across several **scenarios/variants**, then use an **LLM-judge**
+criterion to confirm whether the guardrail was actually bypassed — proving it with
+a **benign, redacted** prompt+response receipt (never real harm).
+
+**Jailbreak technique agents:** `AdvPrefix` (adversarial prefix/suffix), `PAIR`
+(automated iterative refinement), `TAP` (tree-of-attacks), `Crescendo` (multi-turn
+escalation), many-shot, persona/DAN roleplay, encoding/obfuscation
+(base64/ROT13/zero-width/low-resource-language), and refusal-suppression.
+
+**Prompt-injection & hijacking scenarios:** direct injection, **indirect** injection
+via RAG doc / web page / email / tool output, **goal hijacking**, agentic
+**tool/function-call abuse**, and **system-prompt / secret exfiltration**.
+
+Plus the OWASP-category agents: LLM01 prompt injection, LLM02 sensitive-info
+disclosure, LLM05 improper output handling, LLM06 excessive agency, LLM07
+system-prompt leak, LLM08 RAG/embedding weakness, LLM09 misinformation, LLM10
+unbounded consumption, and MCP tool-poisoning / excessive-permissions / unsafe
+execution.
+
+> In the REPL, run `/onboard` and pick **AI Agents & LLMs**, set `/target <endpoint>`
+> (and `/auth` if needed), then `/run`. To audit **Skill/plugin or n8n** definition
+> files white-box instead of a live endpoint, use `neurosploit skills <file|folder>`
+> (or the **AI Skills / Plugins / n8n** onboarding scope).
+
+All AI testing is **authorized, non-destructive** — demonstrations stay benign and
+redacted; the goal is to prove the guardrail bypass, not to cause harm.
 
 ---
 
@@ -537,16 +581,17 @@ built from SAST/dataflow), so uncertainty becomes *path reachability*, not state
 
 ## 13. The agent library
 
-`agents_md/` holds **417** markdown agents in categories:
+`agents_md/` holds **429** markdown agents in categories:
 
 | Category | Dir | Count | Purpose |
 |----------|-----|-------|---------|
-| Vulnerability specialists | `vulns/` | 196 | exploit a specific class |
+| Vulnerability specialists | `vulns/` | 240 | exploit a specific class |
 | Recon | `recon/` | 12 | information gathering |
 | Code (SAST) | `code/` | 78 | white-box source review |
-| Infra | `infra/` | 14 | Linux / Windows / AD host testing |
+| Infra | `infra/` | 34 | Linux / Windows / AD host testing |
 | Chains | `chains/` | 12 | multi-stage exploitation chains |
-| Meta | `meta/` | 17 | orchestrator, validator, scorers, reporter, RL |
+| AI / LLM | `ai/` | 30 | LLM red-teaming — OWASP LLM Top 10, MCP, Skills/n8n, **jailbreak & prompt-injection techniques** |
+| Meta | `meta/` | 23 | orchestrator, validator, scorers, reporter, RL |
 
 Each agent is a self-contained playbook (`## User Prompt` methodology + `## System
 Prompt` strict anti-false-positive rules). **Add your own** by dropping a `.md` into

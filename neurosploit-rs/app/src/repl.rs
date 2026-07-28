@@ -1,4 +1,4 @@
-//! NeuroSploit v3.6.4 — interactive session (Claude-Code / Codex / Cursor-CLI style).
+//! NeuroSploit v3.6.5 — interactive session (Claude-Code / Codex / Cursor-CLI style).
 //!
 //! Launched when `neurosploit` runs with no subcommand. A persistent REPL with
 //! real line editing (arrow-key history recall, Ctrl-A/E/K, paste), model
@@ -357,7 +357,7 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
     let backends = harness::installed_cli_backends();
     println!("\x1b[1m");
     println!("  ███╗   ██╗███████╗██╗   ██╗██████╗  ██████╗");
-    println!("  ████╗  ██║██╔════╝██║   ██║██╔══██╗██╔═══██╗   NeuroSploit v3.6.4");
+    println!("  ████╗  ██║██╔════╝██║   ██║██╔══██╗██╔═══██╗   NeuroSploit v3.6.5");
     println!("  ██╔██╗ ██║█████╗  ██║   ██║██████╔╝██║   ██║   interactive harness");
     println!("  ██║╚██╗██║██╔══╝  ██║   ██║██╔══██╗██║   ██║   by Joas A Santos");
     println!("  ██║ ╚████║███████╗╚██████╔╝██║  ██║╚██████╔╝   & Red Team Leaders");
