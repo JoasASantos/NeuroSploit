@@ -37,6 +37,28 @@
   as a finder or in the validator voting panel, e.g.
   `--model anthropic:claude-opus-5 --model moonshot:kimi-k3`.
 
+- **Account registration & form analysis (+1 agent → total 430).** A new
+  `account_registration_and_forms` agent lets NeuroSploit reach the authenticated
+  surface on its own: it analyzes the app's forms (the deterministic probe now
+  extracts each `<form>`'s action/method/fields/kind/CSRF) and creates a benign
+  test account with **curl** or the **Playwright browser** when no creds are given.
+  - **Anti-flood guardrail (hard):** at most **2 accounts per engagement**, never
+    looping/scripting/batching the register endpoint or flooding the database —
+    reuse the account made; a test needing many sign-ups is reported as a lead and
+    stopped. Enforced in `SAFETY_DOCTRINE` (all flows) and the agent.
+  - **Credential vault:** every generated credential is saved to
+    **`<run-dir>/vault.json`** for the operator to consult; secrets are **masked in
+    the report**. The report adds a **"Test accounts created (DELETE after)"**
+    cleanup section listing each account and how it was created.
+  - **Finding labels:** findings are tagged **`auth_context`**
+    (authenticated/unauthenticated) and **`account`** (which test user/role proved
+    it) — so grey-box shows which findings needed a login, and black-box records how
+    the user was created.
+  - **Disposable email (opt-in, off by default):** `/tempmail on` (or `temp_email`)
+    lets agents use the free **mail.tm** API (no key) to read a registration
+    confirmation code; off by default, a required confirmation is reported as a
+    blocker rather than bypassed.
+
 ## Previously in v3.6.4
 
 

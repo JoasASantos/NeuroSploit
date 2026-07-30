@@ -47,6 +47,20 @@ pub struct PathHit {
     pub len: usize,
 }
 
+/// A parsed HTML `<form>` — enough for an agent to auto-submit it (e.g. register
+/// an account) with curl or the browser, without re-parsing the page.
+#[derive(Serialize, Default, Clone)]
+pub struct FormInfo {
+    pub action: String,
+    pub method: String,
+    /// input/select/textarea field names with their type (name → type).
+    pub fields: Vec<(String, String)>,
+    /// Best-effort role guess: "register" | "login" | "search" | "other".
+    pub kind: String,
+    /// True if a CSRF/anti-forgery hidden token was seen in the form.
+    pub has_csrf: bool,
+}
+
 #[derive(Serialize, Default)]
 pub struct Probe {
     pub url: String,
@@ -63,6 +77,9 @@ pub struct Probe {
     pub cors: Cors,
     pub scripts: Vec<String>,
     pub forms: usize,
+    /// Parsed forms (action/method/fields) so an agent can auto-submit them —
+    /// e.g. register a test account to reach the authenticated surface.
+    pub form_details: Vec<FormInfo>,
     pub interesting_paths: Vec<PathHit>,
     /// Baseline for a random non-existent path (status + body length), so agents
     /// can tell a real hit from a soft-404 catch-all.
@@ -95,6 +112,66 @@ fn between<'a>(s: &'a str, a: &str, b: &str) -> Option<&'a str> {
     let i = s.find(a)? + a.len();
     let j = s[i..].find(b)? + i;
     Some(&s[i..j])
+}
+
+/// Read one HTML attribute value (double- or single-quoted) from a tag slice.
+fn attr(tag: &str, name: &str) -> String {
+    for q in ["\"", "'"] {
+        if let Some(v) = between(tag, &format!("{name}={q}"), q) {
+            return v.trim().to_string();
+        }
+    }
+    String::new()
+}
+
+/// Best-effort parse of the HTML `<form>`s on a page so agents can auto-submit
+/// them (e.g. register a test account) without re-parsing. Non-destructive: this
+/// only READS the markup. Bounded to the first few forms.
+fn parse_forms(body: &str) -> Vec<FormInfo> {
+    let mut out = Vec::new();
+    for chunk in body.split("<form").skip(1).take(8) {
+        // The form's own attributes live before the first '>'.
+        let head = chunk.split('>').next().unwrap_or("");
+        let inner = chunk.split("</form").next().unwrap_or(chunk);
+        let mut f = FormInfo {
+            action: attr(head, "action"),
+            method: {
+                let m = attr(head, "method");
+                if m.is_empty() { "get".into() } else { m.to_lowercase() }
+            },
+            ..Default::default()
+        };
+        // Fields: <input>, <select>, <textarea> — capture name + type.
+        for tag in ["<input", "<select", "<textarea"] {
+            for seg in inner.split(tag).skip(1) {
+                let t = seg.split('>').next().unwrap_or("");
+                let name = attr(t, "name");
+                if name.is_empty() { continue; }
+                let ty = if tag == "<input" {
+                    let ty = attr(t, "type");
+                    if ty.is_empty() { "text".into() } else { ty.to_lowercase() }
+                } else { tag.trim_start_matches('<').into() };
+                if ty == "hidden" && (t.to_lowercase().contains("csrf") || t.to_lowercase().contains("token") || name.to_lowercase().contains("csrf") || name.to_lowercase().contains("_token")) {
+                    f.has_csrf = true;
+                }
+                if f.fields.len() < 25 && !f.fields.iter().any(|(n, _)| *n == name) {
+                    f.fields.push((name, ty));
+                }
+            }
+        }
+        // Guess the form's role from action + field names.
+        let hay = format!("{} {}", f.action, f.fields.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(" ")).to_lowercase();
+        let has_pw = f.fields.iter().any(|(_, t)| t == "password");
+        f.kind = if hay.contains("regist") || hay.contains("signup") || hay.contains("sign-up") || hay.contains("create") || (has_pw && (hay.contains("confirm") || hay.contains("repeat"))) {
+            "register".into()
+        } else if hay.contains("login") || hay.contains("signin") || hay.contains("sign-in") || hay.contains("auth") || has_pw {
+            "login".into()
+        } else if hay.contains("search") || hay.contains("query") || f.fields.iter().any(|(n, _)| n == "q") {
+            "search".into()
+        } else { "other".into() };
+        out.push(f);
+    }
+    out
 }
 
 /// Run the probe. Never panics; on total failure returns a Probe with a note.
@@ -148,6 +225,7 @@ pub async fn probe(target: &str) -> Probe {
         p.title = t.trim().chars().take(120).collect();
     }
     p.forms = body.matches("<form").count();
+    p.form_details = parse_forms(&body);
     // linked scripts (src="...")
     for cap in body.split("<script").skip(1) {
         if let Some(src) = between(cap, "src=\"", "\"").or_else(|| between(cap, "src='", "'")) {
@@ -220,7 +298,7 @@ pub fn probe_json(p: &Probe) -> String {
 /// One-line human summary for the live feed.
 pub fn probe_summary(p: &Probe) -> String {
     format!(
-        "probe: HTTP {} {}{} · {}{} · sec-headers {}/6 · {} cookie(s) · {} script(s){}{}",
+        "probe: HTTP {} {}{} · {}{} · sec-headers {}/6 · {} cookie(s) · {} script(s){}{}{}",
         p.status,
         if p.server.is_empty() { "".into() } else { format!("{} ", p.server) },
         if p.tech.is_empty() { "".to_string() } else { format!("[{}]", p.tech.join(",")) },
@@ -229,7 +307,47 @@ pub fn probe_summary(p: &Probe) -> String {
         p.security_headers.present,
         p.cookies.len(),
         p.scripts.len(),
+        {
+            let kinds: Vec<&str> = p.form_details.iter().map(|f| f.kind.as_str()).filter(|k| *k == "register" || *k == "login").collect();
+            if kinds.is_empty() { String::new() } else { format!(" · forms: {}", kinds.join(",")) }
+        },
         if p.cors.reflects_origin { " · CORS reflects origin!" } else { "" },
         if p.interesting_paths.is_empty() { String::new() } else { format!(" · hits: {}", p.interesting_paths.iter().map(|h| h.path.clone()).collect::<Vec<_>>().join(",")) },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_forms;
+
+    #[test]
+    fn parses_register_form_fields_and_kind() {
+        let html = r#"<html><body>
+          <form action="/api/register" method="post">
+            <input type="text" name="username">
+            <input type="email" name="email">
+            <input type="password" name="password">
+            <input type="password" name="confirmPassword">
+            <input type="hidden" name="csrf_token" value="abc">
+            <button>Sign up</button>
+          </form>
+          <form action="/search" method="get"><input name="q"></form>
+        </body></html>"#;
+        let forms = parse_forms(html);
+        assert_eq!(forms.len(), 2);
+        let reg = &forms[0];
+        assert_eq!(reg.action, "/api/register");
+        assert_eq!(reg.method, "post");
+        assert_eq!(reg.kind, "register");
+        assert!(reg.has_csrf, "hidden csrf_token should be detected");
+        assert!(reg.fields.iter().any(|(n, t)| n == "password" && t == "password"));
+        assert_eq!(forms[1].kind, "search");
+    }
+
+    #[test]
+    fn login_form_detected_by_password() {
+        let html = r#"<form action="/login"><input name="user"><input type="password" name="pw"></form>"#;
+        let f = parse_forms(html);
+        assert_eq!(f[0].kind, "login");
+    }
 }

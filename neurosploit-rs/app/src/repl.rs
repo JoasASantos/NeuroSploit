@@ -142,7 +142,7 @@ struct LiveCheckpoint {
 const COMMANDS: &[&str] = &[
     "/help", "/onboard", "/show", "/config", "/providers", "/model", "/key", "/sub", "/target",
     "/repo", "/auth", "/creds", "/focus", "/attach", "/context", "/mcp", "/offline",
-    "/votes", "/chain", "/recon", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/theme", "/clear", "/run", "/stop", "/continue", "/runs", "/results", "/report",
+    "/votes", "/chain", "/recon", "/tempmail", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/theme", "/clear", "/run", "/stop", "/continue", "/runs", "/results", "/report",
     "/status", "/logs", "/diff", "/retest", "/validate", "/finding", "/expand", "/integrations", "/quit",
 ];
 
@@ -238,6 +238,8 @@ struct Session {
     max_agents: usize,
     chain_depth: usize,
     recon_intensity: usize,
+    /// Opt-in disposable email (mail.tm) for register flows needing a confirmation code.
+    temp_email: bool,
     /// Idle guardrail: stop a run if no NEW finding lands in this many seconds
     /// (0 = disabled). Set in minutes via `/timeout <mins>`.
     idle_secs: u64,
@@ -269,6 +271,7 @@ impl Default for Session {
             max_agents: 0,
             chain_depth: 2,
             recon_intensity: 3,
+            temp_email: false,
             idle_secs: 300, // 5-minute idle guardrail by default
             proxy: None,
             user_agent: None,
@@ -601,6 +604,13 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
                 let lvl = |n: usize| ["", "quick", "standard", "deep", "exhaustive"].get(n).copied().unwrap_or("deep");
                 if arg.is_empty() { println!("  recon intensity: {} ({}) — set with /recon <1-4>  [1 quick · 2 standard · 3 deep · 4 exhaustive]", s.recon_intensity, lvl(s.recon_intensity)); }
                 else { s.recon_intensity = arg.parse::<usize>().unwrap_or(s.recon_intensity).clamp(1, 4); println!("  recon intensity: {} ({}) — more rounds, more enumeration, auto-installs tools", s.recon_intensity, lvl(s.recon_intensity)); }
+            }
+            "/tempmail" | "/temp-email" => {
+                match arg.trim() {
+                    "on" | "true" | "1" => { s.temp_email = true; println!("  temp-email: \x1b[32mon\x1b[0m — register flows may use the free mail.tm inbox to read a confirmation code"); }
+                    "off" | "false" | "0" => { s.temp_email = false; println!("  temp-email: \x1b[2moff\x1b[0m — a register step that requires email confirmation is reported as a blocker"); }
+                    _ => println!("  temp-email: {} — /tempmail on|off (opt-in disposable inbox for register confirmation)", if s.temp_email { "\x1b[32mon\x1b[0m" } else { "\x1b[2moff\x1b[0m" }),
+                }
             }
             "/agents" => {
                 if arg == "list" || arg == "ls" {
@@ -1028,6 +1038,7 @@ async fn run(base: &Path, s: &Session, history: &mut Vec<RunRecord>) {
     cfg.vote_n = s.vote_n;
     cfg.chain_depth = s.chain_depth;
     cfg.recon_intensity = s.recon_intensity;
+    cfg.temp_email = s.temp_email;
     cfg.proxy = s.proxy.clone();
     cfg.user_agent = s.user_agent.clone();
     cfg.max_agents = s.max_agents;
@@ -1105,6 +1116,7 @@ async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
     cfg.vote_n = s.vote_n;
     cfg.chain_depth = s.chain_depth;
     cfg.recon_intensity = s.recon_intensity;
+    cfg.temp_email = s.temp_email;
     cfg.proxy = s.proxy.clone();
     cfg.user_agent = s.user_agent.clone();
     cfg.max_agents = s.max_agents;
@@ -1599,9 +1611,9 @@ fn show(s: &Session) {
     println!("  │  proxy    : {}", s.proxy.clone().unwrap_or_else(|| "(none — /proxy for Burp/ZAP)".into()));
     println!("  │  user-agent: {}", s.user_agent.clone().unwrap_or_else(|| "NeuroSploit (default)".into()));
     println!("  │  focus    : {}", s.instructions.clone().unwrap_or_else(|| "(none — tests everything)".into()));
-    println!("  │  opts     : mcp={} offline={} votes={} recon={} chain-depth={} max-agents={} idle-stop={}",
+    println!("  │  opts     : mcp={} offline={} votes={} recon={} chain-depth={} max-agents={} idle-stop={} temp-email={}",
         onoff(s.mcp), onoff(s.offline), s.vote_n, s.recon_intensity, s.chain_depth, s.max_agents,
-        if s.idle_secs == 0 { "off".to_string() } else { format!("{}m", s.idle_secs / 60) });
+        if s.idle_secs == 0 { "off".to_string() } else { format!("{}m", s.idle_secs / 60) }, onoff(s.temp_email));
     // Integrations at a glance (see /integrations for detail).
     {
         let ig = harness::integrations::Integrations::load(&proj_dir());
@@ -1669,6 +1681,7 @@ fn help() {
     h("/votes <n>",         "number of validator votes per finding");
     h("/chain <n>",         "attack-chain depth (post-exploitation pivots; 0 = off)");
     h("/recon <1-4>",       "recon intensity: 1 quick · 2 standard · 3 deep · 4 exhaustive (installs tools)");
+    h("/tempmail on|off",   "opt-in disposable inbox (mail.tm) to read a register confirmation code");
     h("/timeout <min>",     "idle guardrail: stop if no new finding in <min> (0 = off)");
     h("/proxy <url>|off",   "route agent HTTP through Burp/ZAP  (/burp = default :8080)");
     h("/ua <string>",       "identifying User-Agent for NeuroSploit traffic (default = NeuroSploit)");

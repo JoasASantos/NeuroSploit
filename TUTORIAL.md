@@ -40,7 +40,7 @@ You give NeuroSploit a **target** (URL, repo, app, or host/IP). It:
 
 1. **Recons** the target with real tools (curl/nmap/…).
 2. **Intelligently selects** only the agents whose preconditions match the recon
-   (it does *not* blindly run all 429).
+   (it does *not* blindly run all 430).
 3. **Exploits** in parallel — each agent works in a ReAct loop and must prove its
    claim with a **tool receipt** (raw output).
 4. **Validates** every candidate by **cross-model voting** (a different model
@@ -99,7 +99,7 @@ Agents **degrade gracefully**: if `rustscan` is absent they use `nmap`; if neith
 
 ```bash
 neurosploit --version          # neurosploit 3.6.5
-neurosploit agents             # {"vulns":240,...,"ai":30,...,"total":429}
+neurosploit agents             # {"vulns":241,...,"ai":30,...,"total":430}
 neurosploit models             # all providers & models
 ```
 
@@ -311,6 +311,42 @@ execution.
 All AI testing is **authorized, non-destructive** — demonstrations stay benign and
 redacted; the goal is to prove the guardrail bypass, not to cause harm.
 
+### 5.6 Test accounts, form analysis & the credential vault
+
+To reach the high-impact **authenticated** surface, NeuroSploit can **analyze the
+app's forms and create its own test account** when you don't supply credentials —
+with **curl** (plain HTML/API forms: GET for CSRF+cookies, then POST) or the
+**Playwright browser** (JS-rendered / multi-step forms, e.g. Juice Shop). The
+deterministic probe now extracts each `<form>`'s action/method/fields/kind, so the
+agents know exactly what to submit.
+
+- **Anti-flood guardrail (hard):** at most **2 accounts per engagement** (1 user; a
+  2nd only when a test needs two users, e.g. horizontal IDOR). Agents never loop /
+  script / batch the register endpoint or flood the database; they reuse the
+  account they made. A test that would need many sign-ups is reported as a lead and
+  stopped.
+- **Credential vault:** every account/credential the run generates is written to
+  **`<run-dir>/vault.json`** so you can consult the passwords later. Secrets are
+  **masked in the report** and live only in the vault.
+- **Cleanup list:** the report includes an Info finding **"Test accounts created
+  (DELETE after)"** listing each account and exactly **how it was created** — so you
+  can remove them when done.
+- **Finding labels:** every finding is tagged **`Auth: authenticated`** /
+  **`unauthenticated`** and **`Account:`** (which test user/role proved it) — so in
+  grey-box you see which findings needed a login, and in black-box you see what the
+  agent did to create the user.
+- **Disposable email (opt-in, off by default):** if registration requires an email
+  confirmation code, enable **`/tempmail on`** (REPL) — agents may then use the free
+  **mail.tm** API (no key) to create a throwaway inbox and read the code. Off by
+  default: a required confirmation is otherwise reported as a blocker, not bypassed.
+
+```
+neurosploit› /target http://localhost:3001     # e.g. a local Juice Shop
+neurosploit› /tempmail on                       # only if signup needs email confirmation
+neurosploit› /run                               # analyzes forms, self-registers, tests authenticated
+neurosploit› /report                            # see the vault-backed "Test accounts (DELETE after)" section
+```
+
 ---
 
 ## 6. The interactive REPL
@@ -332,6 +368,7 @@ A context bar shows `model auth · cwd · mode▸target`. Key commands:
 /focus <text>       steer the tests (or just type the instruction)
 @path  @dir  @f:1-20   attach a file/folder/line-range to context (Tab → menu)
 /mcp on|off   /offline on|off   /votes <n>   /agents <n>   /theme color|mono
+/tempmail on|off    opt-in disposable inbox (mail.tm) for a register confirmation code
 /run                launch the engagement
 /runs   /results [n]   /report [n]   /status [n]
 /diff               what changed vs the previous run
@@ -581,11 +618,11 @@ built from SAST/dataflow), so uncertainty becomes *path reachability*, not state
 
 ## 13. The agent library
 
-`agents_md/` holds **429** markdown agents in categories:
+`agents_md/` holds **430** markdown agents in categories:
 
 | Category | Dir | Count | Purpose |
 |----------|-----|-------|---------|
-| Vulnerability specialists | `vulns/` | 240 | exploit a specific class |
+| Vulnerability specialists | `vulns/` | 241 | exploit a specific class · incl. account registration & form analysis |
 | Recon | `recon/` | 12 | information gathering |
 | Code (SAST) | `code/` | 78 | white-box source review |
 | Infra | `infra/` | 34 | Linux / Windows / AD host testing |

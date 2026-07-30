@@ -47,6 +47,20 @@ pub struct Finding {
     /// IDs of findings this one chains from (attack-path edges).
     #[serde(default)]
     pub chains_from: Vec<String>,
+    /// Auth context in which this was proven: "authenticated" | "unauthenticated"
+    /// | "" (unknown). Lets a report distinguish pre- and post-login findings —
+    /// important in grey/black-box where the agent self-registered to test.
+    #[serde(default)]
+    pub auth_context: String,
+    /// The test account/role used to prove this finding (e.g. "user1 · nrsplt_x@example.test"
+    /// or "admin"). Empty when the finding needed no account.
+    #[serde(default)]
+    pub account: String,
+    /// A credential generated during the run (password/token) for a created test
+    /// account. Captured here transiently, moved to the run's vault, and MASKED in
+    /// the human report. Only set on "test account created" capability findings.
+    #[serde(default)]
+    pub secret: String,
 }
 
 impl Default for Finding {
@@ -72,6 +86,9 @@ impl Default for Finding {
             exploitability: String::new(),
             business_impact: String::new(),
             chains_from: Vec::new(),
+            auth_context: String::new(),
+            account: String::new(),
+            secret: String::new(),
         }
     }
 }
@@ -141,6 +158,11 @@ pub struct RunConfig {
     /// more recon rounds, more active enumeration, and auto-installing tools.
     #[serde(default = "default_recon")]
     pub recon_intensity: usize,
+    /// Opt-in: when the app requires email confirmation to register, allow the
+    /// agent to use a free disposable-inbox API (mail.tm) to read the code/link.
+    /// Off by default. Account creation is still capped by the safety guardrail.
+    #[serde(default)]
+    pub temp_email: bool,
 }
 
 fn default_vote() -> usize {
@@ -179,6 +201,7 @@ impl RunConfig {
             proxy: None,
             user_agent: None,
             recon_intensity: 3,
+            temp_email: false,
         }
     }
 }

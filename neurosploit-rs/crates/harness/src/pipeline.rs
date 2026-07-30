@@ -4,7 +4,7 @@ use crate::rl::{severity_reward, RlState};
 use crate::types::{Finding, RunConfig};
 use crate::report;
 use futures::stream::{self, StreamExt};
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc::Sender;
 
@@ -181,7 +181,80 @@ operator has explicitly authorized that specific action. Read-only, minimal proo
 emails, CPF/SSN, phones, cards, tokens): confirm access with the SMALLEST possible sample and REDACT it in the \
 report (e.g. show 1 masked record + a count) — never dump, store, or transmit the dataset. Prefer benign markers \
 and OOB/echo checks over any state-changing payload. When unsure whether an action is safe, don't do it — report \
-it as reachable and stop.\n\n";
+it as reachable and stop.\n\
+ACCOUNT-CREATION GUARDRAIL (hard limit): creating accounts is state-changing — do it ONLY to enable authenticated \
+testing, and create AT MOST 2 accounts for the ENTIRE engagement (1 normal user; a 2nd only when a test genuinely \
+needs two users, e.g. horizontal IDOR). NEVER loop, script, fuzz, or batch the register endpoint; do not write a \
+tool/PoC that submits it repeatedly; do not flood or stress the database with sign-ups. Each account must be a \
+single, clearly-marked benign identity (`nrsplt_<rand>@example.test`). REUSE the account you already made instead of \
+making new ones. To TEST the register endpoint itself (rate-limit, mass-assignment, enumeration, CSRF, weak policy), \
+send only a FEW controlled requests and prove the flaw from those — never a high-volume run. If a test would require \
+many registrations, report it as a LEAD and STOP rather than mass-creating accounts.\n\n";
+/// Per-run operational directive: the credential VAULT path, the account cap,
+/// finding-tagging rules, and (opt-in) disposable-email use. Injected into web
+/// engagement prompts so created accounts are logged for cleanup and findings
+/// are labelled authenticated vs unauthenticated.
+fn engagement_ops(cfg: &RunConfig) -> String {
+    let vault = cfg.workdir.as_deref()
+        .map(|d| format!("{}/vault.jsonl", d.trim_end_matches('/')))
+        .unwrap_or_else(|| "the run directory's vault.jsonl".into());
+    let temp = if cfg.temp_email {
+        "DISPOSABLE EMAIL (enabled): if registration requires an email confirmation code/link, you MAY use the free \
+         mail.tm API (no key) — `POST https://api.mail.tm/accounts` {address,password} to create an inbox (get a \
+         valid domain from `GET https://api.mail.tm/domains`), `POST https://api.mail.tm/token` for a JWT, then poll \
+         `GET https://api.mail.tm/messages` (Bearer JWT) to read the confirmation code/link. Use the mail.tm address \
+         as the account email. Guerrilla Mail's API is a fallback. "
+    } else {
+        "DISPOSABLE EMAIL (disabled): if registration REQUIRES an email confirmation you cannot receive, stop and \
+         report it as a blocker (do not attempt to bypass it). "
+    };
+    format!(
+        "ENGAGEMENT OPS — TEST ACCOUNTS & VAULT:\n\
+         - CREDENTIAL VAULT: whenever you create a test account or generate any credential, APPEND one JSON line to \
+           `{vault}` (create the file if missing) of the form \
+           {{\"account\":\"<email/username>\",\"secret\":\"<password>\",\"role\":\"<role>\",\"endpoint\":\"<register endpoint>\",\"how\":\"<curl|browser + the exact steps you used>\",\"auth_flow\":\"<how you logged in / got the session>\"}}. \
+           This vault is the single place secrets are stored so you (and the operator) can consult them later; also \
+           set the finding's `secret` field so it is captured even if the file write fails.\n\
+         - CLEANUP: every account you create MUST be reported so it can be deleted afterwards — the run report lists \
+           them from the vault. Do not leave undocumented accounts.\n\
+         - LABEL FINDINGS: set `auth_context` to \"authenticated\" (proven while logged in with a test/given account) \
+           or \"unauthenticated\" (proven with no session), and `account` to which user/role you used. In grey-box, be \
+           explicit about which findings needed a login. In black-box, record in `how`/evidence exactly what you did \
+           to create the user.\n\
+         - {temp}\n\n"
+    )
+}
+/// One credential the run generated (a created test account). Stored in the run
+/// vault so the operator can consult it and later delete the account.
+#[derive(Serialize, Deserialize, Default, Clone)]
+struct VaultEntry {
+    #[serde(default)] account: String,
+    #[serde(default)] secret: String,
+    #[serde(default)] role: String,
+    #[serde(default)] endpoint: String,
+    #[serde(default)] how: String,
+    #[serde(default)] auth_flow: String,
+}
+
+/// Read the agent-appended `vault.jsonl` (one JSON object per created account)
+/// from the run dir. Best-effort: skips malformed lines. `_findings` reserved for
+/// future correlation. Deduped by account identity.
+fn collect_vault(dir: &str, _findings: &[Finding]) -> Vec<VaultEntry> {
+    let path = format!("{}/vault.jsonl", dir.trim_end_matches('/'));
+    let mut out: Vec<VaultEntry> = Vec::new();
+    if let Ok(txt) = std::fs::read_to_string(&path) {
+        for line in txt.lines() {
+            let line = line.trim();
+            if line.is_empty() { continue; }
+            if let Ok(v) = serde_json::from_str::<VaultEntry>(line) {
+                if v.account.is_empty() { continue; }
+                if !out.iter().any(|e| e.account == v.account) { out.push(v); }
+            }
+        }
+    }
+    out
+}
+
 const VOTE_SYS: &str = "You are an adversarial security validator. Decide if the candidate finding is a REAL, reproducible, exploitable vulnerability whose EVIDENCE actually proves impact. Reject common false positives: input merely reflected but not executed; version/banner guesses with no working PoC; self-XSS; theoretical issues; an error message or stack trace mistaken for injection; missing, generic, or non-reproducible evidence; severity inflated beyond what the evidence demonstrates. Confirm only if the provided evidence (request/response) concretely proves the vulnerability. Reply with JSON {\"verdict\":\"confirmed\"|\"rejected\",\"reason\":\"...\"}. Default to rejected when uncertain.";
 /// Adversarial second pass for High/Critical findings: assume false positive
 /// until the evidence forces otherwise. A finding that can't withstand the
@@ -214,6 +287,7 @@ const DECISION_DOCTRINE: &str = "DECIDE WHERE TO ATTACK (analyse, then act):\n\
 - Mine PARAMETERS: enumerate query/body/header/cookie params (incl. hidden ones from JS/source maps); for each, reason about what it does and test the fitting attack (IDOR, injection, path traversal, mass-assignment, open-redirect, SSRF). Add plausible params the API might accept (id, user, role, admin, debug, redirect, file, callback).\n\
 - MOCK realistic data: when a request needs valid-looking input to reach deeper logic, synthesize believable test data (emails, names, CPFs/SSNs with valid checksums, phone numbers, UUIDs, tokens, JSON bodies) so the flow proceeds — never use real PII.\n\
 - Authenticated testing: if you can authenticate (given creds/roles or a login you performed), REUSE the session and exploit the AUTHENTICATED surface — the endpoints/params only reachable while logged in are where the high-impact bugs live. Test as EACH role you have (e.g. normal user AND admin) and compare.\n\
+- Self-register when no creds are given: if the app allows sign-up, ANALYZE the register form (probe `form_details` has action/method/fields) and CREATE one clearly-marked benign test account (`nrsplt_<rand>@example.test`) — with curl (GET for CSRF+cookies, then POST the fields) or the Playwright browser for JS-rendered/multi-step forms — then log in and REUSE that session for authenticated testing. Register a second account only when a test needs two users. Non-destructive: one account, no mass-registration/spam; at signup also try mass-assignment (`role=admin`/`isAdmin`) and report it if accepted.\n\
 - Build PoCs when needed: for issues that need an artifact to prove (clickjacking → an HTML page that frames the target; CSRF → an auto-submitting HTML form; a multi-step or timing exploit → a script), WRITE the PoC to the run's PoC dir, run/validate it, and cite the file in the evidence.\n\
 - Test control BYPASSES: when something returns 401/403/redirect or is 'blocked', try to bypass it (verb tampering, path/case/encoding normalization, X-Original-URL / X-Rewrite-URL / X-Forwarded-* headers, missing-vs-invalid token, direct object/API access) and confirm the bypass with the two requests.\n\n";
 
@@ -294,6 +368,7 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
     let verbose = cfg.verbose;
     let mcp_on = pool.mcp_config.is_some();
     let directives = operator_directives(&cfg);
+    let ops = engagement_ops(&cfg);
     // Token economy: each agent gets a capped recon context, not the full blob.
     let recon_ctx: String = recon.chars().take(3500).collect();
     let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(selected.iter().cloned())
@@ -301,6 +376,7 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
             let target = target.clone();
             let recon = recon_ctx.clone();
             let directives = directives.clone();
+            let ops = ops.clone();
             let txc = tx.clone();
             async move {
                 if pool.stop_exploiting() {
@@ -312,13 +388,16 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
                 let user = format!(
                     "AUTHORIZED engagement — you have explicit permission to test {target}. \
                      Do not ask for confirmation — proceed and PROVE each issue.\n\n\
-                     {directives}{react}{depth}{decision}{safety}{doctrine}{body}\n\nWhen done, reply with ONLY a JSON array of confirmed findings (may be empty []). \
-                     Each item: {{id,title,severity,cwe,endpoint,payload,evidence,impact,remediation,confidence}}. \
-                     `evidence` must contain the concrete proof (request/response excerpt).",
+                     {directives}{react}{depth}{decision}{safety}{ops}{doctrine}{body}\n\nWhen done, reply with ONLY a JSON array of confirmed findings (may be empty []). \
+                     Each item: {{id,title,severity,cwe,endpoint,payload,evidence,impact,remediation,confidence,auth_context,account,secret}}. \
+                     `evidence` must contain the concrete proof (request/response excerpt). \
+                     Set `auth_context` to \"authenticated\" or \"unauthenticated\"; set `account` to the test user/role you used (if any); \
+                     for a created test account set `secret` to its generated password (it is stored in the run vault and masked in the report).",
                     target = target,
                     directives = directives,
                     react = REACT_DOCTRINE,
                     depth = DEPTH_DOCTRINE, decision = DECISION_DOCTRINE, safety = SAFETY_DOCTRINE,
+                    ops = ops,
                     doctrine = tool_doctrine(mcp_on),
                     body = ag.user.replace("{target}", &target).replace("{recon_json}", &recon),
                 );
@@ -516,6 +595,7 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
     let verbose = cfg.verbose;
     let mcp_on = pool.mcp_config.is_some();
     let directives = operator_directives(&cfg);
+    let ops = engagement_ops(&cfg);
     let recon_ctx: String = recon.chars().take(3000).collect();
     let leads_ctx = code_leads.clone();
     let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(selected.iter().cloned())
@@ -523,6 +603,7 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
             let target = target.clone();
             let recon = recon_ctx.clone();
             let directives = directives.clone();
+            let ops = ops.clone();
             let leads = leads_ctx.clone();
             let txc = tx.clone();
             async move {
@@ -534,11 +615,12 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
                 }
                 let user = format!(
                     "AUTHORIZED greybox engagement on {target} — you also have the source review below. \
-                     Proceed and PROVE each issue against the LIVE app.\n\n{directives}{leads}{react}{depth}{decision}{safety}{doctrine}{body}\n\n\
+                     Proceed and PROVE each issue against the LIVE app.\n\n{directives}{leads}{react}{depth}{decision}{safety}{ops}{doctrine}{body}\n\n\
                      Reply ONLY a JSON array of confirmed findings (may be []): \
-                     {{id,title,severity,cwe,endpoint,payload,evidence,impact,remediation,confidence}}.",
+                     {{id,title,severity,cwe,endpoint,payload,evidence,impact,remediation,confidence,auth_context,account,secret}}. \
+                     Set `auth_context` (authenticated/unauthenticated) and `account` (test user/role used); for a created account set `secret`.",
                     target = target, directives = directives, leads = leads,
-                    react = REACT_DOCTRINE, depth = DEPTH_DOCTRINE, decision = DECISION_DOCTRINE, safety = SAFETY_DOCTRINE, doctrine = tool_doctrine(mcp_on),
+                    react = REACT_DOCTRINE, depth = DEPTH_DOCTRINE, decision = DECISION_DOCTRINE, safety = SAFETY_DOCTRINE, ops = ops, doctrine = tool_doctrine(mcp_on),
                     body = ag.user.replace("{target}", &target).replace("{recon_json}", &recon),
                 );
                 match pool.complete_routed(Task::Exploit, &ag.name, &ag.system, &user).await {
@@ -934,6 +1016,53 @@ async fn finish(cfg: RunConfig, _lib: &Library, recon: String, transcript: Strin
     }
     // White-box/skills are symbolic → deterministic belief; grey-box carries source too.
     let whitebox = matches!(gmode, GroundMode::Symbolic | GroundMode::Either);
+
+    // --- Credential vault & test-account cleanup ---------------------------
+    // Consolidate every test account created this run (from the agent-appended
+    // vault.jsonl AND any finding that carried a generated `secret`) into a single
+    // vault.json the operator can consult, then MASK the secret in the report and
+    // add a cleanup summary listing the accounts to delete.
+    if let Some(dir) = cfg.workdir.clone() {
+        let mut vault = collect_vault(&dir, &findings);
+        // Fold in secrets captured on findings (dedup by account identity).
+        for f in &findings {
+            if !f.secret.is_empty() && !f.account.is_empty()
+                && !vault.iter().any(|v| v.account == f.account) {
+                vault.push(VaultEntry {
+                    account: f.account.clone(), secret: f.secret.clone(), role: String::new(),
+                    endpoint: f.endpoint.clone(), how: f.payload.clone(), auth_flow: String::new(),
+                });
+            }
+        }
+        if !vault.is_empty() {
+            let path = format!("{}/vault.json", dir.trim_end_matches('/'));
+            if let Ok(j) = serde_json::to_string_pretty(&vault) { let _ = std::fs::write(&path, j); }
+            let _ = tx.send(format!(
+                "notify: 🔐 vault: {} test account(s) saved → {} — DELETE these after the engagement",
+                vault.len(), path)).await;
+            // Cleanup summary finding (secrets live only in the vault, masked here).
+            let list = vault.iter()
+                .map(|v| format!("• {}{} — created via {}", v.account,
+                    if v.role.is_empty() { String::new() } else { format!(" [{}]", v.role) },
+                    if v.how.is_empty() { "the registration flow".to_string() } else { v.how.chars().take(160).collect::<String>() }))
+                .collect::<Vec<_>>().join("\n");
+            findings.push(Finding {
+                id: "test-accounts".into(), agent: "account_registration_and_forms".into(),
+                title: "Test accounts created during the engagement (DELETE after)".into(),
+                severity: "Info".into(), endpoint: cfg.target.clone(),
+                evidence: format!("{} account(s) created for authenticated testing. Credentials are in vault.json (not shown here).\n{}", vault.len(), list),
+                impact: "Operational cleanup: remove these accounts once testing is complete.".into(),
+                remediation: "Delete the listed test accounts; rotate anything they touched.".into(),
+                validated: true, confidence: 1.0, auth_context: "n/a".into(),
+                account: format!("{} test account(s)", vault.len()),
+                ..Default::default()
+            });
+        }
+        // Mask any generated secret so it never appears in the human report.
+        for f in findings.iter_mut() {
+            if !f.secret.is_empty() { f.secret = "•••• (see vault.json)".into(); }
+        }
+    }
 
     // --- v3.5.2 report-hygiene & exploitation-depth pass ---
     // Calibrate inflated/unproven High-Critical to Medium, flag exposures that

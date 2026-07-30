@@ -54,12 +54,21 @@ pub fn html(target: &str, findings: &[Finding]) -> String {
             format!(
                 "<section class=finding><h3><span class=sev style=background:{}>{}</span> {}. {}</h3>\
                  <div class=m>{} · {} · CVSS {} · votes {} · conf {:.2}</div>\
-                 <div class=m>Endpoint: {}</div>\
+                 <div class=m>Endpoint: {}</div>{authline}\
                  <h4>Payload</h4><pre>{}</pre><h4>Evidence</h4><pre>{}</pre>\
                  <h4>Impact</h4><p>{}</p><h4>Remediation</h4><p>{}</p></section>",
                 sev_color(&f.severity), esc(&f.severity), i + 1, esc(&f.title),
                 esc(&f.agent), esc(&f.cwe), esc(&f.cvss), esc(&f.votes), f.confidence,
                 esc(&f.endpoint), esc(&f.payload), esc(&f.evidence), esc(&f.impact), esc(&f.remediation),
+                authline = {
+                    // Show the auth context and which test account proved this finding.
+                    if f.auth_context.is_empty() && f.account.is_empty() { String::new() }
+                    else {
+                        let ac = if f.auth_context.is_empty() { String::new() } else { format!("Auth: <b>{}</b>", esc(&f.auth_context)) };
+                        let acct = if f.account.is_empty() { String::new() } else { format!("{}Account: {}", if ac.is_empty() { "" } else { " · " }, esc(&f.account)) };
+                        format!("<div class=m>{ac}{acct}</div>")
+                    }
+                },
             )
         })
         .collect();
