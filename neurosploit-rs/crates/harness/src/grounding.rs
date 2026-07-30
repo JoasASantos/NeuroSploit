@@ -136,13 +136,22 @@ pub fn gate(mut findings: Vec<Finding>, context: &str, mode: GroundMode) -> (Vec
     let mut demoted = 0;
     for f in findings.iter_mut() {
         let g = ground(f, context, mode);
-        if !g.ok {
+        if g.ok {
+            // Grounded + already vote-confirmed → mark confirmed for the report.
+            if f.validated && f.review_status.is_empty() {
+                f.review_status = "confirmed".into();
+            }
+        } else {
+            // Ungrounded: DON'T delete — demote to needs-review so a human can judge
+            // (an agent may have proven it without a machine-recognisable receipt).
             f.validated = false;
+            f.review_status = "needs-review".into();
+            if f.review_reason.is_empty() { f.review_reason = "no machine-verifiable receipt".into(); }
             f.votes = format!("{} · receipt_missing", f.votes);
             demoted += 1;
         }
     }
-    findings.retain(|f| f.validated);
+    // Keep everything; the report separates confirmed from needs-review.
     (findings, demoted)
 }
 
@@ -206,12 +215,18 @@ mod tests {
     }
 
     #[test]
-    fn gate_keeps_grounded_and_demotes_prose() {
+    fn gate_flags_ungrounded_for_review_without_deleting() {
         let good = sast_finding();
         let bad = Finding { title: "vibes".into(), endpoint: "somewhere".into(),
             evidence: "looks bad".into(), validated: true, ..Default::default() };
         let (kept, demoted) = gate(vec![good, bad], "", GroundMode::Symbolic);
-        assert_eq!(kept.len(), 1);
+        // Nothing deleted — the ungrounded one is kept and flagged, not dropped.
+        assert_eq!(kept.len(), 2);
         assert_eq!(demoted, 1);
+        let confirmed = kept.iter().find(|f| f.title.contains("SQL")).unwrap();
+        assert_eq!(confirmed.review_status, "confirmed");
+        let flagged = kept.iter().find(|f| f.title == "vibes").unwrap();
+        assert_eq!(flagged.review_status, "needs-review");
+        assert!(!flagged.validated);
     }
 }

@@ -61,6 +61,15 @@ pub struct Finding {
     /// the human report. Only set on "test account created" capability findings.
     #[serde(default)]
     pub secret: String,
+    /// Human-in-the-loop triage state: "confirmed" (passed vote + grounding +
+    /// refute), "needs-review" (uncertain — partial vote, ungrounded, or refuted:
+    /// KEPT and flagged for a human instead of silently dropped), or "" (unset).
+    #[serde(default)]
+    pub review_status: String,
+    /// Why it needs review, when `review_status == "needs-review"` (e.g.
+    /// "below vote quorum", "no receipt", "failed adversarial refute").
+    #[serde(default)]
+    pub review_reason: String,
 }
 
 impl Default for Finding {
@@ -89,6 +98,8 @@ impl Default for Finding {
             auth_context: String::new(),
             account: String::new(),
             secret: String::new(),
+            review_status: String::new(),
+            review_reason: String::new(),
         }
     }
 }

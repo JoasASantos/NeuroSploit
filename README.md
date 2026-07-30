@@ -44,8 +44,13 @@
 > **credential vault** (`vault.json`, secrets masked in the report), a **"delete
 > these accounts" cleanup** section, findings tagged **authenticated /
 > unauthenticated**, and **opt-in disposable email** (`/tempmail`, free mail.tm).
-> New models: **Claude Opus 5**, **Claude Sonnet 5**, **Kimi K3** (new Moonshot
-> provider → 15 providers). Full history in [RELEASE.md](RELEASE.md).
+> **Human-in-the-loop validator:** uncertain findings are now **flagged
+> `needs-review`, not deleted** (only zero-support noise is dropped) so a human
+> makes the final call. **Reports in Markdown + JSON** alongside PDF/HTML. Sharper
+> agents on **modern SPA/REST apps** (a Juice-Shop-class API-hunting methodology)
+> plus **more robust RL** reward shaping. New models: **Claude Opus 5**, **Claude
+> Sonnet 5**, **Kimi K3** (Moonshot → 15 providers). Full history in
+> [RELEASE.md](RELEASE.md).
 
 ---
 

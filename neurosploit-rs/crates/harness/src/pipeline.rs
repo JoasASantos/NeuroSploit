@@ -305,6 +305,49 @@ const DECISION_DOCTRINE: &str = "DECIDE WHERE TO ATTACK (analyse, then act):\n\
 - Build PoCs when needed: for issues that need an artifact to prove (clickjacking → an HTML page that frames the target; CSRF → an auto-submitting HTML form; a multi-step or timing exploit → a script), WRITE the PoC to the run's PoC dir, run/validate it, and cite the file in the evidence.\n\
 - Test control BYPASSES: when something returns 401/403/redirect or is 'blocked', try to bypass it (verb tampering, path/case/encoding normalization, X-Original-URL / X-Rewrite-URL / X-Forwarded-* headers, missing-vs-invalid token, direct object/API access) and confirm the bypass with the two requests.\n\n";
 
+/// Methodology directions for a modern JS SPA backed by a REST/GraphQL API
+/// (Angular/React/Vue front + Node/Express-style API — the shape of OWASP Juice
+/// Shop and many real apps). These are DIRECTIONS on HOW to hunt each vuln class,
+/// NOT a challenge answer key: the agent still discovers, tests and PROVES each
+/// issue against the live app. Injected only when recon shows a SPA/REST surface.
+const SPA_API_DOCTRINE: &str = "SPA + REST/API METHODOLOGY (modern JS app — hunt the API, not just the shell):\n\
+- MAP THE API FROM THE BUNDLE: curl the main JS bundle(s) (`main*.js`, `runtime*.js`, `vendor*.js`) and grep for route \
+paths and API calls — client routes (Angular/React router table), `/rest/…`, `/api/…`, GraphQL, and any `http(s)://` / \
+relative endpoints, param names, and hardcoded secrets/keys/emails. Build the real endpoint list from the code, then hit it.\n\
+- HIDDEN CLIENT ROUTES: SPA pages are client-side and often unlinked — extract the router table from the bundle AND brute \
+common ones (`#/administration`, `#/admin`, `#/accounting`, `#/score-board`, `#/wallet`, `#/deluxe-membership`); a route that \
+renders admin/score/scoreboard content is a broken-access-control finding.\n\
+- AUTH & SQLi: on the login endpoint try SQLi auth bypass (`' OR 1=1--`, `admin@…'--`, tautologies) in the email/username; on \
+search/query params try error-based then UNION SELECT to exfil the schema and user table (email+password hash). Also test \
+weak/default admin creds and account/email ENUMERATION (different response for existing vs unknown user).\n\
+- JWT: decode any JWT; test alg:none / 'unsigned' acceptance, RS256→HS256 confusion using the server's public key as the HMAC \
+secret, `kid`/`jku` injection, and whether the signature is verified at all — forge a token impersonating another/admin user.\n\
+- IDOR / BOLA / mass-assignment: numeric or guessable ids on `/api/<Object>/:id` (baskets, orders, feedbacks, reviews, users) \
+— change the id or the owner field to read/modify another user's data; at REGISTER/PATCH add unexpected fields (`role=admin`, \
+`isAdmin`, `deletedAt`, `id`) and check if the server binds them (privilege escalation / resurrecting deleted accounts).\n\
+- FILE ACCESS: file/download/ftp endpoints — path traversal (`../`), and POISON NULL BYTE / double-encoding (`%2500`, `%00`) \
+to defeat an extension allowlist and reach backup/config files (`*.bak`, `package.json.bak`, `*.md.bak`, `.env`, coupons/keys). \
+Enumerate an open `/ftp` or static dir if present.\n\
+- FORGOT-PASSWORD & OSINT: the reset flow keyed on a security question — the answer is often discoverable from the app's own \
+data (profile, photo-wall image captions/EXIF, reviews). Use the app's public data to answer it, then reset.\n\
+- OBSERVABILITY / EXPOSURE: probe `/metrics` (Prometheus), `/support/logs`, access logs, `/redirect?to=`, GraphQL introspection, \
+Swagger/OpenAPI, and any `/rest/*` that returns more fields than the UI shows (excessive data exposure — password hashes, etc.).\n\
+- CLIENT-SIDE & MISC: DOM XSS where user input is written to the DOM/innerHTML (search, product name) — prove it executes; \
+NoSQL operator injection (`$ne`,`$gt`,`$where`) on review/update endpoints; SSRF on any URL-fetching field (profile image URL); \
+open-redirect allowlist bypass by embedding an allowlisted substring; XXE on deprecated B2B/XML interfaces; weak/guessable \
+coupon or discount codes (reverse the pattern from the bundle). Force ERROR HANDLING flaws with malformed JSON / wrong types to \
+surface stack traces.\n\
+Chain what you find (leaked key → forged token → admin route → data export). Prove every issue with the exact request+response.\n\n";
+
+/// Does the recon/probe surface look like a JS SPA and/or a REST/GraphQL API,
+/// so the SPA methodology is worth injecting?
+fn looks_like_spa_api(recon: &str) -> bool {
+    let r = recon.to_lowercase();
+    ["spa", "angular", "react", "vue", "app-root", "/rest/", "/api/", "graphql", "swagger",
+     "polyfills", "runtime.", "main.js", "\"scripts\""]
+        .iter().filter(|m| r.contains(*m)).count() >= 1
+}
+
 /// Black-box web engagement: recon → parallel exploit → N-model vote → report.
 pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<String>) -> RunOutput {
     pool.set_progress(tx.clone());
@@ -404,6 +447,12 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
     let mcp_on = pool.mcp_config.is_some();
     let directives = operator_directives(&cfg);
     let ops = engagement_ops(&cfg);
+    // Inject the SPA/REST methodology only when the target looks like a JS SPA or
+    // an API — gives the agents concrete directions on a Juice-Shop-class surface.
+    let spa = if looks_like_spa_api(&recon) {
+        let _ = tx.send("recon: SPA/REST surface detected — applying API-hunting methodology".into()).await;
+        SPA_API_DOCTRINE
+    } else { "" };
     // Token economy: each agent gets a capped recon context, not the full blob.
     let recon_ctx: String = recon.chars().take(3500).collect();
     let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(selected.iter().cloned())
@@ -423,7 +472,7 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
                 let user = format!(
                     "AUTHORIZED engagement — you have explicit permission to test {target}. \
                      Do not ask for confirmation — proceed and PROVE each issue.\n\n\
-                     {directives}{react}{depth}{decision}{safety}{ops}{doctrine}{body}\n\nWhen done, reply with ONLY a JSON array of confirmed findings (may be empty []). \
+                     {directives}{react}{depth}{decision}{spa}{safety}{ops}{doctrine}{body}\n\nWhen done, reply with ONLY a JSON array of confirmed findings (may be empty []). \
                      Each item: {{id,title,severity,cwe,endpoint,payload,evidence,impact,remediation,confidence,auth_context,account,secret}}. \
                      `evidence` must contain the concrete proof (request/response excerpt). \
                      Set `auth_context` to \"authenticated\" or \"unauthenticated\"; set `account` to the test user/role you used (if any); \
@@ -431,7 +480,7 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
                     target = target,
                     directives = directives,
                     react = REACT_DOCTRINE,
-                    depth = DEPTH_DOCTRINE, decision = DECISION_DOCTRINE, safety = SAFETY_DOCTRINE,
+                    depth = DEPTH_DOCTRINE, decision = DECISION_DOCTRINE, spa = spa, safety = SAFETY_DOCTRINE,
                     ops = ops,
                     doctrine = tool_doctrine(mcp_on),
                     body = ag.user.replace("{target}", &target).replace("{recon_json}", &recon),
@@ -987,14 +1036,26 @@ async fn validate(candidates: Vec<Finding>, pool: &ModelPool, sys: &str, vote_n:
                 if f.confidence == 0.0 && total > 0 {
                     f.confidence = yes as f64 / total as f64;
                 }
-                let _ = txc.send(format!("vote {} → {} ({})", f.title, if f.validated { "CONFIRMED" } else { "rejected" }, f.votes)).await;
+                // Human-in-the-loop triage: confirmed on quorum; kept & FLAGGED
+                // (not deleted) when it has partial support; only zero-support
+                // candidates are dropped as noise.
+                if f.validated {
+                    f.review_status = "confirmed".into();
+                } else if yes >= 1 || total == 0 {
+                    f.review_status = "needs-review".into();
+                    f.review_reason = if total == 0 { "validator unavailable".into() }
+                        else { format!("below vote quorum ({yes}/{total})") };
+                }
+                let label = if f.validated { "CONFIRMED" } else if f.review_status == "needs-review" { "needs-review" } else { "rejected" };
+                let _ = txc.send(format!("vote {} → {} ({})", f.title, label, f.votes)).await;
                 f
             }
         })
         .buffer_unordered(pool.candidates.len().max(2))
         .collect()
         .await;
-    validated.into_iter().filter(|f| f.validated).collect()
+    // Keep confirmed AND needs-review (human decides); drop only zero-support noise.
+    validated.into_iter().filter(|f| f.validated || f.review_status == "needs-review").collect()
 }
 
 /// Adversarial refutation pass: every confirmed **High/Critical** finding is
@@ -1022,7 +1083,14 @@ async fn refute_pass(findings: Vec<Finding>, pool: &ModelPool, vote_n: usize, tx
             if total > 0 { f.votes = format!("{} · refute {yes}/{total}", f.votes); }
             kept.push(f);
         } else {
-            let _ = tx.send(format!("vote {} → dropped by adversarial refute ({yes}/{total})", f.title)).await;
+            // Refuted High/Critical: don't silently delete — DEMOTE to needs-review
+            // and hand it to the human loop with the reason (they make the call).
+            f.validated = false;
+            f.review_status = "needs-review".into();
+            f.review_reason = format!("failed adversarial refute ({yes}/{total} survived)");
+            f.votes = format!("{} · refute {yes}/{total}", f.votes);
+            let _ = tx.send(format!("vote {} → flagged needs-review (adversarial refute {yes}/{total})", f.title)).await;
+            kept.push(f);
         }
     }
     kept
@@ -1130,12 +1198,19 @@ async fn finish(cfg: RunConfig, _lib: &Library, recon: String, transcript: Strin
     // Map findings to OWASP / MITRE / kill-chain stage for the attack graph.
     crate::attack_graph::enrich(&mut findings);
 
-    // RL update: reward agents that produced validated findings; gently decay idle.
-    let hit: std::collections::HashMap<&str, f64> = findings.iter().fold(Default::default(), |mut m, f| {
-        let e = m.entry(f.agent.as_str()).or_insert(0.0);
-        *e = (*e + severity_reward(&f.severity)).min(1.0);
-        m
-    });
+    // RL update (robust reward shaping): an agent's reward per run =
+    //   + strong for each CONFIRMED finding (severity × confidence),
+    //   + small for a NEEDS-REVIEW finding (it surfaced a real lead worth a human),
+    //   − small decay for running but surfacing nothing (keeps noise agents down).
+    // Rewards accumulate per agent, capped to [-1, 1], so agents that reliably land
+    // confirmed high-severity bugs float to the top of selection on future runs.
+    let mut hit: std::collections::HashMap<&str, f64> = Default::default();
+    for f in &findings {
+        let base = severity_reward(&f.severity) * f.confidence.max(0.2).min(1.0);
+        let r = if f.review_status == "needs-review" { 0.15 } else { base };
+        let e = hit.entry(f.agent.as_str()).or_insert(0.0);
+        *e = (*e + r).clamp(-1.0, 1.0);
+    }
     for a in &selected {
         let r = hit.get(a.name.as_str()).copied().unwrap_or(-0.05);
         rl.update(&a.name, r);

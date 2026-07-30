@@ -797,7 +797,7 @@ pub(crate) fn report_raw(target: &str, findings: &[harness::types::Finding], wor
     harness::pipeline::stamp_attribution(&mut fs); // provenance travels with raw reports too
     harness::attack_graph::enrich(&mut fs);
     std::fs::write(workdir.join("findings.json"), serde_json::to_string_pretty(&fs).unwrap_or_default()).ok();
-    let _ = harness::report::typst_report(target, &fs, workdir);
+    let _ = harness::report::write_all(target, &fs, workdir); // md + json + html + pdf
     write_status(workdir, "stopped-raw", &format!("\"findings\":{}", fs.len()));
 }
 
@@ -808,7 +808,7 @@ pub(crate) fn finalize_run(mut out: RunOutput, workdir: &Path) -> RunOutput {
     if out.target.is_empty() {
         out.target = workdir.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
     }
-    let _ = harness::report::typst_report(&out.target, &out.findings, workdir);
+    let _ = harness::report::write_all(&out.target, &out.findings, workdir); // md + json + html + pdf
     write_status(workdir, "complete", &format!("\"findings\":{},\"agents_ran\":{}", out.findings.len(), out.agents_ran.len()));
     out
 }

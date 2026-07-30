@@ -9,6 +9,32 @@
 
 ## Highlights
 
+- **Human-in-the-loop validator — uncertain findings are flagged, not deleted.**
+  The vote, receipt-grounding and adversarial-refute passes no longer silently
+  drop borderline findings. A finding is now **`confirmed`** (passed all three) or
+  **`needs-review`** (partial vote, no machine-verifiable receipt, or failed
+  refute) — kept with a reason so a human makes the final call. Only zero-support
+  noise is dropped. Every report separates the two buckets.
+
+- **Reports in Markdown + JSON (alongside PDF/HTML).** Each run now writes
+  `report.md` (human-readable, confirmed vs needs-review), `report.json`
+  (structured: metadata + confirmed/needs-review/all buckets), plus the existing
+  `report.html` and Typst **PDF** — all via `report::write_all`.
+
+- **Sharper agents on modern SPA/REST apps (Juice-Shop-class).** When recon
+  detects a JS SPA and/or a REST/GraphQL API, a methodology directive gives agents
+  concrete **directions** (not an answer key) on how to hunt each class: map the API
+  from the JS bundle, brute hidden client routes (`#/administration`, score board),
+  SQLi login-bypass/UNION, JWT alg:none & RS→HS forging, IDOR/BOLA + mass-assignment,
+  path-traversal + poison-null-byte file access, forgot-password/OSINT, exposed
+  `/metrics`, DOM XSS, NoSQL, SSRF, redirect-allowlist bypass, XXE, coupon crypto.
+  Agents still discover and PROVE each issue live.
+
+- **More robust RL.** Per-agent reward is now shaped: strong for a **confirmed**
+  finding (severity × confidence), small for a **needs-review** lead, slight decay
+  for running but finding nothing — so agents that reliably land confirmed
+  high-severity bugs rise to the top of selection over runs (persisted).
+
 - **LLM red-teaming — jailbreaks & prompt injection across scenarios.** 12 new AI
   agents (AI category 18 → **30**; total 417 → **429**) that adversarially test a
   live AI system (LLM app / AI agent / MCP server) the way
