@@ -37,28 +37,38 @@
   #v(2pt)
   #text(15pt, fill: gray)[Penetration Test Report]
   #v(1cm)
-  #text(13pt)[Target: #strong(meta.target)]
+  #text(14pt)[Asset: #strong(meta.asset)]
   #v(4pt)
+  #text(11pt, fill: gray)[#meta.target]
+  #v(2pt)
+  #if meta.tech != "" [ #text(9pt, fill: gray)[Stack: #meta.tech] #v(2pt) ]
+  #v(6pt)
   #text(10pt, fill: gray)[Run #meta.run_id · #meta.generated · models: #meta.model]
   #v(8pt)
   #text(9pt, fill: gray)[by #strong[Joas A Santos] & #strong[Red Team Leaders]]
 ]
 #pagebreak()
 
+// ---- Asset under test ----
+= Asset Under Test
+#table(columns: (auto, 1fr), inset: 6pt, stroke: 0.5pt + rgb("#dddddd"), align: left + horizon,
+  text(9pt, fill: gray)[Asset], text(9pt)[#strong(meta.asset)],
+  text(9pt, fill: gray)[URL / target], text(9pt)[#raw(meta.target)],
+  ..(if meta.tech != "" { (text(9pt, fill: gray)[Technology], text(9pt)[#meta.tech]) } else { () }),
+  ..(if meta.server != "" { (text(9pt, fill: gray)[Server], text(9pt)[#meta.server]) } else { () }),
+)
+#v(8pt)
+
 // ---- Executive summary ----
 = Executive Summary
+#text(10pt)[#meta.exec]
 
 #let counts = (:)
 #for f in findings {
-  counts.insert(f.severity, counts.at(f.severity, default: 0) + 1)
+  if f.status != "needs-review" { counts.insert(f.severity, counts.at(f.severity, default: 0) + 1) }
 }
 #if findings.len() == 0 [
-  No validated findings were produced for this engagement. All candidate issues
-  were either unproven or rejected by multi-model adversarial validation.
 ] else [
-  This engagement produced #strong(str(findings.len())) validated finding(s),
-  each confirmed by multi-model voting.
-
   #v(6pt)
   #grid(columns: 5, gutter: 8pt,
     ..("Critical", "High", "Medium", "Low", "Info").map(s => box(
@@ -84,12 +94,24 @@
     stroke: 0.5pt + rgb("#dddddd"),
     table.header(
       text(weight: "bold")[\#], text(weight: "bold")[Vulnerability],
-      text(weight: "bold")[Severity], text(weight: "bold")[CVSS], text(weight: "bold")[OWASP / CWE],
+      text(weight: "bold")[Severity], text(weight: "bold")[Status], text(weight: "bold")[OWASP / CWE],
     ),
     ..sorted.enumerate().map(((i, f)) => (
-      str(i + 1), f.title, sevbadge(f.severity), f.cvss, f.owasp,
+      str(i + 1), f.title, sevbadge(f.severity),
+      if f.status == "needs-review" { text(8pt, fill: rgb("#8e44ad"))[needs-review] } else { text(8pt, fill: rgb("#27ae60"))[confirmed] },
+      f.owasp,
     )).flatten()
   )
+]
+
+// ---- Test accounts created ----
+#if meta.accounts != "" [
+  #v(8pt)
+  == Test Accounts Created (delete after)
+  #v(3pt)
+  #text(9pt, fill: gray)[Created to reach the authenticated surface. Credentials are in the run vault (.neurosploit/vault/<run-id>.json); delete once testing is complete.]
+  #v(3pt)
+  #block(width: 100%, inset: 8pt, radius: 4pt, fill: rgb("#faf7ff"), text(9pt)[#meta.accounts])
 ]
 
 #v(10pt)
@@ -103,15 +125,18 @@
 #for (i, f) in sorted.enumerate() [
   #block(breakable: false, width: 100%, inset: 10pt, radius: 6pt,
     stroke: (left: 3pt + sevcolor.at(f.severity, default: gray), rest: 0.5pt + rgb("#dddddd")))[
-    #sevbadge(f.severity) #h(6pt) #text(12pt, weight: "bold")[#str(i + 1). #f.title]
+    #sevbadge(f.severity) #h(6pt)
+    #if f.status == "needs-review" [ #box(fill: rgb("#8e44ad"), inset: (x: 5pt, y: 2pt), radius: 3pt, text(fill: white, weight: "bold", size: 8pt)[NEEDS REVIEW]) #h(6pt) ]
+    #text(12pt, weight: "bold")[#str(i + 1). #f.title]
     #v(4pt)
     #table(
       columns: (auto, 1fr, auto, 1fr),
       inset: 4pt, stroke: none, align: left + horizon,
       text(8pt, fill: gray)[Criticality], text(8pt)[#f.severity],
-      text(8pt, fill: gray)[CVSS], text(8pt)[#f.cvss],
+      text(8pt, fill: gray)[Status], text(8pt)[#f.status],
       text(8pt, fill: gray)[OWASP/CWE], text(8pt)[#f.owasp · #f.cwe],
       text(8pt, fill: gray)[Confidence], text(8pt)[#f.votes votes · #str(f.confidence)],
+      text(8pt, fill: gray)[Auth context], text(8pt)[#f.auth],
       text(8pt, fill: gray)[Location], text(8pt)[#raw(f.endpoint)],
       text(8pt, fill: gray)[Agent], text(8pt)[#raw(f.agent)],
     )
@@ -122,3 +147,9 @@
   ]
   #v(8pt)
 ]
+
+// ---- Conclusion ----
+#v(6pt)
+#line(length: 100%, stroke: 0.5pt + gray)
+= Conclusion
+#text(10pt)[#meta.conclusion]

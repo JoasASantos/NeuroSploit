@@ -16,10 +16,17 @@
   refute) — kept with a reason so a human makes the final call. Only zero-support
   noise is dropped. Every report separates the two buckets.
 
-- **Reports in Markdown + JSON (alongside PDF/HTML).** Each run now writes
-  `report.md` (human-readable, confirmed vs needs-review), `report.json`
-  (structured: metadata + confirmed/needs-review/all buckets), plus the existing
-  `report.html` and Typst **PDF** — all via `report::write_all`.
+- **Richer reports in Markdown + JSON (alongside PDF/HTML).** Every run writes
+  `report.md`, `report.json`, `report.html` and the Typst **PDF** via
+  `report::write_all`, now with a full structure: **asset identification** (names
+  the product/organisation + tech stack — e.g. "OWASP Juice Shop [Angular,
+  Express]" — not just the URL), a **written executive summary**, a
+  **vulnerability table** (severity · status · CWE/OWASP), a **test-accounts
+  section** (from the vault, to delete after), detailed confirmed findings, a
+  separate **needs-review** section, and a **written conclusion**. The asset is
+  identified during the run: a deterministic probe extracts the page title,
+  fingerprints the stack, matches known apps, and reads a business/brand hint
+  (`og:site_name` / `application-name` / copyright) into `meta.json`.
 
 - **Sharper agents on modern SPA/REST apps (Juice-Shop-class).** When recon
   detects a JS SPA and/or a REST/GraphQL API, a methodology directive gives agents

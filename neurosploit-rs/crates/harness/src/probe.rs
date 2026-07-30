@@ -76,6 +76,9 @@ pub struct Probe {
     pub cookies: Vec<CookieFlags>,
     pub cors: Cors,
     pub scripts: Vec<String>,
+    /// Business/brand hint extracted from the page (og:site_name, application-name,
+    /// or a "© <Name>" copyright) so the report can name the org, not just the URL.
+    pub brand: String,
     pub forms: usize,
     /// Parsed forms (action/method/fields) so an agent can auto-submit them —
     /// e.g. register a test account to reach the authenticated surface.
@@ -119,6 +122,40 @@ fn attr(tag: &str, name: &str) -> String {
     for q in ["\"", "'"] {
         if let Some(v) = between(tag, &format!("{name}={q}"), q) {
             return v.trim().to_string();
+        }
+    }
+    String::new()
+}
+
+/// Best-effort business/brand name from the page: `og:site_name` or
+/// `application-name` meta, else a "© <Name>" / "Copyright <Name>" notice. Helps
+/// the report name the organisation/product instead of only the URL.
+fn extract_brand(body: &str) -> String {
+    let low = body.to_lowercase();
+    // <meta property="og:site_name" content="X"> / name="application-name"
+    for key in ["og:site_name", "application-name", "author", "twitter:site"] {
+        if let Some(i) = low.find(key) {
+            let seg = &body[i..(i + 220).min(body.len())];
+            if let Some(c) = between(seg, "content=\"", "\"").or_else(|| between(seg, "content='", "'")) {
+                let c = c.trim();
+                if c.len() >= 2 && c.len() <= 60 { return c.to_string(); }
+            }
+        }
+    }
+    // Copyright notice: "© Company" or "Copyright 2024 Company".
+    for marker in ["©", "&copy;", "copyright"] {
+        if let Some(i) = low.find(marker) {
+            let seg: String = body[i..].chars().take(80).collect();
+            // strip the marker + a year, take the first capitalised words.
+            let cleaned = seg.replace('©', " ").replace("&copy;", " ");
+            let cleaned = cleaned.trim_start_matches(|c: char| !c.is_alphabetic());
+            let name: String = cleaned.split(|c: char| c == '<' || c == '.' || c == '|' || c == '\n')
+                .next().unwrap_or("").chars().filter(|c| c.is_alphanumeric() || c.is_whitespace() || *c == '&' || *c == '-')
+                .collect::<String>().trim().to_string();
+            // drop a leading year like "2024 "
+            let name = name.split_whitespace().filter(|w| !w.chars().all(|c| c.is_ascii_digit()))
+                .collect::<Vec<_>>().join(" ");
+            if name.len() >= 2 && name.len() <= 50 && name.to_lowercase() != "copyright" { return name; }
         }
     }
     String::new()
@@ -226,6 +263,7 @@ pub async fn probe(target: &str) -> Probe {
     }
     p.forms = body.matches("<form").count();
     p.form_details = parse_forms(&body);
+    p.brand = extract_brand(&body);
     // linked scripts (src="...")
     for cap in body.split("<script").skip(1) {
         if let Some(src) = between(cap, "src=\"", "\"").or_else(|| between(cap, "src='", "'")) {

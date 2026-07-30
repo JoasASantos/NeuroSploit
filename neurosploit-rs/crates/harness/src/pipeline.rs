@@ -348,6 +348,46 @@ fn looks_like_spa_api(recon: &str) -> bool {
         .iter().filter(|m| r.contains(*m)).count() >= 1
 }
 
+/// Name the ASSET behind the URL — the product + tech stack — so the report says
+/// what was tested, not just an IP/URL. Recognises common known apps by their
+/// page title; otherwise uses the title and the fingerprinted tech.
+fn identify_asset(p: &crate::probe::Probe) -> String {
+    let hay = format!("{} {} {}", p.title, p.tech.join(" "), p.server).to_lowercase();
+    let known = [
+        ("juice shop", "OWASP Juice Shop"), ("juice-shop", "OWASP Juice Shop"),
+        ("dvwa", "DVWA"), ("webgoat", "WebGoat"), ("gruyere", "Google Gruyere"),
+        ("bwapp", "bWAPP"), ("mutillidae", "Mutillidae"), ("gitlab", "GitLab"),
+        ("jenkins", "Jenkins"), ("wordpress", "WordPress"), ("drupal", "Drupal"),
+        ("joomla", "Joomla"), ("grafana", "Grafana"), ("kibana", "Kibana"),
+        ("jira", "Jira"), ("confluence", "Confluence"), ("phpmyadmin", "phpMyAdmin"),
+    ];
+    let product = known.iter().find(|(k, _)| hay.contains(k)).map(|(_, n)| n.to_string());
+    let title = if p.title.trim().is_empty() { String::new() } else { p.title.trim().to_string() };
+    let brand = p.brand.trim().to_string();
+    let tech = if p.tech.is_empty() { String::new() } else { format!(" [{}]", p.tech.join(", ")) };
+    // Prefer a KNOWN product; else the org/brand from the page; else the title.
+    let name = product
+        .or_else(|| if brand.is_empty() { None } else { Some(brand) })
+        .or_else(|| if title.is_empty() { None } else { Some(title) });
+    match name {
+        Some(n) => format!("{n}{tech}"),
+        None => if tech.is_empty() { "unidentified web asset".into() } else { format!("web asset{tech}") },
+    }
+}
+
+/// Write `meta.json` (asset, tech, server, title) into the run dir so the report
+/// generator can name the asset and its stack instead of only the URL.
+fn write_meta(cfg: &RunConfig, p: &crate::probe::Probe, asset: &str) {
+    let Some(dir) = cfg.workdir.as_deref() else { return };
+    let meta = serde_json::json!({
+        "target": cfg.target, "asset": asset, "title": p.title, "brand": p.brand,
+        "tech": p.tech, "server": p.server, "status": p.status,
+    });
+    if let Ok(j) = serde_json::to_string_pretty(&meta) {
+        let _ = std::fs::write(format!("{}/meta.json", dir.trim_end_matches('/')), j);
+    }
+}
+
 /// Black-box web engagement: recon → parallel exploit → N-model vote → report.
 pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<String>) -> RunOutput {
     pool.set_progress(tx.clone());
@@ -378,7 +418,10 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
             let artifacts = persist(&cfg, "{}", "", &[]);
             return RunOutput { target: cfg.target.clone(), workdir: cfg.workdir.clone().unwrap_or_default(), findings: vec![], agents_ran: vec![], candidates: 0, recon: String::new(), artifacts };
         }
-        let _ = tx.send(format!("✓ target is UP (HTTP {}) — starting recon", p.status)).await;
+        // Identify the ASSET (product + stack), not just the URL, for the report.
+        let asset = identify_asset(&p);
+        let _ = tx.send(format!("✓ target is UP (HTTP {}) — {} — starting recon", p.status, asset)).await;
+        write_meta(&cfg, &p, &asset);
         crate::probe::probe_json(&p)
     };
     let recon = if cfg.offline {
@@ -1267,7 +1310,8 @@ fn persist(cfg: &RunConfig, recon: &str, transcript: &str, findings: &[Finding])
     }
     put("findings.json", serde_json::to_string_pretty(findings).unwrap_or_else(|_| "[]".into()));
     put("findings.md", findings_md(&cfg.target, findings));
-    put("report.html", report::html(&cfg.target, findings));
+    let meta = cfg.workdir.as_deref().map(|d| report::read_meta(Path::new(d))).unwrap_or_default();
+    put("report.html", report::html(&cfg.target, findings, &meta));
     written
 }
 
