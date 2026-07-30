@@ -163,6 +163,10 @@ pub struct RunConfig {
     /// Off by default. Account creation is still capped by the safety guardrail.
     #[serde(default)]
     pub temp_email: bool,
+    /// Directory for the credential vault (created test-account secrets). Set by
+    /// the app to `<cwd>/.neurosploit/vault`; falls back to the run workdir.
+    #[serde(default)]
+    pub vault_dir: Option<String>,
 }
 
 fn default_vote() -> usize {
@@ -202,6 +206,7 @@ impl RunConfig {
             user_agent: None,
             recon_intensity: 3,
             temp_email: false,
+            vault_dir: None,
         }
     }
 }

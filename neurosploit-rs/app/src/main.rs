@@ -699,6 +699,12 @@ pub(crate) fn spawn_engagement(base: &Path, mut cfg: RunConfig, mcp: bool, mode:
     std::fs::create_dir_all(&workdir).ok();
     cfg.workdir = Some(workdir.display().to_string());
     cfg.rl_path = Some(base.join("data").join("rl_state_rs.json").display().to_string());
+    // Credential vault lives in the project's .neurosploit store (persistent),
+    // NOT the transient run dir, so secrets are kept in one known place.
+    let vault_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join(".neurosploit").join("vault");
+    std::fs::create_dir_all(&vault_dir).ok();
+    cfg.vault_dir = Some(vault_dir.display().to_string());
     // PoC scratch dir: agents write custom exploit scripts here (see doctrine).
     let pocs = workdir.join("pocs");
     std::fs::create_dir_all(&pocs).ok();
@@ -726,6 +732,7 @@ pub(crate) fn spawn_engagement(base: &Path, mut cfg: RunConfig, mcp: bool, mode:
     println!("  │  target : {}", cfg.target);
     println!("  │  models : {}", cfg.models.join(", "));
     println!("  │  output : {}", workdir.display());
+    println!("  │  vault  : {}/{run_id}.json (created test-account credentials; masked in the report)", vault_dir.display());
     if let Mode::Grey = mode {
         println!("  │  repo   : {}", cfg.repo.clone().unwrap_or_default());
     }

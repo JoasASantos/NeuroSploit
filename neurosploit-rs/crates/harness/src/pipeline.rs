@@ -195,9 +195,7 @@ many registrations, report it as a LEAD and STOP rather than mass-creating accou
 /// engagement prompts so created accounts are logged for cleanup and findings
 /// are labelled authenticated vs unauthenticated.
 fn engagement_ops(cfg: &RunConfig) -> String {
-    let vault = cfg.workdir.as_deref()
-        .map(|d| format!("{}/vault.jsonl", d.trim_end_matches('/')))
-        .unwrap_or_else(|| "the run directory's vault.jsonl".into());
+    let (vault, _) = vault_paths(cfg);
     let temp = if cfg.temp_email {
         "DISPOSABLE EMAIL (enabled): if registration requires an email confirmation code/link, you MAY use the free \
          mail.tm API (no key) — `POST https://api.mail.tm/accounts` {address,password} to create an inbox (get a \
@@ -224,6 +222,23 @@ fn engagement_ops(cfg: &RunConfig) -> String {
          - {temp}\n\n"
     )
 }
+/// Resolve the vault directory + this run's file stem. Prefer `.neurosploit/vault`
+/// (persistent project store) set by the app; fall back to the run workdir. Returns
+/// (jsonl_append_path, json_consolidated_path).
+fn vault_paths(cfg: &RunConfig) -> (String, String) {
+    let dir = cfg.vault_dir.clone()
+        .or_else(|| cfg.workdir.clone())
+        .unwrap_or_else(|| ".".into());
+    let dir = dir.trim_end_matches('/').to_string();
+    let _ = std::fs::create_dir_all(&dir);
+    // Per-run file stem = the run id (workdir basename), so vaults don't collide.
+    let stem = cfg.workdir.as_deref()
+        .and_then(|w| w.trim_end_matches('/').rsplit('/').next())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("vault").to_string();
+    (format!("{dir}/{stem}.jsonl"), format!("{dir}/{stem}.json"))
+}
+
 /// One credential the run generated (a created test account). Stored in the run
 /// vault so the operator can consult it and later delete the account.
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -239,10 +254,9 @@ struct VaultEntry {
 /// Read the agent-appended `vault.jsonl` (one JSON object per created account)
 /// from the run dir. Best-effort: skips malformed lines. `_findings` reserved for
 /// future correlation. Deduped by account identity.
-fn collect_vault(dir: &str, _findings: &[Finding]) -> Vec<VaultEntry> {
-    let path = format!("{}/vault.jsonl", dir.trim_end_matches('/'));
+fn collect_vault(path: &str, _findings: &[Finding]) -> Vec<VaultEntry> {
     let mut out: Vec<VaultEntry> = Vec::new();
-    if let Ok(txt) = std::fs::read_to_string(&path) {
+    if let Ok(txt) = std::fs::read_to_string(path) {
         for line in txt.lines() {
             let line = line.trim();
             if line.is_empty() { continue; }
@@ -312,6 +326,16 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
     } else {
         let p = crate::probe::probe(&cfg.target).await;
         let _ = tx.send(crate::probe::probe_summary(&p)).await;
+        // Liveness preflight: if the target never answered (connect failed /
+        // status 0), don't waste agents on a dead host — abort with a clear note.
+        if p.status == 0 {
+            let why = p.notes.iter().find(|n| n.contains("failed")).cloned()
+                .unwrap_or_else(|| "no HTTP response".into());
+            let _ = tx.send(format!("✗ target unreachable — {} is DOWN ({why}). Aborting; check the URL/port or that the service is up.", cfg.target)).await;
+            let artifacts = persist(&cfg, "{}", "", &[]);
+            return RunOutput { target: cfg.target.clone(), workdir: cfg.workdir.clone().unwrap_or_default(), findings: vec![], agents_ran: vec![], candidates: 0, recon: String::new(), artifacts };
+        }
+        let _ = tx.send(format!("✓ target is UP (HTTP {}) — starting recon", p.status)).await;
         crate::probe::probe_json(&p)
     };
     let recon = if cfg.offline {
@@ -354,10 +378,21 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
         heuristic_select(&ranked, &recon, &focus, cap)
     };
     // Dedup: never run the same agent twice in one engagement.
-    let selected: Vec<Agent> = {
+    let mut selected: Vec<Agent> = {
         let mut seen = std::collections::HashSet::new();
         selected.into_iter().filter(|a| seen.insert(a.name.clone())).collect()
     };
+    // No creds given → always run the registration/form agent FIRST so the run
+    // reaches the authenticated surface (and the operator sees it happen). It
+    // self-registers one test account under the anti-flood guardrail.
+    if cfg.auth.as_deref().unwrap_or("").trim().is_empty() {
+        if let Some(reg) = lib.vulns.iter().find(|a| a.name == "account_registration_and_forms") {
+            if !selected.iter().any(|a| a.name == reg.name) {
+                let _ = tx.send("no creds set — running account_registration_and_forms first to reach the authenticated surface".into()).await;
+                selected.insert(0, reg.clone());
+            }
+        }
+    }
     let _ = tx
         .send(format!("intelligently selected {} agent(s) matching recon: {}", selected.len(),
             selected.iter().map(|a| a.name.clone()).collect::<Vec<_>>().join(", ")))
@@ -1022,8 +1057,9 @@ async fn finish(cfg: RunConfig, _lib: &Library, recon: String, transcript: Strin
     // vault.jsonl AND any finding that carried a generated `secret`) into a single
     // vault.json the operator can consult, then MASK the secret in the report and
     // add a cleanup summary listing the accounts to delete.
-    if let Some(dir) = cfg.workdir.clone() {
-        let mut vault = collect_vault(&dir, &findings);
+    {
+        let (jsonl, path) = vault_paths(&cfg);
+        let mut vault = collect_vault(&jsonl, &findings);
         // Fold in secrets captured on findings (dedup by account identity).
         for f in &findings {
             if !f.secret.is_empty() && !f.account.is_empty()
@@ -1035,7 +1071,6 @@ async fn finish(cfg: RunConfig, _lib: &Library, recon: String, transcript: Strin
             }
         }
         if !vault.is_empty() {
-            let path = format!("{}/vault.json", dir.trim_end_matches('/'));
             if let Ok(j) = serde_json::to_string_pretty(&vault) { let _ = std::fs::write(&path, j); }
             let _ = tx.send(format!(
                 "notify: 🔐 vault: {} test account(s) saved → {} — DELETE these after the engagement",

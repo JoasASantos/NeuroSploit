@@ -326,7 +326,7 @@ agents know exactly what to submit.
   account they made. A test that would need many sign-ups is reported as a lead and
   stopped.
 - **Credential vault:** every account/credential the run generates is written to
-  **`<run-dir>/vault.json`** so you can consult the passwords later. Secrets are
+  **`.neurosploit/vault/<run-id>.json`** so you can consult the passwords later. Secrets are
   **masked in the report** and live only in the vault.
 - **Cleanup list:** the report includes an Info finding **"Test accounts created
   (DELETE after)"** listing each account and exactly **how it was created** — so you

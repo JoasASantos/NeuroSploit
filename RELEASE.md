@@ -37,17 +37,23 @@
   as a finder or in the validator voting panel, e.g.
   `--model anthropic:claude-opus-5 --model moonshot:kimi-k3`.
 
+- **Liveness preflight.** Before recon, the run confirms the target actually
+  answers HTTP; a dead host prints `✗ target unreachable — … is DOWN` and aborts
+  instead of running agents against nothing. A reachable host prints `✓ target is UP`.
+
 - **Account registration & form analysis (+1 agent → total 430).** A new
   `account_registration_and_forms` agent lets NeuroSploit reach the authenticated
   surface on its own: it analyzes the app's forms (the deterministic probe now
   extracts each `<form>`'s action/method/fields/kind/CSRF) and creates a benign
   test account with **curl** or the **Playwright browser** when no creds are given.
+  When no `--auth`/creds are set on a web run, this agent is **run first
+  automatically** so the authenticated surface is always attempted (and visible).
   - **Anti-flood guardrail (hard):** at most **2 accounts per engagement**, never
     looping/scripting/batching the register endpoint or flooding the database —
     reuse the account made; a test needing many sign-ups is reported as a lead and
     stopped. Enforced in `SAFETY_DOCTRINE` (all flows) and the agent.
   - **Credential vault:** every generated credential is saved to
-    **`<run-dir>/vault.json`** for the operator to consult; secrets are **masked in
+    **`.neurosploit/vault/<run-id>.json`** for the operator to consult; secrets are **masked in
     the report**. The report adds a **"Test accounts created (DELETE after)"**
     cleanup section listing each account and how it was created.
   - **Finding labels:** findings are tagged **`auth_context`**
