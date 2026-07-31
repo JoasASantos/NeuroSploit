@@ -75,11 +75,17 @@ pub fn html(target: &str, findings: &[Finding], meta: &EngagementMeta) -> String
                 "<section class=finding><h3><span class=sev style=background:{}>{}</span> {}. {}{review}</h3>\
                  <div class=m>{} · {} · CVSS {} · votes {} · conf {:.2}</div>\
                  <div class=m>Endpoint: {}</div>{authline}{reviewnote}\
-                 <h4>Payload</h4><pre>{}</pre><h4>Evidence</h4><pre>{}</pre>\
+                 <h4>Payload</h4><pre>{}</pre><h4>Evidence</h4><pre>{}</pre>{shots}\
                  <h4>Impact</h4><p>{}</p><h4>Remediation</h4><p>{}</p></section>",
                 sev_color(&f.severity), esc(&f.severity), i + 1, esc(&f.title),
                 esc(&f.agent), esc(&f.cwe), esc(&f.cvss), esc(&f.votes), f.confidence,
                 esc(&f.endpoint), esc(&f.payload), esc(&f.evidence), esc(&f.impact), esc(&f.remediation),
+                shots = if f.screenshots.is_empty() { String::new() } else {
+                    let imgs: String = f.screenshots.iter()
+                        .map(|p| format!("<figure class=shot><img src=\"{}\" alt=\"proof for {}\"><figcaption>{}</figcaption></figure>",
+                            esc(p), esc(&f.title), esc(p))).collect();
+                    format!("<h4>Proof screenshots</h4><div class=shots>{imgs}</div>")
+                },
                 review = if needs_review(f) { " <span class=sev style=background:#8e44ad>NEEDS REVIEW</span>" } else { "" },
                 reviewnote = if needs_review(f) && !f.review_reason.is_empty() {
                     format!("<div class=m style=color:#8e44ad>⚠ Needs human review — {}</div>", esc(&f.review_reason))
@@ -128,6 +134,9 @@ pub fn html(target: &str, findings: &[Finding], meta: &EngagementMeta) -> String
          .sev{{color:#fff;border-radius:6px;padding:2px 8px;font-size:12px;margin-right:8px}}.m{{color:#666;font-size:12px}}\
          pre{{background:#0f1117;color:#dfe6f3;padding:11px;border-radius:8px;overflow:auto;font-size:12.5px}}\
          h4{{margin:12px 0 3px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:#8b5cf6}}\
+         .shots{{display:flex;flex-wrap:wrap;gap:12px;margin:6px 0}}\
+         .shot{{margin:0;max-width:100%}}.shot img{{max-width:100%;border:1px solid #e3e3e3;border-radius:8px;display:block}}\
+         .shot figcaption{{color:#888;font-size:11px;margin-top:3px;font-family:ui-monospace,Menlo,monospace}}\
          .b{{color:#8b5cf6;font-weight:800}}</style></head><body>\
          <h1><span class=b>NeuroSploit</span> Penetration Test Report</h1>\
          <div class=meta>Asset: <b>{asset}</b> · Target: <b>{t}</b>{techline} · v3.6.5 · multi-model validated</div>\
@@ -188,12 +197,15 @@ pub fn typst_report(target: &str, findings: &[Finding], dir: &Path) -> std::io::
     for f in &sorted {
         let owasp = if f.owasp.is_empty() { f.cwe.clone() } else { f.owasp.clone() };
         let status = if needs_review(f) { "needs-review" } else { "confirmed" };
+        let shots = format!("({})",
+            f.screenshots.iter().map(|p| format!("{},", tq(p))).collect::<String>());
         data.push_str(&format!(
-            "  (severity: {}, title: {}, agent: {}, cwe: {}, owasp: {}, cvss: {}, endpoint: {}, payload: {}, evidence: {}, impact: {}, remediation: {}, votes: {}, confidence: {}, status: {}, auth: {}),\n",
+            "  (severity: {}, title: {}, agent: {}, cwe: {}, owasp: {}, cvss: {}, endpoint: {}, payload: {}, evidence: {}, impact: {}, remediation: {}, votes: {}, confidence: {}, status: {}, auth: {}, screenshots: {}),\n",
             tq(&f.severity), tq(&f.title), tq(&f.agent), tq(&f.cwe), tq(&owasp), tq(&f.cvss),
             tq(&f.endpoint), tq(&f.payload), tq(&f.evidence), tq(&f.impact),
             tq(&f.remediation), tq(&f.votes), f.confidence, tq(status),
             tq(if f.auth_context.is_empty() { "-" } else { &f.auth_context }),
+            shots,
         ));
     }
     data.push_str(")\n\n");
@@ -280,6 +292,10 @@ pub fn markdown(target: &str, findings: &[Finding], meta: &EngagementMeta) -> St
         if !f.endpoint.is_empty() { s.push_str(&format!("**Endpoint:** `{}`\n\n", f.endpoint)); }
         if !f.payload.is_empty() { s.push_str(&format!("**Payload**\n```\n{}\n```\n\n", f.payload)); }
         if !f.evidence.is_empty() { s.push_str(&format!("**Evidence**\n```\n{}\n```\n\n", f.evidence)); }
+        if !f.screenshots.is_empty() {
+            s.push_str("**Proof screenshots**\n\n");
+            for p in &f.screenshots { s.push_str(&format!("![{}]({})\n\n", f.title.replace(']', ")"), p)); }
+        }
         if !f.impact.is_empty() { s.push_str(&format!("**Impact:** {}\n\n", f.impact)); }
         if !f.remediation.is_empty() { s.push_str(&format!("**Remediation:** {}\n\n", f.remediation)); }
         s.push_str("---\n\n");

@@ -70,6 +70,13 @@ pub struct Finding {
     /// "below vote quorum", "no receipt", "failed adversarial refute").
     #[serde(default)]
     pub review_reason: String,
+    /// Proof screenshots for this finding, as paths RELATIVE to the run workdir
+    /// (e.g. "evidence/<finding-id>-1.png"). Populated by the evidence-collection
+    /// pass, which resolves whatever the agent captured and copies it under the
+    /// run's `evidence/` dir with a deterministic, finding-correlated name so the
+    /// report can embed each image next to its vulnerability.
+    #[serde(default)]
+    pub screenshots: Vec<String>,
 }
 
 impl Default for Finding {
@@ -100,6 +107,7 @@ impl Default for Finding {
             secret: String::new(),
             review_status: String::new(),
             review_reason: String::new(),
+            screenshots: Vec::new(),
         }
     }
 }
