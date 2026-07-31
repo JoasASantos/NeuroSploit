@@ -504,6 +504,13 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
         let _ = tx.send("recon: SPA/REST surface detected — applying API-hunting methodology".into()).await;
         SPA_API_DOCTRINE
     } else { "" };
+    // Absolute evidence dir + the screenshot-correlation convention for the prompt.
+    let evidence_dir = cfg.workdir.as_deref().map(|d| {
+        let p = Path::new(d).join("evidence");
+        let _ = std::fs::create_dir_all(&p);
+        std::fs::canonicalize(&p).unwrap_or(p).display().to_string()
+    }).unwrap_or_default();
+    let shots = if evidence_dir.is_empty() { String::new() } else { screenshot_doctrine(&evidence_dir) };
     // Token economy: each agent gets a capped recon context, not the full blob.
     let recon_ctx: String = recon.chars().take(3500).collect();
     let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(selected.iter().cloned())
@@ -512,6 +519,7 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
             let recon = recon_ctx.clone();
             let directives = directives.clone();
             let ops = ops.clone();
+            let shots = shots.clone();
             let txc = tx.clone();
             async move {
                 if pool.stop_exploiting() {
@@ -523,9 +531,10 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
                 let user = format!(
                     "AUTHORIZED engagement — you have explicit permission to test {target}. \
                      Do not ask for confirmation — proceed and PROVE each issue.\n\n\
-                     {directives}{react}{depth}{decision}{spa}{safety}{ops}{doctrine}{body}\n\nWhen done, reply with ONLY a JSON array of confirmed findings (may be empty []). \
-                     Each item: {{id,title,severity,cwe,endpoint,payload,evidence,impact,remediation,confidence,auth_context,account,secret}}. \
+                     {directives}{react}{depth}{decision}{spa}{safety}{ops}{doctrine}{shots}{body}\n\nWhen done, reply with ONLY a JSON array of confirmed findings (may be empty []). \
+                     Each item: {{id,title,severity,cwe,endpoint,payload,evidence,impact,remediation,confidence,auth_context,account,secret,screenshots}}. \
                      `evidence` must contain the concrete proof (request/response excerpt). \
+                     `screenshots` is an array of proof-image paths you saved into the evidence dir (see EVIDENCE SCREENSHOTS above); omit or leave empty when you captured none. \
                      Set `auth_context` to \"authenticated\" or \"unauthenticated\"; set `account` to the test user/role you used (if any); \
                      for a created test account set `secret` to its generated password (it is stored in the run vault and masked in the report).",
                     target = target,
@@ -534,6 +543,7 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
                     depth = DEPTH_DOCTRINE, decision = DECISION_DOCTRINE, spa = spa, safety = SAFETY_DOCTRINE,
                     ops = ops,
                     doctrine = tool_doctrine(mcp_on),
+                    shots = shots,
                     body = ag.user.replace("{target}", &target).replace("{recon_json}", &recon),
                 );
                 match pool.complete_routed(Task::Exploit, &ag.name, &ag.system, &user).await {
@@ -1248,6 +1258,14 @@ async fn finish(cfg: RunConfig, _lib: &Library, recon: String, transcript: Strin
     stamp_attribution(&mut findings);
     // Map findings to OWASP / MITRE / kill-chain stage for the attack graph.
     crate::attack_graph::enrich(&mut findings);
+    // Collect proof screenshots into evidence/<finding-id>-N.png so the report
+    // can embed each image beside its vulnerability.
+    if let Some(dir) = cfg.workdir.as_deref() {
+        let imgs = collect_evidence(&mut findings, Path::new(dir));
+        if imgs > 0 {
+            let _ = tx.send(format!("notify: 📸 {imgs} proof screenshot(s) collected → evidence/")).await;
+        }
+    }
 
     // RL update (robust reward shaping): an agent's reward per run =
     //   + strong for each CONFIRMED finding (severity × confidence),
@@ -1391,10 +1409,126 @@ fn extract_findings(text: &str, agent: &str) -> Vec<Finding> {
                 confidence: conf(o.get("confidence")),
                 validated: false,
                 votes: String::new(),
+                screenshots: screenshot_refs(o),
                 ..Default::default()
             })
         })
         .collect()
+}
+
+/// Pull screenshot path(s) an agent referenced in its finding JSON. Accepts a
+/// single `screenshot` string or a `screenshots` array (any scalar coerced to
+/// string). These are raw refs (whatever the agent named/where it saved); the
+/// evidence-collection pass later resolves and renames them to stable,
+/// finding-correlated paths under the run's `evidence/` dir.
+fn screenshot_refs(o: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+    let mut out = Vec::new();
+    match o.get("screenshots") {
+        Some(serde_json::Value::Array(a)) => {
+            for v in a {
+                let p = match v {
+                    serde_json::Value::String(t) => t.trim().to_string(),
+                    _ => v.to_string(),
+                };
+                if !p.is_empty() { out.push(p); }
+            }
+        }
+        Some(serde_json::Value::String(t)) if !t.trim().is_empty() => out.push(t.trim().to_string()),
+        _ => {}
+    }
+    let one = s(o, "screenshot");
+    if !one.is_empty() && !out.contains(&one) { out.push(one); }
+    out
+}
+
+/// The convention prompt that tells agents WHERE to drop proof screenshots and
+/// HOW to reference them, so each image can be correlated back to its finding.
+/// `evidence_dir` is the absolute `<workdir>/evidence` path (already created).
+fn screenshot_doctrine(evidence_dir: &str) -> String {
+    format!(
+        "EVIDENCE SCREENSHOTS (correlate each image to its finding):\n\
+         - When you PROVE a finding visually (XSS firing, an admin panel reached, \
+           data exposed, a client-side auth bypass), capture a screenshot as proof.\n\
+         - Save every proof PNG into this exact directory: `{dir}` (it already exists). \
+           Name each file after the vulnerability using a short kebab-case slug, e.g. \
+           `{dir}/reflected-xss-search.png`, `{dir}/idor-order-42.png`.\n\
+         - In that finding's JSON, add a `screenshots` array listing the file paths you saved \
+           (absolute like `{dir}/idor-order-42.png`, or just the basename `idor-order-42.png`). \
+           One image per distinct proof; multiple allowed. Omit the field when you have no image.\n\
+         - The screenshot must belong to THAT finding — never reuse one image across unrelated findings.\n\n",
+        dir = evidence_dir,
+    )
+}
+
+/// Resolve, dedupe and copy each finding's referenced proof screenshots into
+/// `<workdir>/evidence/<finding-id>-<n>.png`, rewriting `Finding.screenshots` to
+/// those stable, run-relative paths. Unresolved refs are dropped (so the report
+/// never embeds a missing image). Returns the number of images collected.
+fn collect_evidence(findings: &mut [Finding], workdir: &Path) -> usize {
+    let evidence = workdir.join("evidence");
+    if std::fs::create_dir_all(&evidence).is_err() { return 0; }
+    let mut total = 0usize;
+    for f in findings.iter_mut() {
+        if f.screenshots.is_empty() { continue; }
+        let slug = slugify(if f.id.is_empty() { &f.title } else { &f.id });
+        let mut stable = Vec::new();
+        let mut n = 0usize;
+        for raw in f.screenshots.clone() {
+            let Some(src) = resolve_screenshot(&raw, workdir, &evidence) else { continue };
+            n += 1;
+            let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("png").to_lowercase();
+            let fname = format!("{slug}-{n}.{ext}");
+            let dst = evidence.join(&fname);
+            // Copy unless the agent already wrote it exactly there.
+            let ok = src == dst || std::fs::copy(&src, &dst).is_ok();
+            if ok {
+                stable.push(format!("evidence/{fname}"));
+                total += 1;
+            }
+        }
+        stable.dedup();
+        f.screenshots = stable;
+    }
+    total
+}
+
+/// Find the actual file an agent referenced, trying the sensible locations a
+/// screenshot could have landed in: absolute, relative to the workdir, inside
+/// the evidence dir, or by basename in the evidence dir / `/tmp`.
+fn resolve_screenshot(raw: &str, workdir: &Path, evidence: &Path) -> Option<PathBuf> {
+    let is_img = |p: &Path| p.is_file()
+        && matches!(p.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref(),
+                    Some("png" | "jpg" | "jpeg" | "webp" | "gif"));
+    let base = Path::new(raw).file_name().map(PathBuf::from);
+    let mut cands: Vec<PathBuf> = vec![
+        PathBuf::from(raw),
+        workdir.join(raw),
+        evidence.join(raw),
+    ];
+    if let Some(b) = &base {
+        cands.push(evidence.join(b));
+        cands.push(workdir.join(b));
+        cands.push(Path::new("/tmp").join(b));
+    }
+    cands.into_iter().find(|p| is_img(p))
+}
+
+/// Filesystem-safe kebab slug for correlating an image filename to a finding.
+fn slugify(s: &str) -> String {
+    let mut out = String::new();
+    let mut dash = false;
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            dash = false;
+        } else if !dash && !out.is_empty() {
+            out.push('-');
+            dash = true;
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    let slug: String = trimmed.chars().take(48).collect();
+    if slug.is_empty() { "finding".into() } else { slug }
 }
 
 /// Coerce any JSON scalar to a trimmed string.
@@ -1810,4 +1944,53 @@ pub async fn run_skills_audit(cfg: RunConfig, lib: &Library, pool: &ModelPool, t
     let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
     let findings = validate(candidates, pool, CODE_VOTE_SYS, cfg.vote_n, &tx).await;
     finish(cfg, lib, "{}".into(), transcript, findings, agents, &mut rl, crate::grounding::GroundMode::Symbolic, context, tx).await
+}
+
+#[cfg(test)]
+mod evidence_tests {
+    use super::*;
+    use crate::types::Finding;
+
+    fn write_png(p: &Path) {
+        // Minimal valid 1x1 PNG.
+        const PNG: &[u8] = &[
+            0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0x00,0x00,0x00,0x0d,0x49,0x48,0x44,0x52,
+            0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x01,0x08,0x02,0x00,0x00,0x00,0x90,0x77,0x53,
+            0xde,0x00,0x00,0x00,0x0c,0x49,0x44,0x41,0x54,0x08,0xd7,0x63,0xf8,0xcf,0xc0,0x00,
+            0x00,0x00,0x03,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x49,0x45,0x4e,
+            0x44,0xae,0x42,0x60,0x82,
+        ];
+        std::fs::write(p, PNG).unwrap();
+    }
+
+    #[test]
+    fn slugify_correlates_filename_to_finding() {
+        assert_eq!(slugify("Reflected XSS in /search?q="), "reflected-xss-in-search-q");
+        assert_eq!(slugify("IDOR \u{2014} order #42"), "idor-order-42");
+        assert_eq!(slugify("!!!"), "finding");
+    }
+
+    #[test]
+    fn collect_evidence_resolves_and_renames_by_finding_id() {
+        let base = std::env::temp_dir().join(format!("nrs-ev-{}", std::process::id()));
+        let wd = base.join("run");
+        let ev = wd.join("evidence");
+        std::fs::create_dir_all(&ev).unwrap();
+        write_png(&ev.join("whatever-agent-named-it.png"));
+        let mut fs = vec![Finding {
+            id: "xss-search".into(),
+            title: "Reflected XSS".into(),
+            screenshots: vec!["whatever-agent-named-it.png".into()],
+            ..Default::default()
+        }];
+        let n = collect_evidence(&mut fs, &wd);
+        assert_eq!(n, 1);
+        assert_eq!(fs[0].screenshots, vec!["evidence/xss-search-1.png".to_string()]);
+        assert!(wd.join("evidence/xss-search-1.png").is_file());
+        let mut miss = vec![Finding { id: "x".into(), title: "t".into(),
+            screenshots: vec!["nope.png".into()], ..Default::default() }];
+        assert_eq!(collect_evidence(&mut miss, &wd), 0);
+        assert!(miss[0].screenshots.is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

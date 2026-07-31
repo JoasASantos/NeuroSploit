@@ -143,6 +143,17 @@
     #v(4pt) #strong[Description / Impact] #linebreak() #text(9pt)[#f.impact]
     #v(4pt) #strong[Proof of Concept] #linebreak() #raw(f.payload)
     #v(3pt) #strong[Evidence] #linebreak() #raw(f.evidence)
+    #let shots = f.at("screenshots", default: ())
+    #if shots.len() > 0 [
+      #v(4pt) #strong[Proof Screenshots]
+      #for sp in shots [
+        #v(3pt)
+        #block(breakable: false, width: 100%)[
+          #box(stroke: 0.5pt + rgb("#dddddd"), radius: 4pt, clip: true, image(sp, width: 100%))
+          #v(2pt) #text(7pt, fill: gray, font: "Menlo")[#sp]
+        ]
+      ]
+    ]
     #v(3pt) #strong[Remediation] #linebreak() #text(9pt)[#f.remediation]
   ]
   #v(8pt)
