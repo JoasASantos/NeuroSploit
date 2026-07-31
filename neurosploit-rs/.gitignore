@@ -1,0 +1,10 @@
+/target
+# run artifacts / project state
+.neurosploit/
+.playwright-mcp/
+# scan & exploitation debris (never commit)
+*.png
+hs_*.txt
+hs_*.html
+hs_*.xml
+rl_codes.txt
