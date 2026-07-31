@@ -120,6 +120,15 @@ fi
 mkdir -p "$PREFIX"
 ln -sf "$DIR/neurosploit" "$PREFIX/neurosploit"
 ok "Linked → $PREFIX/neurosploit"
+
+# ---- write a source-able env script (activate in the CURRENT shell) ----
+cat > "$DIR/env.sh" <<EOF
+# NeuroSploit env — \`source\` this to use neurosploit in the current shell.
+export NEUROSPLOIT_BASE="$DIR"
+export NEUROSPLOIT="$DIR/neurosploit"
+case ":\$PATH:" in *":$PREFIX:"*) : ;; *) export PATH="$PREFIX:\$PATH" ;; esac
+EOF
+ok "Wrote env script → $DIR/env.sh  (source it to activate now)"
 ok "Version: $(NEUROSPLOIT_BASE="$DIR" "$DIR/neurosploit" --version 2>/dev/null || echo neurosploit)"
 
 # ---- persist env (PATH + NEUROSPLOIT_BASE) so it runs from any folder ----
@@ -152,8 +161,9 @@ for t in curl nmap rustscan ffuf node npx typst; do
 done
 
 echo
-ok "Installed. Open a NEW terminal — or run now with:"
-echo "      export NEUROSPLOIT_BASE=\"$DIR\"; export PATH=\"$PREFIX:\$PATH\""
+ok "Installed. Open a NEW terminal — or activate now with:"
+echo "      source \"$DIR/env.sh\""
+echo "  (equivalently: export NEUROSPLOIT_BASE=\"$DIR\"; export PATH=\"$PREFIX:\$PATH\")"
 echo "  then, from ANY folder:"
 echo "      neurosploit                 # interactive session"
 echo "      neurosploit run http://testphp.vulnweb.com/ --subscription --model anthropic:claude-opus-4-8 -v"
