@@ -1,8 +1,0 @@
-# HackerSec - Robots.txt
-# https://hackersec.com
-
-User-agent: *
-Allow: /
-
-# Sitemap
-Sitemap: https://hackersec.com/sitemap.php
