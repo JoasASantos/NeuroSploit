@@ -35,8 +35,16 @@ Base everything on real observed responses — never assume. Reply with a COMPAC
 /// recon/exploit prompts so the engagement is steered as the user asked.
 fn operator_directives(cfg: &RunConfig) -> String {
     let mut s = String::new();
+    if let Some(obj) = cfg.objective.as_deref().filter(|x| !x.trim().is_empty()) {
+        s.push_str(&format!("ENGAGEMENT OBJECTIVE — the goal and context of this test; let it shape what you prioritise and what counts as impact: {obj}\n"));
+    }
     if let Some(focus) = cfg.instructions.as_deref().filter(|x| !x.trim().is_empty()) {
         s.push_str(&format!("OPERATOR FOCUS — prioritise this: {focus}\n"));
+    }
+    if let Some(oos) = cfg.out_of_scope.as_deref().filter(|x| !x.trim().is_empty()) {
+        s.push_str(&format!(
+            "OUT OF SCOPE — HARD CONSTRAINT, do NOT test, probe, or interact with any of the following; \
+             skip them entirely even if reachable, and never report findings against them: {oos}\n"));
     }
     if let Some(auth) = cfg.auth.as_deref().filter(|x| !x.trim().is_empty()) {
         s.push_str(&format!("AUTHENTICATION — test as an authenticated user; send this with each request: {auth}\n"));

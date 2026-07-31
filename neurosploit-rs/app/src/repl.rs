@@ -141,7 +141,7 @@ struct LiveCheckpoint {
 /// All slash-commands, for Tab completion.
 const COMMANDS: &[&str] = &[
     "/help", "/onboard", "/show", "/config", "/providers", "/model", "/key", "/sub", "/target",
-    "/repo", "/auth", "/creds", "/focus", "/attach", "/context", "/mcp", "/offline",
+    "/repo", "/auth", "/creds", "/focus", "/objective", "/scope-out", "/attach", "/context", "/mcp", "/offline",
     "/votes", "/chain", "/recon", "/tempmail", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/theme", "/clear", "/run", "/stop", "/continue", "/runs", "/results", "/report",
     "/status", "/logs", "/diff", "/retest", "/validate", "/finding", "/expand", "/integrations", "/quit",
 ];
@@ -255,6 +255,10 @@ struct Session {
     roles: Vec<(String, String)>,
     creds: Option<String>,
     instructions: Option<String>,
+    /// Engagement objective / rules-of-engagement context (why + what matters).
+    objective: Option<String>,
+    /// Explicit out-of-scope exclusions the agents must not touch.
+    out_of_scope: Option<String>,
     attachments: Vec<String>,
     color: bool,
     /// Engagement scope from onboarding: web | infra | cloud | ai | skills.
@@ -282,6 +286,8 @@ impl Default for Session {
             roles: Vec::new(),
             creds: None,
             instructions: None,
+            objective: None,
+            out_of_scope: None,
             attachments: Vec::new(),
             color: true,
             scope: "web",
@@ -581,6 +587,28 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
                 if arg.is_empty() { println!("  focus: {}", s.instructions.clone().unwrap_or_else(|| "(none)".into())); continue; }
                 s.instructions = Some(arg.to_string());
                 println!("  focus: {}", s.instructions.clone().unwrap_or_else(|| "(none)".into()));
+            }
+            "/objective" | "/goal" | "/objectives" => {
+                if arg == "clear" { s.objective = None; println!("  objective cleared"); continue; }
+                if arg.is_empty() {
+                    println!("  objective: {}", s.objective.clone().unwrap_or_else(|| "(none) — set the engagement goal/context with /objective <text>".into()));
+                    continue;
+                }
+                s.objective = Some(arg.to_string());
+                println!("  objective set — steers what agents prioritise and what counts as impact");
+            }
+            "/scope-out" | "/outofscope" | "/oos" | "/exclude" => {
+                if arg == "clear" { s.out_of_scope = None; println!("  out-of-scope cleared"); continue; }
+                if arg.is_empty() {
+                    println!("  out-of-scope: {}", s.out_of_scope.clone().unwrap_or_else(|| "(none) — exclude hosts/paths/techniques with /scope-out <text>".into()));
+                    continue;
+                }
+                // Append to any existing exclusions rather than overwrite (comma-joined).
+                s.out_of_scope = Some(match &s.out_of_scope {
+                    Some(prev) if !prev.trim().is_empty() => format!("{prev}; {arg}"),
+                    _ => arg.to_string(),
+                });
+                println!("  out-of-scope: {}  \x1b[2m(hard constraint — agents skip these)\x1b[0m", s.out_of_scope.clone().unwrap_or_default());
             }
             "/attach" => { let n = attach_path(arg.trim_start_matches('@'), &mut s); if n > 0 { println!("  attached ({} total)", s.attachments.len()); } }
             "/context" => {
@@ -939,6 +967,19 @@ fn onboarding(s: &mut Session) {
         }
         _ => { s.scope = "web"; println!("  (manual setup — use /target /repo /creds /auth then /run)"); }
     }
+    // Optional: capture engagement objective + out-of-scope. Both feed the agent
+    // prompts as context (objective) and a hard constraint (out-of-scope). Empty
+    // input skips — nothing is required to /run.
+    let obj = ask_line("  Objective / context for this test [enter to skip]:");
+    if !obj.trim().is_empty() {
+        s.objective = Some(obj.trim().to_string());
+        println!("  ✓ objective set — steers what agents prioritise.");
+    }
+    let oos = ask_line("  Out of scope — hosts/paths/techniques to EXCLUDE [enter to skip]:");
+    if !oos.trim().is_empty() {
+        s.out_of_scope = Some(oos.trim().to_string());
+        println!("  ✓ out-of-scope set — agents will skip these (hard constraint).");
+    }
 }
 
 fn pick_models(s: &mut Session) {
@@ -1052,6 +1093,8 @@ async fn run(base: &Path, s: &Session, history: &mut Vec<RunRecord>) {
             Some(format!("{}\n\nATTACHED CONTEXT:\n{ctx}", instr.unwrap_or_default()))
         }
     };
+    cfg.objective = s.objective.clone();
+    cfg.out_of_scope = s.out_of_scope.clone();
     cfg.auth = s.auth.clone();
     // Multiple /auth identities → prepend the access-control (IDOR/BOLA/BFLA) directive.
     if let Some(rd) = roles_directive(&s.roles) {
@@ -1124,6 +1167,8 @@ async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
     cfg.offline = s.offline;
     cfg.instructions = if s.attachments.is_empty() { s.instructions.clone() }
         else { Some(format!("{}\n\nATTACHED CONTEXT:\n{}", s.instructions.clone().unwrap_or_default(), s.attachments.join("\n\n"))) };
+    cfg.objective = s.objective.clone();
+    cfg.out_of_scope = s.out_of_scope.clone();
     cfg.auth = s.auth.clone();
     if matches!(mode_e, crate::Mode::Grey) { cfg.repo = s.repo.clone(); }
     crate::apply_creds(&mut cfg, s.creds.as_deref()).await;
@@ -1315,6 +1360,10 @@ struct Snapshot {
     auth: Option<String>,
     creds: Option<String>,
     instructions: Option<String>,
+    #[serde(default)]
+    objective: Option<String>,
+    #[serde(default)]
+    out_of_scope: Option<String>,
 }
 fn session_path() -> std::path::PathBuf { proj_dir().join("session.json") }
 fn save_session(s: &Session) {
@@ -1323,6 +1372,7 @@ fn save_session(s: &Session) {
         vote_n: s.vote_n, max_agents: s.max_agents, target: s.target.clone(),
         repo: s.repo.clone(), auth: s.auth.clone(), creds: s.creds.clone(),
         instructions: s.instructions.clone(),
+        objective: s.objective.clone(), out_of_scope: s.out_of_scope.clone(),
     };
     if let Ok(j) = serde_json::to_string_pretty(&snap) { std::fs::write(session_path(), j).ok(); }
 }
@@ -1335,6 +1385,7 @@ fn load_session(s: &mut Session) -> bool {
     s.max_agents = snap.max_agents;
     s.target = snap.target; s.repo = snap.repo; s.auth = snap.auth;
     s.creds = snap.creds; s.instructions = snap.instructions;
+    s.objective = snap.objective; s.out_of_scope = snap.out_of_scope;
     true
 }
 
@@ -1611,6 +1662,8 @@ fn show(s: &Session) {
     println!("  │  proxy    : {}", s.proxy.clone().unwrap_or_else(|| "(none — /proxy for Burp/ZAP)".into()));
     println!("  │  user-agent: {}", s.user_agent.clone().unwrap_or_else(|| "NeuroSploit (default)".into()));
     println!("  │  focus    : {}", s.instructions.clone().unwrap_or_else(|| "(none — tests everything)".into()));
+    println!("  │  objective: {}", s.objective.clone().unwrap_or_else(|| "(none — /objective <goal/context>)".into()));
+    println!("  │  out-scope: {}", s.out_of_scope.clone().unwrap_or_else(|| "(none — /scope-out <exclusions>)".into()));
     println!("  │  opts     : mcp={} offline={} votes={} recon={} chain-depth={} max-agents={} idle-stop={} temp-email={}",
         onoff(s.mcp), onoff(s.offline), s.vote_n, s.recon_intensity, s.chain_depth, s.max_agents,
         if s.idle_secs == 0 { "off".to_string() } else { format!("{}m", s.idle_secs / 60) }, onoff(s.temp_email));
@@ -1648,6 +1701,8 @@ fn help() {
     h("/auth <value>",      "auth header (Bearer/cookie/key). Roles: /auth admin <hdr> · /auth user <hdr>");
     h("/creds <file.yaml>", "creds: jwt/header/cookie/login + ssh/windows + aws/gcp/azure + roles");
     h("/focus <text>",      "steer the tests (or just type the instruction)");
+    h("/objective <text>",  "engagement goal/context — shapes what agents prioritise & count as impact");
+    h("/scope-out <text>",  "out-of-scope exclusions — hard constraint, agents skip these (clear to reset)");
     h("@path @dir @f:1-20", "attach a file/folder/line-range to context (Tab → menu)");
     h("/attach <path>",     "attach a file/folder to context");
     h("/context",           "list current attachments");

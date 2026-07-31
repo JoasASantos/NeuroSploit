@@ -140,6 +140,17 @@ pub struct RunConfig {
     /// execution (e.g. "focus on injection and broken access control").
     #[serde(default)]
     pub instructions: Option<String>,
+    /// Engagement objective / rules-of-engagement context: WHY this test is run
+    /// and WHAT matters (e.g. "pre-launch review of the checkout flow; prove any
+    /// path to unauthorized order access"). Prepended to prompts as high-priority
+    /// context so agents understand the goal, not just the surface.
+    #[serde(default)]
+    pub objective: Option<String>,
+    /// Explicit out-of-scope exclusions the agents MUST NOT touch (e.g. hosts,
+    /// paths, techniques, or actions). Rendered as a hard constraint in every
+    /// recon/exploit prompt. Optional; empty means "nothing excluded".
+    #[serde(default)]
+    pub out_of_scope: Option<String>,
     /// Authentication material to use against the target so agents test as an
     /// authenticated user (e.g. "Authorization: Bearer <jwt>" or "Cookie: session=...").
     #[serde(default)]
@@ -209,6 +220,8 @@ impl RunConfig {
             rl_path: None,
             verbose: false,
             instructions: None,
+            objective: None,
+            out_of_scope: None,
             auth: None,
             repo: None,
             pinned: Vec::new(),
