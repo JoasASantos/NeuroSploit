@@ -67,6 +67,13 @@ enum Cmd {
         /// Free-text focus, e.g. "injection and broken access control".
         #[arg(long)]
         focus: Option<String>,
+        /// Engagement objective / context: WHY the test runs and WHAT matters.
+        #[arg(long)]
+        objective: Option<String>,
+        /// Out-of-scope exclusions (hard constraint): hosts/paths/techniques the
+        /// agents must not touch. Repeatable or comma/semicolon-separated.
+        #[arg(long = "out-of-scope")]
+        out_of_scope: Option<String>,
         /// Open a Jira card per finding (needs the jira integration enabled).
         #[arg(long)]
         jira: bool,
@@ -367,7 +374,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        Cmd::Run { url, models, max_agents, vote_n, chain_depth, recon, offline, subscription, mcp, creds, focus, jira, verbose } => {
+        Cmd::Run { url, models, max_agents, vote_n, chain_depth, recon, offline, subscription, mcp, creds, focus, objective, out_of_scope, jira, verbose } => {
             let url = if url.starts_with("http") { url } else { format!("https://{url}") };
             let mut cfg = RunConfig::new(&url);
             cfg.max_agents = max_agents;
@@ -378,6 +385,8 @@ async fn main() -> anyhow::Result<()> {
             cfg.subscription = subscription;
             cfg.verbose = verbose;
             cfg.instructions = focus;
+            cfg.objective = objective;
+            cfg.out_of_scope = out_of_scope;
             if !models.is_empty() {
                 cfg.models = models;
             }
