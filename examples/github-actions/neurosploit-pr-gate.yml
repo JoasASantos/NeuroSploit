@@ -1,0 +1,60 @@
+# NeuroSploit — PR security gate
+#
+# White-box reviews every pull request and BLOCKS the merge when a confirmed
+# finding is critical (configurable). It works two ways at once:
+#   1. `--fail-on` makes the CLI exit non-zero → this required check fails.
+#   2. `--fail-on` also sets a `neurosploit/security` commit status + a
+#      REQUEST_CHANGES review via the API (needs the github integration on).
+#
+# Make it enforce a merge block: Settings → Branches → add a rule on your default
+# branch → "Require status checks to pass" → select **neurosploit-pr-gate**
+# (and/or "Require review from Code Owners" to honor the REQUEST_CHANGES review).
+#
+# Secrets/vars to set (Settings → Secrets and variables → Actions):
+#   ANTHROPIC_API_KEY   a model key (or swap MODEL + the matching key below)
+# GITHUB_TOKEN is provided automatically and is enough for statuses/reviews.
+
+name: neurosploit-pr-gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write   # post the REQUEST_CHANGES review + comment
+  statuses: write        # set the neurosploit/security commit status
+  checks: write
+
+concurrency:
+  group: neurosploit-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    # Skip forks — they don't get the secrets/token needed to review.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Install NeuroSploit
+        run: curl -fsSL https://raw.githubusercontent.com/JoasASantos/NeuroSploit/main/setup.sh | bash
+
+      - name: Enable the GitHub integration (for status + review)
+        run: |
+          export NEUROSPLOIT_BASE="$HOME/.neurosploit-app"
+          "$HOME/.local/bin/neurosploit" integrations enable github
+
+      - name: Review the PR and enforce the gate
+        env:
+          NEUROSPLOIT_BASE: /home/runner/.neurosploit-app
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Change the model + severity threshold to taste.
+          MODEL: anthropic:claude-opus-4-8
+          FAIL_ON: critical
+        run: |
+          "$HOME/.local/bin/neurosploit" pr "${{ github.repository }}" ${{ github.event.pull_request.number }} \
+            --model "$MODEL" \
+            --comment \
+            --fail-on "$FAIL_ON" \
+            -v

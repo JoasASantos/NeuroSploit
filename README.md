@@ -26,31 +26,7 @@
 
 > ⭐ If this is useful, **star the repo** — it helps a lot.
 >
-> 📖 **New here? Read the [full Tutorial & User Guide →](TUTORIAL.md)** — every mode, flag, config and example explained.
-
-> 🆕 **New in v3.6.5 — LLM red-teaming: jailbreaks & prompt injection across scenarios:**
-> **+12 AI agents (→ 30, 429 total)** that adversarially red-team a live AI
-> system the way [hackagent.dev](https://hackagent.dev)-style tooling does —
-> jailbreak techniques (**AdvPrefix**, **PAIR**, **TAP**, **Crescendo**,
-> many-shot, persona/DAN, encoding/obfuscation, refusal-suppression) and
-> prompt-injection scenarios (direct, **indirect** via RAG/web/email/tool output,
-> **goal hijacking**, tool/function-call abuse, system-prompt exfiltration). Each
-> runs an attacker→**LLM-judge** loop — capture the baseline refusal, apply the
-> technique across variants, judge whether the guardrail was truly bypassed —
-> proving it with a **benign, redacted** receipt. `neurosploit aitest <ai-url>`.
-> Also: **self-service test-account registration** — analyzes the app's forms and
-> creates a benign account (curl or Playwright) to reach the **authenticated**
-> surface, with a hard **anti-flood guardrail** (≤2 accounts), a per-run
-> **credential vault** (`vault.json`, secrets masked in the report), a **"delete
-> these accounts" cleanup** section, findings tagged **authenticated /
-> unauthenticated**, and **opt-in disposable email** (`/tempmail`, free mail.tm).
-> **Human-in-the-loop validator:** uncertain findings are now **flagged
-> `needs-review`, not deleted** (only zero-support noise is dropped) so a human
-> makes the final call. **Reports in Markdown + JSON** alongside PDF/HTML. Sharper
-> agents on **modern SPA/REST apps** (a Juice-Shop-class API-hunting methodology)
-> plus **more robust RL** reward shaping. New models: **Claude Opus 5**, **Claude
-> Sonnet 5**, **Kimi K3** (Moonshot → 15 providers). Full history in
-> [RELEASE.md](RELEASE.md).
+> 📖 **New here? Read the [full Tutorial & User Guide →](TUTORIAL.md)** — every mode, flag, config and example explained. Version-by-version changes live in [RELEASE.md](RELEASE.md).
 
 ---
 
@@ -114,6 +90,24 @@ Control TUI**.
   reproducible scripts to the run's `pocs/`), and **rate-limit** testing — all
   under a strict **data-safety/PII guardrail** (no destructive or state-changing
   actions; PII proven with a masked sample, never dumped).
+- 🗣️ **Natural-language REPL** — in the interactive session, just describe what
+  you want, in any language: *"testa https://loja.com com opus, foco em SQLi,
+  fora de escopo /admin, roda"*. A hybrid parser sets target/models/focus/
+  objective/out-of-scope and toggles (Burp, browser, votes, recon depth) and can
+  launch — zero-token deterministic parse for the common shapes, model fallback
+  for anything ambiguous. No flags to memorize.
+- 🔀 **CI/CD PR gate** — `neurosploit pr <repo> <n> --fail-on critical` reviews a
+  pull request, and on a confirmed finding at/above the threshold it **fails the
+  check, sets a `neurosploit/security` commit status, and posts a REQUEST_CHANGES
+  review** — so branch protection blocks the merge. Ready-made GitHub Actions
+  workflows included (PR gate + a **`@neurosploit` mention bot** that runs a scan
+  when a writer comments). See [Integrations](#-integrations-github--gitlab--jira).
+- 🎯 **Engagement objective & out-of-scope** — give the goal/context and hard
+  exclusions in words (`/objective`, `/scope-out`, or `--objective` /
+  `--out-of-scope`); both steer every agent prompt.
+- 📸 **Proof screenshots in reports** — agents capture visual proof per finding
+  (`evidence/<finding-id>-N.png`), embedded beside its vulnerability in the
+  Typst/HTML/Markdown reports.
 - 🕵️ **Burp/ZAP proxy** — `/proxy <url>` (or `/burp`) routes agent traffic
   through your local intercepting proxy so you can inspect & replay in Burp.
 - 🗺️ **Attack graph & kill chain** — findings mapped to OWASP / CWE / MITRE
@@ -212,6 +206,10 @@ neurosploit integrations enable github
 # Review a Pull Request's code (clones the PR head, white-box) and comment back:
 neurosploit pr digininja/DVWA 42 --subscription --model anthropic:claude-opus-4-8 --comment
 
+# Same, but BLOCK the merge on a confirmed critical: fails the check, sets a
+# `neurosploit/security` commit status, and posts a REQUEST_CHANGES review.
+neurosploit pr digininja/DVWA 42 --model anthropic:claude-opus-4-8 --comment --fail-on critical
+
 # Watch a branch and re-review on every new commit:
 neurosploit watch myorg/private-app --branch main --subscription --model anthropic:claude-opus-4-8
 
@@ -226,9 +224,24 @@ neurosploit whitebox https://github.com/myorg/app --jira --subscription --model 
 
 | Integration | What you get | Env vars |
 |-------------|--------------|----------|
-| **GitHub** | private clone · `pr` review + comment · `watch` branch | `GITHUB_TOKEN` |
+| **GitHub** | private clone · `pr` review + comment · **PR gate** (`--fail-on`: fail check + commit status + REQUEST_CHANGES) · `watch` branch | `GITHUB_TOKEN` |
 | **GitLab** | private clone for whitebox/greybox | `GITLAB_TOKEN` |
 | **Jira** | one card per finding (`--jira`) | `JIRA_EMAIL`, `JIRA_API_TOKEN` |
+
+### Automations (GitHub Actions)
+
+Two ready-made workflows ship in [`examples/github-actions/`](examples/github-actions) — copy
+them into your repo:
+
+- **`neurosploit-pr-gate.yml`** — reviews every PR and blocks the merge on a
+  confirmed critical. Make it enforcing: *Settings → Branches → require the
+  `neurosploit-pr-gate` status check* (and/or require review to honor the
+  REQUEST_CHANGES). Set `ANTHROPIC_API_KEY` (or swap the model) in Actions secrets;
+  the built-in `GITHUB_TOKEN` covers statuses/reviews.
+- **`neurosploit-mention.yml`** — comment **`@neurosploit`** on a PR or issue to
+  trigger a scan (only repo writers can). Text after the mention is the
+  instruction (any language): `@neurosploit focus SQLi and IDOR`, or
+  `@neurosploit scan https://staging.app` for a black-box run.
 
 📖 Step-by-step setup for each tool: **[TUTORIAL-INTEGRATION.md](TUTORIAL-INTEGRATION.md)**.
 

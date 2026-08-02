@@ -466,8 +466,10 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
         } else {
             let attached = expand_ats(line, &mut s);
             if attached > 0 { println!("  ({attached} @attachment(s) added to context)"); }
-            let run = handle_nl(line, &mut s).await;
-            if run { ("/run".to_string(), String::new()) } else { continue }
+            match handle_nl(line, &mut s).await {
+                Some(c) => (c.to_string(), String::new()), // "/run" or "/stop"
+                None => continue,
+            }
         };
         let (cmd, arg) = (cmd.as_str(), arg.as_str());
         match cmd {
@@ -1700,8 +1702,9 @@ fn help() {
     println!("\n  \x1b[1mNeuroSploit REPL — commands\x1b[0m");
 
     println!("\n  \x1b[2mNATURAL LANGUAGE (any language — just type, no slash)\x1b[0m");
-    println!("    e.g. \x1b[36mtesta https://loja.com com opus, foco em SQLi, fora de escopo /admin, roda\x1b[0m");
-    println!("    \x1b[2mconfigures target/models/focus/objective/out-of-scope and can launch — hands-free\x1b[0m");
+    println!("    e.g. \x1b[36mtesta https://loja.com com opus, foco em SQLi, fora de escopo /admin, usa burp, roda\x1b[0m");
+    println!("    \x1b[2msets target/models/focus/objective/out-of-scope + toggles (burp·browser·votes·recon),\x1b[0m");
+    println!("    \x1b[2mand can launch or stop — hands-free. Ambiguous phrasing falls back to the model.\x1b[0m");
 
     println!("\n  \x1b[2mTARGET & SCOPE\x1b[0m");
     h("/onboard",           "guided setup: pick scope (web · infra · cloud · ai/llm · skills/n8n)");
@@ -1774,14 +1777,23 @@ struct Intent {
     out_of_scope: Option<String>,
     auth: Option<String>,
     scope: Option<&'static str>,
+    // Toggles/knobs the user can ask for in words.
+    mcp: Option<bool>,          // "usa navegador/browser", "ativa mcp"
+    proxy: Option<String>,      // "manda pro burp", "usa proxy 127.0.0.1:8080"
+    subscription: Option<bool>, // "usa minha assinatura/login"
+    vote_n: Option<usize>,      // "3 votos", "5 votes"
+    recon: Option<usize>,       // "recon profundo/exaustivo", "recon 4"
     run: bool,
+    stop: bool,                 // "para", "stop", "cancela"
 }
 
 impl Intent {
     fn is_empty(&self) -> bool {
         self.target.is_none() && self.repo.is_none() && self.models.is_empty()
             && self.focus.is_none() && self.objective.is_none() && self.out_of_scope.is_none()
-            && self.auth.is_none() && self.scope.is_none() && !self.run
+            && self.auth.is_none() && self.scope.is_none()
+            && self.mcp.is_none() && self.proxy.is_none() && self.subscription.is_none()
+            && self.vote_n.is_none() && self.recon.is_none() && !self.run && !self.stop
     }
     /// Fill any field this intent is missing from `other` (deterministic wins).
     fn merge_from(&mut self, other: Intent) {
@@ -1793,14 +1805,21 @@ impl Intent {
         if self.out_of_scope.is_none() { self.out_of_scope = other.out_of_scope; }
         if self.auth.is_none() { self.auth = other.auth; }
         if self.scope.is_none() { self.scope = other.scope; }
+        if self.mcp.is_none() { self.mcp = other.mcp; }
+        if self.proxy.is_none() { self.proxy = other.proxy; }
+        if self.subscription.is_none() { self.subscription = other.subscription; }
+        if self.vote_n.is_none() { self.vote_n = other.vote_n; }
+        if self.recon.is_none() { self.recon = other.recon; }
         self.run = self.run || other.run;
+        self.stop = self.stop || other.stop;
     }
 }
 
 /// Resolve a natural-language line into session config. Deterministic fast-path
 /// first (0 tokens); if the phrase is ambiguous and a model is available, ask it
-/// to structure the request (works in any language). Returns whether to run now.
-async fn handle_nl(line: &str, s: &mut Session) -> bool {
+/// to structure the request (works in any language). Returns a follow-up command
+/// to execute ("/run" or "/stop"), or None when it only reconfigured.
+async fn handle_nl(line: &str, s: &mut Session) -> Option<&'static str> {
     let (mut intent, confident) = parse_intent_fast(line);
     if !confident && !s.offline {
         if let Some(mi) = parse_intent_model(line, s).await {
@@ -1811,13 +1830,14 @@ async fn handle_nl(line: &str, s: &mut Session) -> bool {
         // Nothing structured found → treat the whole line as focus (old behavior).
         s.instructions = Some(line.to_string());
         println!("  focus set: {line}");
-        return false;
+        return None;
     }
     apply_intent(s, intent)
 }
 
-/// Apply an intent to the session, print a summary, and return `run`.
-fn apply_intent(s: &mut Session, intent: Intent) -> bool {
+/// Apply an intent to the session, print a summary, and return the follow-up
+/// command ("/run" | "/stop") or None.
+fn apply_intent(s: &mut Session, intent: Intent) -> Option<&'static str> {
     let mut set = Vec::new();
     if let Some(t) = intent.target {
         let t = if t.starts_with("http") || t.contains("://") { t } else { format!("https://{t}") };
@@ -1833,19 +1853,32 @@ fn apply_intent(s: &mut Session, intent: Intent) -> bool {
     if let Some(o) = intent.objective { s.objective = Some(o.clone()); set.push(format!("objective=\"{o}\"")); }
     if let Some(x) = intent.out_of_scope { s.out_of_scope = Some(x.clone()); set.push(format!("out-of-scope=\"{x}\"")); }
     if let Some(a) = intent.auth { let a = normalize_auth(&a); s.auth = Some(a.clone()); set.push("auth set".into()); let _ = a; }
-    if set.is_empty() {
+    if let Some(b) = intent.mcp { s.mcp = b; set.push(format!("mcp={}", onoff(b))); }
+    if let Some(p) = intent.proxy {
+        let p = if p.starts_with("http") { p } else { format!("http://{p}") };
+        s.proxy = Some(p.clone()); set.push(format!("proxy={p}"));
+    }
+    if let Some(b) = intent.subscription { s.subscription = b; set.push(format!("subscription={}", onoff(b))); }
+    if let Some(v) = intent.vote_n { s.vote_n = v; set.push(format!("votes={v}")); }
+    if let Some(r) = intent.recon { s.recon_intensity = r.clamp(1, 4); set.push(format!("recon={}", s.recon_intensity)); }
+    if set.is_empty() && !intent.stop {
         println!("  \x1b[2m(understood — nothing to change)\x1b[0m");
-    } else {
+    } else if !set.is_empty() {
         println!("  \x1b[36m⇢ configured\x1b[0m {}", set.join(" · "));
+    }
+    if intent.stop {
+        println!("  \x1b[1;33m⏸ stopping\x1b[0m …");
+        return Some("/stop");
     }
     if intent.run {
         if s.target.is_none() && s.repo.is_none() {
             println!("  \x1b[33m! set a target/repo first — nothing to run yet.\x1b[0m");
-            return false;
+            return None;
         }
         println!("  \x1b[1;35m▶ launching\x1b[0m …");
+        return Some("/run");
     }
-    intent.run
+    None
 }
 
 /// Deterministic, zero-token parse for the common phrasings (PT/EN/ES). Returns
@@ -1872,6 +1905,27 @@ fn parse_intent_fast(line: &str) -> (Intent, bool) {
         "prueba", "probar", "escanea", "ejecuta", "corre", "lanza", "lanzar",
     ];
     if RUN_VERBS.iter().any(|v| word_present(&low, v)) { it.run = true; }
+    // Stop verbs.
+    const STOP_VERBS: &[&str] = &["stop", "para", "pare", "parar", "cancel", "cancela", "cancelar", "aborta", "abortar", "halt", "detén", "detener", "para tudo"];
+    if STOP_VERBS.iter().any(|v| word_present(&low, v)) { it.stop = true; }
+
+    // Spoken toggles/knobs (PT/EN/ES). Only set when clearly mentioned.
+    if word_present(&low, "burp") || low.contains("intercept") { it.proxy = Some("http://127.0.0.1:8080".into()); }
+    if low.contains("browser") || low.contains("navegador") || low.contains("navegou") || low.contains("playwright") || word_present(&low, "mcp") {
+        it.mcp = Some(!(low.contains("sem navegador") || low.contains("no browser") || low.contains("sin navegador")));
+    }
+    if low.contains("assinatura") || low.contains("subscription") || low.contains("meu login") || low.contains("mi cuenta") || low.contains("suscripción") {
+        it.subscription = Some(true);
+    }
+    // "3 votos" / "5 votes" / "2 votos de validação".
+    if let Some(n) = number_before_any(&low, &["voto", "votos", "vote", "votes"]) { it.vote_n = Some(n as usize); }
+    // Recon depth: explicit number 1-4 or a qualitative word.
+    if let Some(n) = number_before_any(&low, &["recon"]) { if (1..=4).contains(&n) { it.recon = Some(n as usize); } }
+    if it.recon.is_none() && low.contains("recon") {
+        if low.contains("exausti") || low.contains("exhaust") { it.recon = Some(4); }
+        else if low.contains("profund") || low.contains("deep") || low.contains("profundo") { it.recon = Some(3); }
+        else if low.contains("rápid") || low.contains("rapid") || low.contains("quick") || low.contains("quick") { it.recon = Some(1); }
+    }
 
     // Keyworded clauses: split on commas/semicolons and classify each chunk.
     let mut residue = 0usize;
@@ -2012,6 +2066,24 @@ fn join_opt(prev: Option<String>, add: &str) -> String {
         Some(p) if !p.trim().is_empty() => format!("{p}; {add}"),
         _ => add.to_string(),
     }
+}
+
+/// First integer that appears immediately before any of `keys` (e.g. "3 votos"
+/// with keys ["votos"] → 3), scanning token pairs. Returns None if not found.
+fn number_before_any(low: &str, keys: &[&str]) -> Option<u64> {
+    let toks: Vec<&str> = low.split(|c: char| !c.is_ascii_alphanumeric()).filter(|t| !t.is_empty()).collect();
+    for w in toks.windows(2) {
+        if keys.iter().any(|k| w[1].starts_with(k)) {
+            if let Ok(n) = w[0].parse::<u64>() { return Some(n); }
+        }
+    }
+    // Also "recon 4" (number AFTER the key).
+    for w in toks.windows(2) {
+        if keys.iter().any(|k| w[0].starts_with(k)) {
+            if let Ok(n) = w[1].parse::<u64>() { return Some(n); }
+        }
+    }
+    None
 }
 
 /// Scan a line for @path tokens, attach each referenced file/dir to context.
@@ -2177,4 +2249,21 @@ mod nl_tests {
         assert!(ids.iter().all(|i| i.contains(':')));
         assert!(ids.iter().any(|i| i.to_lowercase().contains("opus")));
     }
+
+    #[test]
+    fn fast_parse_spoken_toggles() {
+        let (it, _) = parse_intent_fast("testa loja.com com opus, usa burp, 5 votos, recon profundo, roda");
+        assert_eq!(it.proxy.as_deref(), Some("http://127.0.0.1:8080"));
+        assert_eq!(it.vote_n, Some(5));
+        assert_eq!(it.recon, Some(3));
+        assert!(it.run);
+    }
+
+    #[test]
+    fn fast_parse_stop_and_browser() {
+        assert!(parse_intent_fast("para tudo agora").0.stop);
+        assert_eq!(parse_intent_fast("usa o navegador").0.mcp, Some(true));
+        assert_eq!(parse_intent_fast("recon 4 em example.com").0.recon, Some(4));
+    }
+
 }

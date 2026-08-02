@@ -1,7 +1,8 @@
-# NeuroSploit — Integrations Setup Guide (v3.5.3)
+# NeuroSploit — Integrations Setup Guide
 
 Connect NeuroSploit to **GitHub**, **GitLab** and **Jira** so it can review private
-repositories and Pull Requests, watch branches for new code, and file a Jira
+repositories and Pull Requests, **gate merges** on severe findings, watch branches
+for new code, run from a **`@neurosploit`** comment, and file a Jira
 **card per vulnerability**.
 
 > ⚠️ **Authorized testing only.** Use integrations against code/projects you own or
@@ -100,9 +101,50 @@ neurosploit integrations enable github
   ```
   It polls the branch tip via the GitHub API and runs a white-box review whenever
   the SHA changes (Ctrl-C to stop).
+- **Gate a Pull Request** — block the merge when a confirmed finding is severe:
+  ```bash
+  neurosploit pr myorg/private-app 128 \
+    --model anthropic:claude-opus-4-8 --comment --fail-on critical
+  ```
+  `--fail-on <critical|high|medium|low>` does three things when a **confirmed**
+  finding is at/above the threshold: the CLI **exits non-zero** (so a CI check
+  fails), it sets a **`neurosploit/security` commit status** of `failure` on the
+  PR head, and it submits a **REQUEST_CHANGES** review. `needs-review` findings
+  never trip the gate — only confirmed ones do.
 
 **GitHub Enterprise:** `/integrations setup github` and set the API base to your
 GHE URL (e.g. `https://ghe.mycorp.com/api/v3`).
+
+### 3.1 Automations — GitHub Actions
+
+Two workflows ship in [`examples/github-actions/`](examples/github-actions). Copy them into
+your repo and add an `ANTHROPIC_API_KEY` Actions secret (or swap `MODEL` for a
+provider you have a key for). The built-in `GITHUB_TOKEN` already covers commit
+statuses, reviews and comments.
+
+**PR gate — `neurosploit-pr-gate.yml`**
+Runs on every pull request, reviews the code, and enforces the gate:
+```bash
+neurosploit pr "$REPO" "$PR_NUMBER" --model "$MODEL" --comment --fail-on critical -v
+```
+To make it actually block merges: *repo Settings → Branches → Branch protection
+rule* on your default branch → **Require status checks to pass** → select
+**`neurosploit-pr-gate`**. Add **Require a pull request review** to also honor the
+REQUEST_CHANGES review it posts.
+
+**`@neurosploit` mention bot — `neurosploit-mention.yml`**
+Comment `@neurosploit` on a PR or issue to trigger a scan. Only users with
+**write** access can trigger it (a permission check guards the model budget).
+Everything after the mention is the instruction, in **any language**:
+
+| Comment | Effect |
+|---------|--------|
+| `@neurosploit` | white-box review of this PR (blocks on critical) |
+| `@neurosploit focus SQLi and IDOR` | same, steered by the focus |
+| `@neurosploit scan https://staging.app` | black-box test of that URL |
+| `@neurosploit foco em IDOR, fora de escopo /admin` | steered review (Portuguese) |
+
+The bot reacts 👀 to acknowledge, then posts results back as a comment.
 
 ---
 
