@@ -56,6 +56,33 @@ fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.trim().is_empty())
 }
 
+/// Severity as a numeric rank (Critical=4 … Info=0) for gate comparisons.
+pub fn severity_rank(s: &str) -> u8 {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "critical" => 4, "high" => 3, "medium" => 2, "low" => 1, _ => 0,
+    }
+}
+
+/// The single worst confirmed severity across findings (skips needs-review), as
+/// a rank. 0 when nothing confirmed.
+pub fn worst_confirmed_rank(findings: &[Finding]) -> u8 {
+    findings.iter()
+        .filter(|f| f.review_status != "needs-review")
+        .map(|f| severity_rank(&f.severity))
+        .max().unwrap_or(0)
+}
+
+/// Does any CONFIRMED finding meet/exceed `threshold` (a severity word)? This is
+/// the CI gate: true → the PR should be blocked. An unknown threshold disables
+/// the gate (returns false).
+pub fn gate_trips(findings: &[Finding], threshold: &str) -> bool {
+    let t = severity_rank(threshold);
+    if t == 0 && !matches!(threshold.trim().to_ascii_lowercase().as_str(), "low" | "info") {
+        return false; // unknown threshold word → no gate
+    }
+    worst_confirmed_rank(findings) >= t
+}
+
 fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -119,6 +146,63 @@ impl Integrations {
             return Err(anyhow!("github comment failed: {} {}", resp.status(), resp.text().await.unwrap_or_default()));
         }
         Ok(())
+    }
+
+    /// Set a GitHub commit status (Checks-style) so branch protection can BLOCK a
+    /// merge on a failing state. `state` ∈ success|failure|error|pending. `context`
+    /// names the check (e.g. "neurosploit/security"). Requires a token with
+    /// `repo:status` (or `statuses:write` on fine-grained PATs).
+    pub async fn github_set_status(&self, repo: &str, sha: &str, state: &str,
+                                   context: &str, description: &str, target_url: Option<&str>) -> Result<()> {
+        let tok = self.github_token().ok_or_else(|| anyhow!("{} not set", self.github.token_env))?;
+        let url = format!("{}/repos/{}/statuses/{}", self.github.api.trim_end_matches('/'), repo, sha);
+        // GitHub caps status description at 140 chars.
+        let desc: String = description.chars().take(140).collect();
+        let mut body = serde_json::json!({ "state": state, "context": context, "description": desc });
+        if let Some(u) = target_url { body["target_url"] = serde_json::json!(u); }
+        let resp = client().post(&url)
+            .header("User-Agent", "NeuroSploit")
+            .header("Accept", "application/vnd.github+json")
+            .bearer_auth(tok)
+            .json(&body)
+            .send().await?;
+        if !resp.status().is_success() {
+            return Err(anyhow!("github status failed: {} {}", resp.status(), resp.text().await.unwrap_or_default()));
+        }
+        Ok(())
+    }
+
+    /// Submit a PR review. `event` ∈ APPROVE | REQUEST_CHANGES | COMMENT. Used to
+    /// REQUEST_CHANGES when critical/high findings land — combined with a "require
+    /// review" branch rule, this blocks the merge until a human overrides.
+    pub async fn github_pr_review(&self, repo: &str, number: u64, event: &str, body: &str) -> Result<()> {
+        let tok = self.github_token().ok_or_else(|| anyhow!("{} not set", self.github.token_env))?;
+        let url = format!("{}/repos/{}/pulls/{}/reviews", self.github.api.trim_end_matches('/'), repo, number);
+        let resp = client().post(&url)
+            .header("User-Agent", "NeuroSploit")
+            .header("Accept", "application/vnd.github+json")
+            .bearer_auth(tok)
+            .json(&serde_json::json!({ "event": event, "body": body }))
+            .send().await?;
+        if !resp.status().is_success() {
+            return Err(anyhow!("github review failed: {} {}", resp.status(), resp.text().await.unwrap_or_default()));
+        }
+        Ok(())
+    }
+
+    /// Head commit SHA of a PR (needed to attach a commit status to the PR tip).
+    pub async fn github_pr_head_sha(&self, repo: &str, number: u64) -> Result<String> {
+        let url = format!("{}/repos/{}/pulls/{}", self.github.api.trim_end_matches('/'), repo, number);
+        let mut req = client().get(&url)
+            .header("User-Agent", "NeuroSploit")
+            .header("Accept", "application/vnd.github+json");
+        if let Some(t) = self.github_token() { req = req.bearer_auth(t); }
+        let resp = req.send().await?;
+        if !resp.status().is_success() {
+            return Err(anyhow!("github PR API {}: {}", resp.status(), resp.text().await.unwrap_or_default()));
+        }
+        let v: serde_json::Value = resp.json().await?;
+        v["head"]["sha"].as_str().map(|s| s.to_string()).ok_or_else(|| anyhow!("no head.sha in response"))
     }
 
     /// Latest commit SHA of a branch via the GitHub API (for `watch`).
@@ -195,5 +279,36 @@ impl Integrations {
                 if self.jira.project_key.is_empty() { "-" } else { &self.jira.project_key },
                 if self.jira.base_url.is_empty() { "-" } else { &self.jira.base_url }),
         ]
+    }
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::*;
+    use crate::types::Finding;
+
+    fn f(sev: &str, status: &str) -> Finding {
+        Finding { severity: sev.into(), review_status: status.into(), ..Default::default() }
+    }
+
+    #[test]
+    fn gate_blocks_on_threshold_and_above() {
+        let fs = vec![f("High", "confirmed"), f("Low", "confirmed")];
+        assert!(gate_trips(&fs, "high"));
+        assert!(gate_trips(&fs, "medium"));
+        assert!(!gate_trips(&fs, "critical"));
+    }
+
+    #[test]
+    fn gate_ignores_needs_review() {
+        let fs = vec![f("Critical", "needs-review")];
+        assert!(!gate_trips(&fs, "critical"));
+        assert_eq!(worst_confirmed_rank(&fs), 0);
+    }
+
+    #[test]
+    fn unknown_threshold_disables_gate() {
+        let fs = vec![f("Critical", "confirmed")];
+        assert!(!gate_trips(&fs, "banana"));
     }
 }

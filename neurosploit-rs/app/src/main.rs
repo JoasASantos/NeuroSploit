@@ -258,6 +258,11 @@ enum Cmd {
         /// Post a summary comment back on the PR (needs github integration on).
         #[arg(long)]
         comment: bool,
+        /// Block the PR when a confirmed finding is this severity or worse:
+        /// critical|high|medium|low. Sets a failing commit status + a
+        /// REQUEST_CHANGES review, and exits non-zero so CI fails the check.
+        #[arg(long)]
+        fail_on: Option<String>,
         /// Open a Jira card per finding (needs jira integration on).
         #[arg(long)]
         jira: bool,
@@ -494,7 +499,7 @@ async fn main() -> anyhow::Result<()> {
             let out = run_mode(&base, cfg, false, Mode::Skills).await?;
             print_findings(&out);
         }
-        Cmd::Pr { repo, number, models, vote_n, chain_depth, recon, subscription, comment, jira, verbose } => {
+        Cmd::Pr { repo, number, models, vote_n, chain_depth, recon, subscription, comment, fail_on, jira, verbose } => {
             let ig = harness::integrations::Integrations::load(&repl::proj_dir());
             let owner_repo = normalize_repo(&repo);
             let path = clone_pr(&base, &ig, &owner_repo, number)?;
@@ -510,6 +515,16 @@ async fn main() -> anyhow::Result<()> {
             let out = run_engagement(&base, cfg, false, true).await?;
             print_findings(&out);
             post_integrations(&ig, &format!("{owner_repo}#{number}"), &out, jira, comment, Some((&owner_repo, number))).await;
+            // Security gate: block the PR when a confirmed finding is >= threshold.
+            if let Some(thresh) = fail_on.as_deref() {
+                let blocked = gate_pr(&ig, &owner_repo, number, &out, thresh).await;
+                if blocked {
+                    eprintln!("  \x1b[1;31m⛔ PR gate: confirmed finding ≥ {thresh} — blocking (exit 2)\x1b[0m");
+                    std::process::exit(2);
+                } else {
+                    println!("  \x1b[1;32m✓ PR gate: nothing ≥ {thresh} — clear\x1b[0m");
+                }
+            }
         }
         Cmd::Watch { repo, branch, interval, models, subscription, jira, verbose } => {
             let ig = harness::integrations::Integrations::load(&repl::proj_dir());
@@ -972,6 +987,44 @@ fn clone_pr(base: &Path, ig: &harness::integrations::Integrations, owner_repo: &
 }
 
 /// After a run, optionally open Jira cards and/or comment on a GitHub PR.
+/// Enforce the PR security gate. Sets a GitHub commit status (success/failure)
+/// on the PR head and, when it trips, submits a REQUEST_CHANGES review so branch
+/// protection blocks the merge. Best-effort on the API calls (a token may be
+/// absent locally); returns whether the gate tripped so the caller can exit 2.
+async fn gate_pr(
+    ig: &harness::integrations::Integrations,
+    owner_repo: &str,
+    number: u64,
+    out: &RunOutput,
+    threshold: &str,
+) -> bool {
+    use harness::integrations as gi;
+    let tripped = gi::gate_trips(&out.findings, threshold);
+    if ig.github.enabled {
+        let (state, desc) = if tripped {
+            ("failure", format!("Confirmed finding ≥ {threshold} — merge blocked by NeuroSploit"))
+        } else {
+            ("success", "No confirmed finding at/above the gate threshold".to_string())
+        };
+        // Attach the status to the PR head SHA (looked up from the API).
+        match ig.github_pr_head_sha(owner_repo, number).await {
+            Ok(sha) => {
+                if let Err(e) = ig.github_set_status(owner_repo, &sha, state, "neurosploit/security", &desc, None).await {
+                    eprintln!("  github status: {e}");
+                }
+            }
+            Err(e) => eprintln!("  github PR head lookup: {e}"),
+        }
+        if tripped {
+            let body = format!("## ⛔ NeuroSploit security gate\n\nBlocking this PR: a **confirmed** finding is **{threshold}** or worse.\n\n{}", pr_comment_body(out));
+            if let Err(e) = ig.github_pr_review(owner_repo, number, "REQUEST_CHANGES", &body).await {
+                eprintln!("  github review: {e}");
+            }
+        }
+    }
+    tripped
+}
+
 async fn post_integrations(
     ig: &harness::integrations::Integrations,
     target: &str,

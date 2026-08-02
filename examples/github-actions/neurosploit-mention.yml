@@ -1,0 +1,107 @@
+# NeuroSploit — @neurosploit mention bot
+#
+# Comment `@neurosploit` on a pull request or issue to trigger a scan:
+#
+#   @neurosploit                              → white-box review of this PR
+#   @neurosploit scan https://staging.app     → black-box test of a URL
+#   @neurosploit focus SQLi and IDOR          → review this PR, steered
+#
+# Everything after `@neurosploit` is passed verbatim as the natural-language
+# instruction, so any language works. Results are posted back as a comment; on a
+# PR, a critical confirmed finding also blocks the merge (commit status + review).
+#
+# Guard: only members with write access can trigger it (checked below), so a
+# random commenter can't burn your model budget.
+
+name: neurosploit-mention
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  statuses: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    # Only fire when the comment mentions the bot.
+    if: contains(github.event.comment.body, '@neurosploit')
+    steps:
+      - name: Check the commenter has write access
+        id: perm
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner, repo: context.repo.repo,
+              username: context.payload.comment.user.login,
+            });
+            const ok = ['admin', 'write', 'maintain'].includes(data.permission);
+            core.setOutput('ok', ok ? 'yes' : 'no');
+            if (!ok) core.notice('Ignoring @neurosploit from a non-writer.');
+
+      - name: React 👀 to acknowledge
+        if: steps.perm.outputs.ok == 'yes'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              comment_id: context.payload.comment.id, content: 'eyes',
+            });
+
+      - name: Parse the instruction after @neurosploit
+        if: steps.perm.outputs.ok == 'yes'
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.comment.body || '';
+            const m = body.match(/@neurosploit\s*([\s\S]*)/i);
+            const instr = (m && m[1] ? m[1] : '').trim();
+            const isPR = !!context.payload.issue.pull_request;
+            // A URL in the instruction → black-box scan; otherwise review the PR.
+            const url = (instr.match(/https?:\/\/\S+/) || [])[0] || '';
+            core.setOutput('instr', instr);
+            core.setOutput('is_pr', isPR ? 'yes' : 'no');
+            core.setOutput('url', url);
+            core.setOutput('number', String(context.payload.issue.number));
+
+      - name: Install NeuroSploit
+        if: steps.perm.outputs.ok == 'yes'
+        run: curl -fsSL https://raw.githubusercontent.com/JoasASantos/NeuroSploit/main/setup.sh | bash
+
+      - name: Enable the GitHub integration
+        if: steps.perm.outputs.ok == 'yes'
+        run: |
+          export NEUROSPLOIT_BASE="$HOME/.neurosploit-app"
+          "$HOME/.local/bin/neurosploit" integrations enable github
+
+      - name: Run the requested scan
+        if: steps.perm.outputs.ok == 'yes'
+        env:
+          NEUROSPLOIT_BASE: /home/runner/.neurosploit-app
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODEL: anthropic:claude-opus-4-8
+          INSTR: ${{ steps.parse.outputs.instr }}
+          URL: ${{ steps.parse.outputs.url }}
+          IS_PR: ${{ steps.parse.outputs.is_pr }}
+          NUMBER: ${{ steps.parse.outputs.number }}
+        run: |
+          NS="$HOME/.local/bin/neurosploit"
+          if [ -n "$URL" ]; then
+            # Black-box scan of the URL the commenter named.
+            "$NS" run "$URL" --model "$MODEL" ${INSTR:+--focus "$INSTR"} -v
+          elif [ "$IS_PR" = "yes" ]; then
+            # Review this PR (steered by any text after the mention), block on critical.
+            "$NS" pr "${{ github.repository }}" "$NUMBER" \
+              --model "$MODEL" --comment --fail-on critical -v
+          else
+            echo "Nothing to scan: mention a URL or comment on a PR." >&2
+            exit 1
+          fi
