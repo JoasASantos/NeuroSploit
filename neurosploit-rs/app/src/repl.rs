@@ -373,7 +373,8 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
     println!("  ╚═╝  ╚═══╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝ ╚═════╝\x1b[0m");
     println!("  {} agents loaded · detected logins: {}", lib.total(),
         if backends.is_empty() { "none (use API keys)".into() } else { backends.join(", ") });
-    println!("  Type \x1b[36m/help\x1b[0m to start, \x1b[36m/run\x1b[0m to launch, \x1b[36m/quit\x1b[0m to exit. (↑/↓ recalls commands)\n");
+    println!("  Type \x1b[36m/help\x1b[0m to start, \x1b[36m/run\x1b[0m to launch, \x1b[36m/quit\x1b[0m to exit. (↑/↓ recalls commands)");
+    println!("  \x1b[2mOr just describe it in any language:\x1b[0m \x1b[36mtesta https://loja.com com opus, foco em SQLi, roda\x1b[0m\n");
 
     let mut s = Session::default();
     let resumed = load_session(&mut s);
@@ -455,16 +456,20 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
         if line.is_empty() {
             continue;
         }
-        if !line.starts_with('/') {
+        // Natural-language input (no leading '/'): interpret it, configure the
+        // session hands-free, and — if the phrase asked to run — fall through to
+        // the /run handler. Hybrid: a zero-token deterministic parse handles the
+        // common shapes; anything ambiguous is resolved by the model (any language).
+        let (cmd, arg): (String, String) = if line.starts_with('/') {
+            let mut parts = line.splitn(2, char::is_whitespace);
+            (parts.next().unwrap_or("").to_string(), parts.next().unwrap_or("").trim().to_string())
+        } else {
             let attached = expand_ats(line, &mut s);
-            s.instructions = Some(line.to_string());
-            println!("  focus set: {line}");
             if attached > 0 { println!("  ({attached} @attachment(s) added to context)"); }
-            continue;
-        }
-        let mut parts = line.splitn(2, char::is_whitespace);
-        let cmd = parts.next().unwrap_or("");
-        let arg = parts.next().unwrap_or("").trim();
+            let run = handle_nl(line, &mut s).await;
+            if run { ("/run".to_string(), String::new()) } else { continue }
+        };
+        let (cmd, arg) = (cmd.as_str(), arg.as_str());
         match cmd {
             "/help" | "/?" => help(),
             "/show" | "/config" => show(&s),
@@ -1694,6 +1699,10 @@ fn help() {
     let h = |c: &str, d: &str| println!("    \x1b[36m{c:<20}\x1b[0m {d}");
     println!("\n  \x1b[1mNeuroSploit REPL — commands\x1b[0m");
 
+    println!("\n  \x1b[2mNATURAL LANGUAGE (any language — just type, no slash)\x1b[0m");
+    println!("    e.g. \x1b[36mtesta https://loja.com com opus, foco em SQLi, fora de escopo /admin, roda\x1b[0m");
+    println!("    \x1b[2mconfigures target/models/focus/objective/out-of-scope and can launch — hands-free\x1b[0m");
+
     println!("\n  \x1b[2mTARGET & SCOPE\x1b[0m");
     h("/onboard",           "guided setup: pick scope (web · infra · cloud · ai/llm · skills/n8n)");
     h("/target <url[,..]>", "black-box target / AI endpoint / host (comma-separated = multi-target)");
@@ -1750,6 +1759,259 @@ fn help() {
     println!("  \x1b[2mFindings are checkpointed live to .neurosploit/ — quit/crash mid-run and they're recovered into /runs next launch.\x1b[0m");
     println!("  \x1b[2mIf tokens/quota run out the run PAUSES (state kept) — /continue to resume, or switch with /model then /continue.\x1b[0m");
     println!("  \x1b[2m↑/↓ history · Tab completes commands & @paths · Ctrl-A/E/K edit · Ctrl-O full cmd · \\ for multiline\x1b[0m\n");
+}
+
+// ===== Natural-language command interpreter (hybrid) =====
+
+/// A parsed engagement intent extracted from a natural-language line.
+#[derive(Default)]
+struct Intent {
+    target: Option<String>,
+    repo: Option<String>,
+    models: Vec<String>,
+    focus: Option<String>,
+    objective: Option<String>,
+    out_of_scope: Option<String>,
+    auth: Option<String>,
+    scope: Option<&'static str>,
+    run: bool,
+}
+
+impl Intent {
+    fn is_empty(&self) -> bool {
+        self.target.is_none() && self.repo.is_none() && self.models.is_empty()
+            && self.focus.is_none() && self.objective.is_none() && self.out_of_scope.is_none()
+            && self.auth.is_none() && self.scope.is_none() && !self.run
+    }
+    /// Fill any field this intent is missing from `other` (deterministic wins).
+    fn merge_from(&mut self, other: Intent) {
+        if self.target.is_none() { self.target = other.target; }
+        if self.repo.is_none() { self.repo = other.repo; }
+        if self.models.is_empty() { self.models = other.models; }
+        if self.focus.is_none() { self.focus = other.focus; }
+        if self.objective.is_none() { self.objective = other.objective; }
+        if self.out_of_scope.is_none() { self.out_of_scope = other.out_of_scope; }
+        if self.auth.is_none() { self.auth = other.auth; }
+        if self.scope.is_none() { self.scope = other.scope; }
+        self.run = self.run || other.run;
+    }
+}
+
+/// Resolve a natural-language line into session config. Deterministic fast-path
+/// first (0 tokens); if the phrase is ambiguous and a model is available, ask it
+/// to structure the request (works in any language). Returns whether to run now.
+async fn handle_nl(line: &str, s: &mut Session) -> bool {
+    let (mut intent, confident) = parse_intent_fast(line);
+    if !confident && !s.offline {
+        if let Some(mi) = parse_intent_model(line, s).await {
+            intent.merge_from(mi);
+        }
+    }
+    if intent.is_empty() {
+        // Nothing structured found → treat the whole line as focus (old behavior).
+        s.instructions = Some(line.to_string());
+        println!("  focus set: {line}");
+        return false;
+    }
+    apply_intent(s, intent)
+}
+
+/// Apply an intent to the session, print a summary, and return `run`.
+fn apply_intent(s: &mut Session, intent: Intent) -> bool {
+    let mut set = Vec::new();
+    if let Some(t) = intent.target {
+        let t = if t.starts_with("http") || t.contains("://") { t } else { format!("https://{t}") };
+        s.target = Some(t.clone()); set.push(format!("target={t}"));
+    }
+    if let Some(r) = intent.repo { s.repo = Some(r.clone()); set.push(format!("repo={r}")); }
+    if !intent.models.is_empty() {
+        let m = resolve_model_aliases(&intent.models);
+        if !m.is_empty() { s.models = m.clone(); set.push(format!("models={}", m.join(","))); }
+    }
+    if let Some(sc) = intent.scope { s.scope = sc; set.push(format!("scope={sc}")); }
+    if let Some(f) = intent.focus { s.instructions = Some(f.clone()); set.push(format!("focus=\"{f}\"")); }
+    if let Some(o) = intent.objective { s.objective = Some(o.clone()); set.push(format!("objective=\"{o}\"")); }
+    if let Some(x) = intent.out_of_scope { s.out_of_scope = Some(x.clone()); set.push(format!("out-of-scope=\"{x}\"")); }
+    if let Some(a) = intent.auth { let a = normalize_auth(&a); s.auth = Some(a.clone()); set.push("auth set".into()); let _ = a; }
+    if set.is_empty() {
+        println!("  \x1b[2m(understood — nothing to change)\x1b[0m");
+    } else {
+        println!("  \x1b[36m⇢ configured\x1b[0m {}", set.join(" · "));
+    }
+    if intent.run {
+        if s.target.is_none() && s.repo.is_none() {
+            println!("  \x1b[33m! set a target/repo first — nothing to run yet.\x1b[0m");
+            return false;
+        }
+        println!("  \x1b[1;35m▶ launching\x1b[0m …");
+    }
+    intent.run
+}
+
+/// Deterministic, zero-token parse for the common phrasings (PT/EN/ES). Returns
+/// `(intent, confident)`; `confident=false` means hand off to the model.
+fn parse_intent_fast(line: &str) -> (Intent, bool) {
+    let mut it = Intent::default();
+    let low = line.to_lowercase();
+
+    // URL or bare host.
+    if let Some(u) = find_url(line) {
+        if u.contains("://") || looks_like_host(&u) { it.target = Some(u); }
+    }
+    // Model shorthands present anywhere.
+    for alias in ["opus", "sonnet", "haiku", "gpt", "chatgpt", "gemini", "grok"] {
+        if word_present(&low, alias) && !it.models.iter().any(|m| m == alias) {
+            it.models.push(alias.to_string());
+        }
+    }
+    // Run verbs (any of the three languages).
+    const RUN_VERBS: &[&str] = &[
+        "run", "test", "scan", "go", "launch", "execute",
+        "roda", "rode", "rodar", "testa", "teste", "testar", "escaneia", "escanear",
+        "executa", "executar", "varre", "varrer", "analisa", "analise", "ataca", "atacar",
+        "prueba", "probar", "escanea", "ejecuta", "corre", "lanza", "lanzar",
+    ];
+    if RUN_VERBS.iter().any(|v| word_present(&low, v)) { it.run = true; }
+
+    // Keyworded clauses: split on commas/semicolons and classify each chunk.
+    let mut residue = 0usize;
+    for chunk in line.split([',', ';', '\n']) {
+        let c = chunk.trim();
+        if c.is_empty() { continue; }
+        let cl = c.to_lowercase();
+        if let Some(rest) = after_any(&cl, c, &["fora de escopo", "fora do escopo", "out of scope", "out-of-scope", "fuera de alcance", "não teste", "nao teste", "não testar", "nao testar", "don't test", "do not test", "exclua", "excluir", "excluye"]) {
+            if !rest.is_empty() { it.out_of_scope = Some(join_opt(it.out_of_scope.take(), rest)); continue; }
+        }
+        if let Some(rest) = after_any(&cl, c, &["objetivo", "objective", "meta", "contexto", "context", "goal"]) {
+            if !rest.is_empty() { it.objective = Some(rest.to_string()); continue; }
+        }
+        if let Some(rest) = after_any(&cl, c, &["foco em", "foca em", "foco", "focus on", "focus", "enfoque en", "enfoque", "concentre em", "concentra em", "prioriza", "priorize"]) {
+            if !rest.is_empty() { it.focus = Some(join_opt(it.focus.take(), rest)); continue; }
+        }
+        if let Some(rest) = after_any(&cl, c, &["auth", "authorization", "cookie", "bearer", "token", "header"]) {
+            if !rest.is_empty() { it.auth = Some(c.to_string()); let _ = rest; continue; }
+        }
+        // Chunk that carried the URL / model / run verb is accounted for.
+        let carried = it.target.as_deref().map(|t| c.contains(t.trim_start_matches("https://").trim_start_matches("http://")) || cl.contains("http")).unwrap_or(false)
+            || RUN_VERBS.iter().any(|v| word_present(&cl, v))
+            || ["opus","sonnet","haiku","gpt","chatgpt","gemini","grok"].iter().any(|a| word_present(&cl, a));
+        if !carried { residue += c.split_whitespace().count(); }
+    }
+    // Confident when we structured something and no meaningful unclassified words remain.
+    let confident = !it.is_empty() && residue <= 2;
+    (it, confident)
+}
+
+/// Ask the configured model to structure a free-form request into JSON. Any
+/// language. Returns None on any failure (caller falls back gracefully).
+async fn parse_intent_model(line: &str, s: &Session) -> Option<Intent> {
+    let refs: Vec<ModelRef> = s.models.iter().map(|m| ModelRef::parse(m)).collect();
+    if refs.is_empty() { return None; }
+    let pool = harness::pool::ModelPool::with_auth(refs, 1, s.subscription, None);
+    let sys = "You convert a penetration tester's natural-language request (in ANY language) \
+        into a compact JSON object that configures a scan. Keys (include ONLY those the user \
+        expressed): target (url or host), repo (path/github), models (array of short names like \
+        opus/sonnet/gpt/gemini/grok), focus (what to prioritise), objective (goal/context), \
+        out_of_scope (exclusions), auth (header/cookie/token verbatim), scope (one of web|infra|cloud|ai|skills), \
+        run (true only if the user clearly asked to start/execute now). Reply with ONLY the JSON object, no prose.";
+    let user = format!("Request: {line}");
+    let (_, text) = pool.complete(sys, &user).await.ok()?;
+    let slice = {
+        let a = text.find('{')?; let b = text.rfind('}')?;
+        if b > a { &text[a..=b] } else { return None }
+    };
+    let v: serde_json::Value = serde_json::from_str(slice).ok()?;
+    let o = v.as_object()?;
+    let gs = |k: &str| o.get(k).and_then(|x| x.as_str()).map(|x| x.trim().to_string()).filter(|x| !x.is_empty());
+    let mut it = Intent {
+        target: gs("target"),
+        repo: gs("repo"),
+        focus: gs("focus"),
+        objective: gs("objective"),
+        out_of_scope: gs("out_of_scope"),
+        auth: gs("auth"),
+        run: o.get("run").and_then(|x| x.as_bool()).unwrap_or(false),
+        ..Default::default()
+    };
+    if let Some(sc) = gs("scope") {
+        it.scope = match sc.as_str() {
+            "web" => Some("web"), "infra" => Some("infra"), "cloud" => Some("cloud"),
+            "ai" => Some("ai"), "skills" => Some("skills"), _ => None,
+        };
+    }
+    match o.get("models") {
+        Some(serde_json::Value::Array(a)) => {
+            for m in a { if let Some(t) = m.as_str() { if !t.trim().is_empty() { it.models.push(t.trim().to_string()); } } }
+        }
+        Some(serde_json::Value::String(t)) if !t.trim().is_empty() => it.models.push(t.trim().to_string()),
+        _ => {}
+    }
+    if it.is_empty() { None } else { Some(it) }
+}
+
+/// Map short model names (opus/gpt/gemini/...) to concrete `provider:model` ids
+/// from the catalog. Passes through anything already in `provider:model` form.
+fn resolve_model_aliases(names: &[String]) -> Vec<String> {
+    let catalog: Vec<String> = harness::providers().into_iter()
+        .flat_map(|p| p.models.iter().map(move |m| format!("{}:{}", p.key, m)).collect::<Vec<_>>())
+        .collect();
+    let mut out = Vec::new();
+    for n in names {
+        let nl = n.to_lowercase();
+        if nl.contains(':') { out.push(n.clone()); continue; } // already provider:model
+        let needle = match nl.as_str() { "chatgpt" => "gpt", other => other };
+        if let Some(id) = catalog.iter().find(|id| id.to_lowercase().contains(needle)) {
+            if !out.contains(id) { out.push(id.clone()); }
+        }
+    }
+    out
+}
+
+/// First http(s) URL or bare `host[/path]` token in the line.
+fn find_url(line: &str) -> Option<String> {
+    for tok in line.split_whitespace() {
+        let t = tok.trim_matches(|c: char| ",;\"'()[]".contains(c));
+        if t.starts_with("http://") || t.starts_with("https://") { return Some(t.to_string()); }
+    }
+    for tok in line.split_whitespace() {
+        let t = tok.trim_matches(|c: char| ",;\"'()[]".contains(c));
+        if looks_like_host(t) { return Some(t.to_string()); }
+    }
+    None
+}
+
+/// Heuristic: `something.tld` (optionally with a path), not a bare sentence word.
+fn looks_like_host(t: &str) -> bool {
+    let host = t.split('/').next().unwrap_or(t);
+    if !host.contains('.') || host.starts_with('.') || host.ends_with('.') { return false; }
+    let tld = host.rsplit('.').next().unwrap_or("");
+    tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic())
+        && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+}
+
+/// Whole-word membership check (avoids matching "go" inside "google").
+fn word_present(hay_low: &str, word: &str) -> bool {
+    hay_low.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == word)
+}
+
+/// If `chunk_low` starts with (or contains) any keyword, return the ORIGINAL-case
+/// remainder after the keyword.
+fn after_any<'a>(chunk_low: &str, chunk_orig: &'a str, keys: &[&str]) -> Option<&'a str> {
+    for k in keys {
+        if let Some(pos) = chunk_low.find(k) {
+            let end = pos + k.len();
+            let rest = chunk_orig[end..].trim_start_matches([':', ' ', '=', '-']).trim();
+            return Some(rest);
+        }
+    }
+    None
+}
+
+fn join_opt(prev: Option<String>, add: &str) -> String {
+    match prev {
+        Some(p) if !p.trim().is_empty() => format!("{p}; {add}"),
+        _ => add.to_string(),
+    }
 }
 
 /// Scan a line for @path tokens, attach each referenced file/dir to context.
@@ -1866,4 +2128,53 @@ fn onoff(b: bool) -> &'static str { if b { "on" } else { "off" } }
 fn trunc(s: &str, n: usize) -> String {
     if s.chars().count() <= n { s.to_string() }
     else { format!("{}…", s.chars().take(n.saturating_sub(1)).collect::<String>()) }
+}
+
+#[cfg(test)]
+mod nl_tests {
+    use super::*;
+
+    #[test]
+    fn fast_parse_pt_target_model_run() {
+        let (it, conf) = parse_intent_fast("testa https://loja.com com opus");
+        assert!(conf);
+        assert_eq!(it.target.as_deref(), Some("https://loja.com"));
+        assert!(it.models.contains(&"opus".to_string()));
+        assert!(it.run);
+    }
+
+    #[test]
+    fn fast_parse_clauses_focus_and_scope() {
+        let (it, _) = parse_intent_fast("scan loja.com, foco em SQLi e IDOR, fora de escopo /admin, roda");
+        assert_eq!(it.target.as_deref(), Some("loja.com"));
+        assert_eq!(it.focus.as_deref(), Some("SQLi e IDOR"));
+        assert_eq!(it.out_of_scope.as_deref(), Some("/admin"));
+        assert!(it.run);
+    }
+
+    #[test]
+    fn fast_parse_english_and_spanish_run_verbs() {
+        assert!(parse_intent_fast("run against example.com").0.run);
+        assert!(parse_intent_fast("prueba example.org enfoque en XSS").0.run);
+    }
+
+    #[test]
+    fn ambiguous_freeform_not_confident() {
+        // No URL, no verb, vague -> defer to model.
+        let (_it, conf) = parse_intent_fast("da uma olhada naquele site da firma quando puder");
+        assert!(!conf);
+    }
+
+    #[test]
+    fn host_heuristic_rejects_plain_words() {
+        assert!(find_url("focar em sqli agora").is_none());
+        assert_eq!(find_url("check testphp.vulnweb.com now").as_deref(), Some("testphp.vulnweb.com"));
+    }
+
+    #[test]
+    fn model_alias_resolves_to_catalog_id() {
+        let ids = resolve_model_aliases(&["opus".to_string()]);
+        assert!(ids.iter().all(|i| i.contains(':')));
+        assert!(ids.iter().any(|i| i.to_lowercase().contains("opus")));
+    }
 }
