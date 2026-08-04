@@ -1,3 +1,24 @@
+# NeuroSploit v3.6.6 — Release Notes
+
+**Release Date:** August 2026
+**Codename:** Local & Uncensored
+**License:** MIT
+**Credits:** Joas A Santos & Red Team Leaders
+
+## Highlights
+
+- **Local, uncensored & CPU-only — new `llamacpp:` provider.** Drives a
+  `llama-server` OpenAI-compatible endpoint (`localhost:8080`), **no API key**,
+  no data off-host, CPU-only or GPU-offloaded. Override with `LLAMACPP_BASE_URL`;
+  `model` = the gguf you loaded (pass-through). **15 → 16 providers.**
+- **clippy clean under `-D warnings`** across the workspace.
+- **Rust CI template** — `examples/github-actions/ci.yml` (build / test / clippy)
+  for the `neurosploit-rs/` workspace.
+
+**Full changelog:** https://github.com/JoasASantos/NeuroSploit/compare/v3.6.5...v3.6.6
+
+---
+
 # NeuroSploit v3.6.5 — Release Notes
 
 **Release Date:** July 2026
