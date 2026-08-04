@@ -1,0 +1,52 @@
+# NeuroSploit — Rust CI
+#
+# Build, test and lint the `neurosploit-rs/` Cargo workspace on every push and
+# pull request. Copy to `.github/workflows/ci.yml` in your fork to enable it.
+#
+# Note: this lives here (not in `.github/workflows/`) as a template — like the
+# other files in this folder — so the upstream repo doesn't run it on itself.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+    paths: ["neurosploit-rs/**", ".github/workflows/ci.yml"]
+  pull_request:
+    paths: ["neurosploit-rs/**"]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-test:
+    name: build & test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: neurosploit-rs
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            neurosploit-rs/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('neurosploit-rs/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build
+        run: cargo build --workspace --locked
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings

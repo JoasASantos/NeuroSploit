@@ -60,6 +60,12 @@ pub fn providers() -> Vec<Provider> {
             models: vec!["gpt-4o", "gpt-4o-mini", "gpt-5.1", "o4-mini"] },
         Provider { key: "ollama", label: "Ollama (local)", base_url: "http://localhost:11434/v1", env_key: "OLLAMA_API_KEY", kind: "api",
             models: vec!["qwen2.5-coder:32b", "qwq:32b", "deepseek-r1:32b", "llama3.3:70b"] },
+        // llama.cpp server (`llama-server`, OpenAI-compatible). Runs CPU-only or
+        // GPU-offloaded, fully local & uncensored — no API key. Point at your
+        // server with LLAMACPP_BASE_URL (default http://localhost:8080/v1); the
+        // `model` name is whatever gguf you loaded (pass-through).
+        Provider { key: "llamacpp", label: "llama.cpp (local)", base_url: "http://localhost:8080/v1", env_key: "LLAMACPP_API_KEY", kind: "api",
+            models: vec!["qwen2.5-coder-32b-instruct", "dolphin-2.9-llama3-70b", "deepseek-r1-distill-qwen-32b", "llama-3.3-70b-instruct"] },
     ]
 }
 
@@ -118,7 +124,7 @@ impl ChatClient {
         let p = provider_for(&m.provider)
             .ok_or_else(|| anyhow!("unknown provider '{}'", m.provider))?;
         let key = resolve_key(&p);
-        if key.is_empty() && p.key != "ollama" && p.key != "litellm" {
+        if key.is_empty() && p.key != "ollama" && p.key != "litellm" && p.key != "llamacpp" {
             let hint = if p.key == "gemini" { format!("{} (or GOOGLE_API_KEY)", p.env_key) } else { p.env_key.to_string() };
             return Err(anyhow!("no API key ({}) for provider '{}'", hint, p.key));
         }
@@ -139,6 +145,7 @@ impl ChatClient {
             let base = match p.key {
                 "litellm" => std::env::var("LITELLM_BASE_URL").unwrap_or_else(|_| p.base_url.to_string()),
                 "ollama" => std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| p.base_url.to_string()),
+                "llamacpp" => std::env::var("LLAMACPP_BASE_URL").unwrap_or_else(|_| p.base_url.to_string()),
                 _ => p.base_url.to_string(),
             };
             format!("{}/chat/completions", base.trim_end_matches('/'))
@@ -178,6 +185,7 @@ impl ChatClient {
     /// When `mcp_config` is set (a path to an `.mcp.json`), Claude/Codex run with
     /// the MCP servers enabled and tool autonomy, so agents can actually drive
     /// **Playwright** (browse, execute JS, screenshot) during execution.
+    #[allow(clippy::too_many_arguments)]
     pub async fn chat_cli(
         &self,
         label: &str,

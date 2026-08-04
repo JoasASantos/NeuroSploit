@@ -1,4 +1,4 @@
-//! NeuroSploit v3.6.5 — TUI "Mission Control" mode.
+//! NeuroSploit v3.6.6 — TUI "Mission Control" mode.
 //!
 //! Concurrent panels that update live while the engagement runs in the
 //! background, with a composer input that stays active during execution:
@@ -169,7 +169,7 @@ pub async fn run(base: &Path, mut cfg: RunConfig, mcp: bool, mode: Mode) -> anyh
         }
     });
 
-    let out;
+    
     loop {
         // drain engagement events
         while let Ok(line) = rx.try_recv() { ui.ingest(line); }
@@ -206,17 +206,14 @@ pub async fn run(base: &Path, mut cfg: RunConfig, mcp: bool, mode: Mode) -> anyh
         }
     }
 
-    out = (&mut task).await.unwrap_or_default();
+    let out = (&mut task).await.unwrap_or_default();
 
     // ---- restore terminal ----
     execute!(stdout(), terminal::LeaveAlternateScreen)?;
     terminal::disable_raw_mode()?;
 
     // generate report unless discarded; print a plain summary after leaving the TUI
-    match harness::report::typst_report(&out.target, &out.findings, &workdir) {
-        Ok(p) => println!("  report → {}", p.display()),
-        Err(_) => {}
-    }
+    if let Ok(p) = harness::report::typst_report(&out.target, &out.findings, &workdir) { println!("  report → {}", p.display()) }
     crate::write_status_pub(&workdir, if cancel.load(Ordering::Relaxed) { "stopped" } else { "complete" }, "");
     println!("  ✓ {} validated finding(s) · {}", out.findings.len(), workdir.display());
     Ok(())

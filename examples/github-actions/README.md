@@ -9,6 +9,7 @@ variables → Actions), or swap the `MODEL`/key for a provider you use. The buil
 |----------|--------------|
 | `neurosploit-pr-gate.yml` | Reviews every pull request and **blocks the merge** on a confirmed critical (fails the check + sets a `neurosploit/security` commit status + posts a REQUEST_CHANGES review). |
 | `neurosploit-mention.yml` | Comment **`@neurosploit`** on a PR/issue (writers only) to trigger a scan. Text after the mention steers it, in any language; a URL runs a black-box test, otherwise it reviews the PR. |
+| `ci.yml` | Rust CI for the `neurosploit-rs/` workspace — `cargo build` / `test` / `clippy -D warnings` on every push & PR. |
 
 ## Enforce the PR gate as a merge block
 

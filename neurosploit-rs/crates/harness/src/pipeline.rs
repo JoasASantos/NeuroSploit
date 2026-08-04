@@ -375,8 +375,8 @@ fn identify_asset(p: &crate::probe::Probe) -> String {
     let tech = if p.tech.is_empty() { String::new() } else { format!(" [{}]", p.tech.join(", ")) };
     // Prefer a KNOWN product; else the org/brand from the page; else the title.
     let name = product
-        .or_else(|| if brand.is_empty() { None } else { Some(brand) })
-        .or_else(|| if title.is_empty() { None } else { Some(title) });
+        .or(if brand.is_empty() { None } else { Some(brand) })
+        .or(if title.is_empty() { None } else { Some(title) });
     match name {
         Some(n) => format!("{n}{tech}"),
         None => if tech.is_empty() { "unidentified web asset".into() } else { format!("web asset{tech}") },
@@ -678,7 +678,7 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
     if !cfg.offline && !context.is_empty() {
         let code_cap = if cfg.max_agents > 0 { cfg.max_agents.min(lib.code.len()) } else { lib.code.len().min(12) };
         let code_agents: Vec<Agent> = lib.code.iter().take(code_cap).cloned().collect();
-        let leads: Vec<Finding> = stream::iter(code_agents.into_iter())
+        let leads: Vec<Finding> = stream::iter(code_agents)
             .map(|ag| {
                 let ctx = context.clone();
                 let txc = tx.clone();
@@ -841,7 +841,7 @@ async fn attack_chain(pool: &ModelPool, cfg: &RunConfig, recon: &str,
 
     // Frontier = footholds to expand this round; start with confirmed, best-first.
     let mut frontier: Vec<Finding> = confirmed.to_vec();
-    frontier.sort_by(|a, b| sev_rank(&b.severity).cmp(&sev_rank(&a.severity)));
+    frontier.sort_by_key(|f| std::cmp::Reverse(sev_rank(&f.severity)));
 
     for round in 1..=max_rounds {
         if pool.stop_exploiting() || frontier.is_empty() {
@@ -851,7 +851,7 @@ async fn attack_chain(pool: &ModelPool, cfg: &RunConfig, recon: &str,
         let _ = tx.send(format!("⛓ attack-chain round {round}/{max_rounds} — expanding {} foothold(s), {} loot item(s)", seeds.len(), loot.len())).await;
 
         let loot_snapshot = loot.clone();
-        let results: Vec<(Vec<Finding>, Vec<String>)> = stream::iter(seeds.into_iter())
+        let results: Vec<(Vec<Finding>, Vec<String>)> = stream::iter(seeds)
             .map(|seed| {
                 let (dir, rc, rb, ls, txc) = (directives.clone(), recon_ctx.clone(), recipe_block.clone(), loot_snapshot.clone(), tx.clone());
                 async move { chain_from_seed(pool, &cfg.target, &dir, &rc, &rb, &seed, &ls, round, max_rounds, &txc).await }
@@ -886,7 +886,7 @@ async fn attack_chain(pool: &ModelPool, cfg: &RunConfig, recon: &str,
         all_new.extend(validated.clone());
         // Next round expands the freshly-validated footholds, best-first.
         frontier = validated;
-        frontier.sort_by(|a, b| sev_rank(&b.severity).cmp(&sev_rank(&a.severity)));
+        frontier.sort_by_key(|f| std::cmp::Reverse(sev_rank(&f.severity)));
     }
     if !all_new.is_empty() {
         let _ = tx.send(format!("⛓ attack-chaining added {} finding(s) across pivots", all_new.len())).await;
@@ -896,6 +896,7 @@ async fn attack_chain(pool: &ModelPool, cfg: &RunConfig, recon: &str,
 
 /// Expand ONE foothold: the agent decides directions, does post-exploitation and
 /// pivots, and returns new findings + discovered loot.
+#[allow(clippy::too_many_arguments)]
 async fn chain_from_seed(pool: &ModelPool, target: &str, directives: &str, recon_ctx: &str,
                          recipe_block: &str, seed: &Finding, loot: &[String],
                          round: usize, max: usize, tx: &Sender<String>) -> (Vec<Finding>, Vec<String>) {
@@ -1071,7 +1072,7 @@ fn heuristic_select(ranked: &[Agent], recon: &str, focus: &str, cap: usize) -> V
             (score, a)
         })
         .collect();
-    scored.sort_by(|x, y| y.0.cmp(&x.0));
+    scored.sort_by_key(|x| std::cmp::Reverse(x.0));
     let mut out: Vec<Agent> = scored.iter().filter(|(s, _)| *s > 0).map(|(_, a)| (*a).clone()).collect();
     if out.is_empty() {
         out = ranked.to_vec();
@@ -1082,7 +1083,7 @@ fn heuristic_select(ranked: &[Agent], recon: &str, focus: &str, cap: usize) -> V
 async fn validate(candidates: Vec<Finding>, pool: &ModelPool, sys: &str, vote_n: usize, tx: &Sender<String>) -> Vec<Finding> {
     // Prefer a model other than the primary (likely finder) to adjudicate.
     let finder = pool.candidates.first().map(|m| m.label());
-    let validated: Vec<Finding> = stream::iter(candidates.into_iter())
+    let validated: Vec<Finding> = stream::iter(candidates)
         .map(|mut f| {
             let txc = tx.clone();
             let finder = finder.clone();
@@ -1157,6 +1158,7 @@ async fn refute_pass(findings: Vec<Finding>, pool: &ModelPool, vote_n: usize, tx
     kept
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn finish(cfg: RunConfig, _lib: &Library, recon: String, transcript: String, mut findings: Vec<Finding>,
                 selected: Vec<Agent>, rl: &mut RlState, gmode: crate::grounding::GroundMode, source_ctx: String,
                 tx: Sender<String>) -> RunOutput {
@@ -1246,7 +1248,7 @@ async fn finish(cfg: RunConfig, _lib: &Library, recon: String, transcript: Strin
     let mut wm = crate::belief::WorldModel::new();
     wm.deterministic = whitebox;
     for f in &findings {
-        wm.add(&f.id, crate::belief::Kind::Exploit, &f.title, f.confidence.max(0.05).min(0.99));
+        wm.add(&f.id, crate::belief::Kind::Exploit, &f.title, f.confidence.clamp(0.05, 0.99));
     }
     let unc = wm.uncertainty(None);
     if !findings.is_empty() {
@@ -1275,7 +1277,7 @@ async fn finish(cfg: RunConfig, _lib: &Library, recon: String, transcript: Strin
     // confirmed high-severity bugs float to the top of selection on future runs.
     let mut hit: std::collections::HashMap<&str, f64> = Default::default();
     for f in &findings {
-        let base = severity_reward(&f.severity) * f.confidence.max(0.2).min(1.0);
+        let base = severity_reward(&f.severity) * f.confidence.clamp(0.2, 1.0);
         let r = if f.review_status == "needs-review" { 0.15 } else { base };
         let e = hit.entry(f.agent.as_str()).or_insert(0.0);
         *e = (*e + r).clamp(-1.0, 1.0);

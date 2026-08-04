@@ -1,4 +1,4 @@
-//! NeuroSploit v3.6.5 — interactive session (Claude-Code / Codex / Cursor-CLI style).
+//! NeuroSploit v3.6.6 — interactive session (Claude-Code / Codex / Cursor-CLI style).
 //!
 //! Launched when `neurosploit` runs with no subcommand. A persistent REPL with
 //! real line editing (arrow-key history recall, Ctrl-A/E/K, paste), model
@@ -361,12 +361,16 @@ impl Reader {
     }
 }
 
+// The blocking (piped, no external printer) fallback holds the history
+// MutexGuard across `run().await` on purpose — run() mutates that history for
+// the whole async operation and no other task contends for it there.
+#[allow(clippy::await_holding_lock)]
 pub async fn repl(base: &Path) -> anyhow::Result<()> {
     let lib = agents::load(base);
     let backends = harness::installed_cli_backends();
     println!("\x1b[1m");
     println!("  ███╗   ██╗███████╗██╗   ██╗██████╗  ██████╗");
-    println!("  ████╗  ██║██╔════╝██║   ██║██╔══██╗██╔═══██╗   NeuroSploit v3.6.5");
+    println!("  ████╗  ██║██╔════╝██║   ██║██╔══██╗██╔═══██╗   NeuroSploit v3.6.6");
     println!("  ██╔██╗ ██║█████╗  ██║   ██║██████╔╝██║   ██║   interactive harness");
     println!("  ██║╚██╗██║██╔══╝  ██║   ██║██╔══██╗██║   ██║   by Joas A Santos");
     println!("  ██║ ╚████║███████╗╚██████╔╝██║  ██║╚██████╔╝   & Red Team Leaders");
@@ -1626,12 +1630,9 @@ fn browse_results(history: &[RunRecord]) {
             };
             print_finding_detail(&f[fi]);
             // Enter → back to the vuln list; Esc → back to the target list.
-            match dialoguer::Select::with_theme(&ColorfulTheme::default())
+            if let Ok(None) = dialoguer::Select::with_theme(&ColorfulTheme::default())
                 .with_prompt("↵ back to vulnerabilities · Esc = back to targets")
-                .items(&["back"]).default(0).interact_opt() {
-                Ok(None) => break,
-                _ => {}
-            }
+                .items(&["back"]).default(0).interact_opt() { break }
         }
     }
 }
@@ -2118,7 +2119,7 @@ fn attach_path(spec: &str, s: &mut Session) -> usize {
         Ok(content) => {
             let body = match range.and_then(parse_range) {
                 Some((a, b)) => content.lines().enumerate()
-                    .filter(|(i, _)| *i + 1 >= a && *i + 1 <= b)
+                    .filter(|(i, _)| *i + 1 >= a && *i < b)
                     .map(|(_, l)| l).collect::<Vec<_>>().join("\n"),
                 None => content.chars().take(8000).collect(),
             };
