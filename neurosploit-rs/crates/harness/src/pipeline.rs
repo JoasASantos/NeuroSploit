@@ -313,6 +313,37 @@ const DECISION_DOCTRINE: &str = "DECIDE WHERE TO ATTACK (analyse, then act):\n\
 - Build PoCs when needed: for issues that need an artifact to prove (clickjacking → an HTML page that frames the target; CSRF → an auto-submitting HTML form; a multi-step or timing exploit → a script), WRITE the PoC to the run's PoC dir, run/validate it, and cite the file in the evidence.\n\
 - Test control BYPASSES: when something returns 401/403/redirect or is 'blocked', try to bypass it (verb tampering, path/case/encoding normalization, X-Original-URL / X-Rewrite-URL / X-Forwarded-* headers, missing-vs-invalid token, direct object/API access) and confirm the bypass with the two requests.\n\n";
 
+/// CHAIN doctrine: turn ANY foothold into the next step. A primitive→next-step
+/// playbook (not an exhaustive script) so the agent always has a concrete pivot
+/// to reason about, plus a push to chain toward BUSINESS impact — all under the
+/// non-destructive SAFETY_DOCTRINE (prove RCE/access with a benign marker, never
+/// harm data or state).
+const CHAIN_DOCTRINE: &str = "CHAIN THE FOOTHOLD (pivot to deeper, provable impact — any primitive can chain):\n\
+- Think in primitives, not labels: reduce the foothold to what it GIVES you (code exec, file read, file write, request forgery, a trusted identity, a leaked secret, arbitrary object access) and pick the next step from that.\n\
+- Pivot playbook (attempt the fitting ones, prove each with a benign receipt):\n\
+  · File upload / write → RCE: upload a webshell/handler to an executable path or poison a config/`.htaccess`/cron/serialized file; prove with a benign marker (`id`, unique echo, OOB DNS), not damage.\n\
+  · SSRF → cloud/host takeover: hit `169.254.169.254` (IMDSv1/v2), GCP/Azure metadata, internal admin/actuator, `file://`/`gopher://`; loot temp creds/tokens and REUSE them.\n\
+  · SQLi → RCE/LPE: stacked queries, `INTO OUTFILE`/`COPY … TO`, UDF, `xp_cmdshell`, read secrets/creds; then reuse creds to log in and escalate.\n\
+  · LFI/path traversal → RCE: log/session/wrapper poisoning, `/proc/self/environ`, read source & secrets; combine with an upload for exec.\n\
+  · XXE → SSRF/file read → creds; deserialization/SSTI → RCE via a gadget/template sink; prove exec with a marker.\n\
+  · IDOR/BOLA/mass-assignment → account/tenant takeover or role escalation (`role=admin`); open-redirect/XSS/CORS → token/session theft → ATO.\n\
+  · Exposed `.git`/backup/`.env`/secrets → reconstruct source & keys → auth to internal APIs, cloud, DB; default/leaked creds → domain/service compromise.\n\
+- Reuse loot relentlessly: every credential/JWT/cookie/API key/host you obtain is input to the next step — carry it forward across modules and try it everywhere it might be accepted.\n\
+- Understand the BUSINESS & LOGIC: reason about what the app is FOR (payments, orders, tenancy, KYC, entitlements) and chain toward business impact — payment/price/coupon abuse, cross-tenant data access, entitlement/limit bypass, workflow/state-machine skips (skip approval/verification steps), race conditions on balance/stock. These compound: each finding updates your model of the app for the next probe.\n\
+- Stop at proof: demonstrate the impact with the SMALLEST safe step and report the CHAIN end-to-end; never destroy, overwrite, encrypt, mass-exfiltrate, or DoS to 'prove' it.\n\n";
+
+/// WHITEBOX doctrine: this is a STATIC source review — keep the agent in the code,
+/// not on the wire. Prevents whitebox runs from hallucinating black-box network
+/// actions (curl/nuclei/live requests) they cannot perform here, and pushes for
+/// a symbolic `file:line` receipt plus a runnable repro PoC where it adds value.
+const WHITEBOX_DOCTRINE: &str = "MODE: WHITE-BOX STATIC SOURCE REVIEW. You are reading source code, NOT a live target.\n\
+- Source-only: reason strictly about the provided code. Do NOT curl, run nuclei, browse, or claim any live/HTTP/network result — there is no running app here. Any \"I sent a request / got a response\" claim is a hallucination and will be rejected.\n\
+- Symbolic receipt: EVERY finding's evidence is a `file:line` citation plus the exact vulnerable code quoted verbatim. The code citation IS the proof. No `file:line` + code quote ⇒ do not report it.\n\
+- Trace, don't guess: follow tainted input from its SOURCE (request param, env, deserialization, file) to a dangerous SINK (SQL/exec/eval/template/path/SSRF/deserialize). Report only when source reaches sink without effective sanitization; note the path (`entry → … → sink`).\n\
+- Version → CVE (static): read dependency manifests (package.json, requirements.txt, go.mod, pom.xml, Gemfile.lock, Cargo.lock) and pin exact versions; map to known CVEs and cite the manifest line. Flag reachable, exploitable ones over merely-outdated ones.\n\
+- Repro PoC (optional but valued): when a finding warrants it, WRITE a proof/repro script to $NEUROSPLOIT_POCS — e.g. the exact malicious input + the request/CLI call that would trigger the sink, or a unit-style harness exercising the vulnerable function — with a header comment (file:line it proves, how to run). Cite the PoC path in the evidence. Mark clearly that it demonstrates the code path (static-derived), not a live hit.\n\
+- Calibrate: High/Critical only when the sink is reachable and exploitable from untrusted input; guarded/unreachable code is Low or a lead.\n\n";
+
 /// Methodology directions for a modern JS SPA backed by a REST/GraphQL API
 /// (Angular/React/Vue front + Node/Express-style API — the shape of OWASP Juice
 /// Shop and many real apps). These are DIRECTIONS on HOW to hunt each vuln class,
@@ -456,20 +487,37 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
 
     // Use the model to pick the agents whose preconditions match the recon —
     // the harness reasons about *which* specialists to run, not all of them.
+    // Exception: when the operator pinned an explicit set (--only), run EXACTLY
+    // those and skip recon-based selection — used to re-test a single vuln.
     let focus = cfg.instructions.clone().unwrap_or_default();
-    let chosen = select_agents(pool, &recon, &focus, &ranked, &tx).await;
-    let selected: Vec<Agent> = if !chosen.is_empty() {
+    let selected: Vec<Agent> = if !cfg.pinned.is_empty() {
         let sel: Vec<Agent> =
-            ranked.iter().filter(|a| chosen.iter().any(|c| c == &a.name)).cloned().collect();
+            ranked.iter().filter(|a| cfg.pinned.iter().any(|p| p == &a.name)).cloned().collect();
         if sel.is_empty() {
-            heuristic_select(&ranked, &recon, &focus, cap)
+            let _ = tx.send(format!("--only matched no agent ({}) — falling back to recon selection",
+                cfg.pinned.join(", "))).await;
+            let chosen = select_agents(pool, &recon, &focus, &ranked, &tx).await;
+            ranked.iter().filter(|a| chosen.iter().any(|c| c == &a.name)).take(cap).cloned().collect()
         } else {
-            sel.into_iter().take(cap).collect()
+            let _ = tx.send(format!("--only: running exactly {} pinned agent(s): {}", sel.len(),
+                sel.iter().map(|a| a.name.clone()).collect::<Vec<_>>().join(", "))).await;
+            sel
         }
     } else {
-        // LLM selection failed/empty → recon+focus keyword heuristic, not a blind flat list.
-        let _ = tx.send("selection empty — using recon-keyword heuristic".into()).await;
-        heuristic_select(&ranked, &recon, &focus, cap)
+        let chosen = select_agents(pool, &recon, &focus, &ranked, &tx).await;
+        if !chosen.is_empty() {
+            let sel: Vec<Agent> =
+                ranked.iter().filter(|a| chosen.iter().any(|c| c == &a.name)).cloned().collect();
+            if sel.is_empty() {
+                heuristic_select(&ranked, &recon, &focus, cap)
+            } else {
+                sel.into_iter().take(cap).collect()
+            }
+        } else {
+            // LLM selection failed/empty → recon+focus keyword heuristic, not a blind flat list.
+            let _ = tx.send("selection empty — using recon-keyword heuristic".into()).await;
+            heuristic_select(&ranked, &recon, &focus, cap)
+        }
     };
     // Dedup: never run the same agent twice in one engagement.
     let mut selected: Vec<Agent> = {
@@ -479,7 +527,7 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
     // No creds given → always run the registration/form agent FIRST so the run
     // reaches the authenticated surface (and the operator sees it happen). It
     // self-registers one test account under the anti-flood guardrail.
-    if cfg.auth.as_deref().unwrap_or("").trim().is_empty() {
+    if cfg.pinned.is_empty() && cfg.auth.as_deref().unwrap_or("").trim().is_empty() {
         if let Some(reg) = lib.vulns.iter().find(|a| a.name == "account_registration_and_forms") {
             if !selected.iter().any(|a| a.name == reg.name) {
                 let _ = tx.send("no creds set — running account_registration_and_forms first to reach the authenticated surface".into()).await;
@@ -597,7 +645,22 @@ pub async fn run_whitebox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: S
     }
 
     let mut rl = cfg.rl_path.as_ref().map(|p| RlState::load(Path::new(p))).unwrap_or_default();
-    let mut ranked: Vec<Agent> = if lib.code.is_empty() { lib.vulns.clone() } else { lib.code.clone() };
+    let pool_agents: Vec<Agent> = if lib.code.is_empty() { lib.vulns.clone() } else { lib.code.clone() };
+    let mut ranked: Vec<Agent> = if cfg.pinned.is_empty() {
+        pool_agents
+    } else {
+        // Operator pinned an explicit agent set (--only): re-test exactly those.
+        let sel: Vec<Agent> = pool_agents.iter()
+            .filter(|a| cfg.pinned.iter().any(|p| p == &a.name)).cloned().collect();
+        if sel.is_empty() {
+            let _ = tx.send(format!("--only matched no code agent ({}) — reviewing with the full set",
+                cfg.pinned.join(", "))).await;
+            pool_agents
+        } else {
+            let _ = tx.send(format!("--only: reviewing with exactly {} pinned agent(s)", sel.len())).await;
+            sel
+        }
+    };
     ranked.sort_by(|a, b| rl.weight(&b.name).partial_cmp(&rl.weight(&a.name)).unwrap_or(std::cmp::Ordering::Equal));
     let cap = if cfg.max_agents > 0 { cfg.max_agents.min(ranked.len()) } else { ranked.len() };
     let selected: Vec<Agent> = ranked.into_iter().take(cap).collect();
@@ -616,11 +679,15 @@ pub async fn run_whitebox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: S
                 let user = format!(
                     "{}\n\nSOURCE CODE TO REVIEW:\n```\n{}\n```\n\nReply ONLY with a JSON array of findings (may be empty []). \
                      Each item: {{id,title,severity,cwe,endpoint,payload,evidence,impact,remediation,confidence}} \
-                     where `endpoint` is the file:line and `evidence` quotes the vulnerable code.",
+                     where `endpoint` is the file:line and `evidence` quotes the vulnerable code. \
+                     When a finding warrants a runnable proof, write a repro script to $NEUROSPLOIT_POCS and put its path in `payload`.",
                     ag.user.replace("{target}", "the provided repository").replace("{recon_json}", "{}"),
                     ctx
                 );
-                match pool.complete_routed(Task::Exploit, &ag.name, &ag.system, &user).await {
+                // Prepend the white-box doctrine so code agents stay in static
+                // source-review mode and never hallucinate live/black-box actions.
+                let sys = format!("{}{}", WHITEBOX_DOCTRINE, ag.system);
+                match pool.complete_routed(Task::Exploit, &ag.name, &sys, &user).await {
                     Ok((m, text)) => {
                         let f = extract_findings(&text, &ag.name);
                         let _ = txc.send(format!("analyze {} via {} → {} candidate(s)", ag.name, m.label(), f.len())).await;
@@ -910,13 +977,13 @@ async fn chain_from_seed(pool: &ModelPool, target: &str, directives: &str, recon
     };
     let short: String = seed.title.chars().take(28).collect();
     let user = format!(
-        "AUTHORIZED engagement on {target}.\n\n{directives}{react}{depth}{decision}{safety}{doctrine}\
+        "AUTHORIZED engagement on {target}.\n\n{directives}{react}{depth}{decision}{chain}{safety}{doctrine}\
          FOOTHOLD TO EXPAND (round {round}/{max}):\n- [{}] {} @ {} ({})\n  payload: {}\n  evidence: {}\n\n\
          LOOT GATHERED (reuse it):\n{loot_block}\n\n{recipe_block}RECON:\n{recon_ctx}\n\n\
          From THIS foothold, DECIDE the best directions and PROVE new impact — post-exploitation (loot creds/keys/config/source), credential reuse, privilege escalation (horizontal & vertical), lateral movement to adjacent services/hosts, data exfiltration, and NEW attack surface it exposes. Every claim needs a real tool receipt.\n\n\
          Reply ONLY JSON: {{\"findings\":[{{id,title,severity,cwe,endpoint,payload,evidence,impact,remediation,confidence}}],\"loot\":[\"cred:user:pass@host\",\"token:...\",\"host:10.0.0.5\",\"endpoint:/internal/api\"]}} (empty arrays are fine).",
         seed.severity, seed.title, seed.endpoint, seed.cwe, seed.payload, seed.evidence,
-        react = REACT_DOCTRINE, depth = DEPTH_DOCTRINE, decision = DECISION_DOCTRINE, safety = SAFETY_DOCTRINE, doctrine = tool_doctrine(pool.mcp_config.is_some()),
+        react = REACT_DOCTRINE, depth = DEPTH_DOCTRINE, decision = DECISION_DOCTRINE, chain = CHAIN_DOCTRINE, safety = SAFETY_DOCTRINE, doctrine = tool_doctrine(pool.mcp_config.is_some()),
     );
     let label = format!("chain:{short}");
     match pool.complete_routed(Task::Exploit, &label, CHAIN_SYS, &user).await {

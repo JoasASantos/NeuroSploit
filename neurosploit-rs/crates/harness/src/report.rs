@@ -413,11 +413,51 @@ pub fn json_report(target: &str, findings: &[Finding], run_id: &str, meta: &Enga
 
 /// Write the full report bundle: Markdown, JSON, HTML, and the Typst/PDF.
 /// Returns the primary artifact path (PDF if typst present, else the .typ).
+/// A "## Reproduction — PoC scripts" section listing the runnable proof-of-concept
+/// scripts agents wrote to `<run>/pocs/`. Each is a self-contained artifact the
+/// operator can re-run to replicate a finding, so the report ships with a live
+/// reproduction kit — not just prose. Empty string when no PoCs were produced.
+pub fn pocs_section(dir: &Path) -> String {
+    let pocs = dir.join("pocs");
+    let mut entries: Vec<(String, String)> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&pocs) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if !p.is_file() { continue; }
+            let name = match p.file_name().and_then(|s| s.to_str()) { Some(n) => n.to_string(), None => continue };
+            // First non-empty comment line doubles as a one-line description.
+            let desc = std::fs::read_to_string(&p).ok()
+                .and_then(|t| t.lines()
+                    .map(|l| l.trim())
+                    .find(|l| l.starts_with('#') || l.starts_with("//") || l.starts_with("/*"))
+                    .map(|l| l.trim_start_matches(['#', '/', '*', ' ']).trim().to_string()))
+                .unwrap_or_default();
+            entries.push((name, desc));
+        }
+    }
+    if entries.is_empty() { return String::new(); }
+    entries.sort();
+    let mut s = String::from("## Reproduction — PoC scripts\n\n");
+    s.push_str("Runnable proofs written to `pocs/` during the engagement. Re-run any of \
+        them to replicate the corresponding finding.\n\n");
+    for (name, desc) in entries {
+        if desc.is_empty() {
+            s.push_str(&format!("- `pocs/{name}`\n"));
+        } else {
+            s.push_str(&format!("- `pocs/{name}` — {desc}\n"));
+        }
+    }
+    s.push('\n');
+    s
+}
+
 pub fn write_all(target: &str, findings: &[Finding], dir: &Path) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
     let run_id = dir.file_name().and_then(|s| s.to_str()).unwrap_or("run").to_string();
     let meta = read_meta(dir);
-    std::fs::write(dir.join("report.md"), markdown(target, findings, &meta))?;
+    let mut md = markdown(target, findings, &meta);
+    md.push_str(&pocs_section(dir));
+    std::fs::write(dir.join("report.md"), md)?;
     std::fs::write(dir.join("report.json"), json_report(target, findings, &run_id, &meta))?;
     std::fs::write(dir.join("report.html"), html(target, findings, &meta))?;
     typst_report(target, findings, dir)

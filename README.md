@@ -1,4 +1,4 @@
-<h1 align="center">🧠 NeuroSploit v3.6.6</h1>
+<h1 align="center">🧠 NeuroSploit v3.6.7</h1>
 
 <p align="center">
   <a href="https://trendshift.io/repositories/22624?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-22624" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/22624/daily?language=Python" alt="JoasASantos%2FNeuroSploit | Trendshift" width="250" height="55"/></a>
@@ -12,10 +12,10 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-3.6.6-blue?style=flat-square">
+  <img src="https://img.shields.io/badge/Version-3.6.7-blue?style=flat-square">
   <img src="https://img.shields.io/badge/Harness-Rust%20%7C%20tokio-e6b673?style=flat-square">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
-  <img src="https://img.shields.io/badge/MD%20Agents-430-red?style=flat-square">
+  <img src="https://img.shields.io/badge/MD%20Agents-435-red?style=flat-square">
   <img src="https://img.shields.io/badge/Models-16%20providers-success?style=flat-square">
   <img src="https://img.shields.io/badge/Modes-Black%20%7C%20White%20%7C%20Grey%20%7C%20Host%20%7C%20AI-9cf?style=flat-square">
   <img src="https://img.shields.io/badge/Auth-API%20key%20%7C%20Subscription-orange?style=flat-square">
@@ -36,7 +36,7 @@ LLMs** — via **API key** or local **subscription** (Claude Code / Codex / Gemi
 Grok) — recons the target, **intelligently selects only the agents that match the
 discovered surface**, runs them in parallel, **chains** findings into deeper
 impact, and **validates every claim by cross-model voting + tool-receipt
-grounding** before reporting. It ships **430 markdown agents** and a **Mission
+grounding** before reporting. It ships **435 markdown agents** and a **Mission
 Control TUI**.
 
 ### Engagement modes
@@ -69,9 +69,14 @@ Control TUI**.
   flags, CORS reflection, tech fingerprint, linked JS, 404 baseline, high-signal
   paths) and feeds those observed facts into recon, so agent selection and
   exploitation decisions are grounded in evidence — not the model's guess.
-- 🔗 **Attack chaining** — 12 multi-stage chain agents (SQLi→RCE→LPE, SSRF→AWS
-  creds, upload→LFI→RCE→LPE, default-creds→domain, …); each stage proven before
-  advancing.
+- 🔗 **Attack chaining — any primitive pivots.** 13 multi-stage chain agents
+  (SQLi→RCE→LPE, SSRF→cloud creds, upload→LFI→RCE→LPE, CVE→RCE→pivot, …) **plus a
+  chaining doctrine** that turns *any* confirmed foothold into the next step:
+  reduce it to a primitive (exec / read / write / request-forgery / identity /
+  secret) and pivot — file-upload→RCE, SSRF→metadata creds, IDOR→takeover — reusing
+  looted creds and reasoning about **business logic** (payment/tenancy/workflow
+  abuse). Each stage proven; strictly non-destructive (no data loss, no DB
+  overwrite, no DoS).
 - ☁️ **Cloud testing** — AWS / GCP / Azure agents that drive the provider CLIs
   (`aws`/`gcloud`/`az`). Connect via `creds.yaml`: AWS keys, a Google
   service-account JSON, or an Azure service principal — see
@@ -84,12 +89,23 @@ Control TUI**.
   attacker→**LLM-judge** loop (baseline refusal → technique → verdict) and proves
   the bypass with a **benign, redacted** receipt. Maps to OWASP LLM Top 10 (2025),
   MCP threats & OWASP AI Exchange; Skill/plugin & **n8n** files audited white-box.
-- 🧰 **Misconfig & CVE hunting, safely** — dedicated agents for absurd
-  misconfigs (exposed `.git`/`.env`, debug/actuator, default creds, dashboards,
-  CORS), a **CVE Hunter** (smart, targeted `nuclei`), a **PoC Developer** (writes
-  reproducible scripts to the run's `pocs/`), and **rate-limit** testing — all
-  under a strict **data-safety/PII guardrail** (no destructive or state-changing
+- 🧰 **Misconfig & CVE hunting → exploitation, safely** — a full CVE pipeline:
+  **version fingerprint** (pin exact versions) → **research analyst** (map to
+  NVD/GHSA CVEs, judge reachability) → **PoC finder** (locate/vet/adapt a public
+  PoC) → **exploit scripter** (write a custom exploit when none exists). Every PoC
+  is written to the run's **`pocs/` folder and referenced in the report** so
+  findings are reproducible. Plus absurd-misconfig agents (exposed `.git`/`.env`,
+  debug/actuator, default creds, dashboards, CORS) and rate-limit testing — all
+  under a strict **data-safety/PII guardrail** (no destructive/state-changing
   actions; PII proven with a masked sample, never dumped).
+- 🎯 **Re-test one vulnerability** — `--only <agent>` (repeatable /
+  comma-separated) runs exactly the agent(s) you name and skips recon-based
+  selection — re-test a single finding fast. Works on `run` / `whitebox` /
+  `greybox`; `neurosploit agents` lists the names.
+- 🔬 **White-box stays white-box** — code agents run under a static-review
+  doctrine (symbolic `file:line` receipts, source-to-sink taint tracing, manifest
+  version→CVE) that forbids hallucinated live/black-box network actions, and can
+  emit a repro PoC to `pocs/`.
 - 🗣️ **Natural-language REPL** — in the interactive session, just describe what
   you want, in any language: *"testa https://loja.com com opus, foco em SQLi,
   fora de escopo /admin, roda"*. A hybrid parser sets target/models/focus/
