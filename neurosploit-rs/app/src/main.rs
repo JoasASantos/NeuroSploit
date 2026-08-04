@@ -1,4 +1,4 @@
-//! NeuroSploit v3.6.5 — interactive harness + CLI (`run` / `whitebox` / `agents` / `models`).
+//! NeuroSploit v3.6.6 — interactive harness + CLI (`run` / `whitebox` / `agents` / `models`).
 
 mod repl;
 mod tui;
@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 #[command(
     name = "neurosploit",
     version,
-    about = "NeuroSploit v3.6.5 — multi-model autonomous pentest harness",
-    long_about = "NeuroSploit v3.6.5 — a Rust multi-model harness that drives a pool of LLMs \
+    about = "NeuroSploit v3.6.6 — multi-model autonomous pentest harness",
+    long_about = "NeuroSploit v3.6.6 — a Rust multi-model harness that drives a pool of LLMs \
 (API key or local subscription: Claude/Codex/Gemini/Grok) to autonomously test a target. \
 After recon it INTELLIGENTLY selects only the agents matching the discovered surface, runs \
 them in parallel, then validates every finding by cross-model voting before reporting.\n\n\
@@ -542,7 +542,7 @@ async fn main() -> anyhow::Result<()> {
                         std::fs::remove_dir_all(&dest).ok();
                         let url = ig.authed_clone_url(&format!("https://github.com/{owner_repo}"));
                         if run_git(&["clone", "--depth", "1", "--branch", &branch, &url, &dest.display().to_string()]).is_ok() {
-                            let mut cfg = RunConfig::new(&dest.display().to_string());
+                            let mut cfg = RunConfig::new(dest.display().to_string());
                             cfg.subscription = subscription;
                             cfg.verbose = verbose;
                             if !models.is_empty() { cfg.models = models.clone(); }
@@ -751,7 +751,7 @@ pub(crate) fn spawn_engagement(base: &Path, mut cfg: RunConfig, mcp: bool, mode:
     println!("  │  ua     : {ua}");
     write_status(&workdir, "running", &format!("\"target\":{:?}", cfg.target));
 
-    println!("  ┌─ NeuroSploit v3.6.5  ·  by Joas A Santos & Red Team Leaders");
+    println!("  ┌─ NeuroSploit v3.6.6  ·  by Joas A Santos & Red Team Leaders");
     println!("  │  run id : {run_id}");
     println!("  │  target : {}", cfg.target);
     println!("  │  models : {}", cfg.models.join(", "));

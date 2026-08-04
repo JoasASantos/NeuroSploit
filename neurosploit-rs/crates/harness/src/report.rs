@@ -232,7 +232,7 @@ fn needs_review(f: &Finding) -> bool { f.review_status == "needs-review" }
 
 /// Strip Markdown emphasis/backticks so prose renders cleanly inside Typst.
 fn strip_md(s: &str) -> String {
-    s.replace("**", "").replace('`', "").replace('*', "")
+    s.replace("**", "").replace(['`', '*'], "")
 }
 
 /// Written prose executive summary: names the asset, the counts, and the top risks.
@@ -313,7 +313,7 @@ pub fn markdown(target: &str, findings: &[Finding], meta: &EngagementMeta) -> St
     if !meta.title.is_empty() { out.push_str(&format!("- **Page title:** {}\n", meta.title)); }
     if !meta.tech.is_empty() { out.push_str(&format!("- **Technology:** {}\n", meta.tech.join(", "))); }
     if !meta.server.is_empty() { out.push_str(&format!("- **Server:** {}\n", meta.server)); }
-    out.push_str("\n");
+    out.push('\n');
 
     // --- Executive summary ---
     out.push_str("## Executive summary\n\n");
@@ -333,7 +333,7 @@ pub fn markdown(target: &str, findings: &[Finding], meta: &EngagementMeta) -> St
             out.push_str(&format!("| {} | {} | {} | {} | {} | {} |\n",
                 i + 1, f.title.replace('|', "\\|"), f.severity, owc.replace('|', "\\|"), status, auth));
         }
-        out.push_str("\n");
+        out.push('\n');
     }
 
     // --- Test accounts created (from the vault cleanup finding) ---

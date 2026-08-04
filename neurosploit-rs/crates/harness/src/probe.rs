@@ -149,7 +149,7 @@ fn extract_brand(body: &str) -> String {
             // strip the marker + a year, take the first capitalised words.
             let cleaned = seg.replace('©', " ").replace("&copy;", " ");
             let cleaned = cleaned.trim_start_matches(|c: char| !c.is_alphabetic());
-            let name: String = cleaned.split(|c: char| c == '<' || c == '.' || c == '|' || c == '\n')
+            let name: String = cleaned.split(['<', '.', '|', '\n'])
                 .next().unwrap_or("").chars().filter(|c| c.is_alphanumeric() || c.is_whitespace() || *c == '&' || *c == '-')
                 .collect::<String>().trim().to_string();
             // drop a leading year like "2024 "

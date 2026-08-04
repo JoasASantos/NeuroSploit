@@ -147,10 +147,11 @@ pub fn hygiene_summary(findings: &[Finding]) -> Vec<String> {
 mod tests {
     use super::*;
     fn f(title: &str, sev: &str, cwe: &str, ep: &str, ev: &str, payload: &str) -> Finding {
-        let mut x = Finding::default();
-        x.title = title.into(); x.severity = sev.into(); x.cwe = cwe.into();
-        x.endpoint = ep.into(); x.evidence = ev.into(); x.payload = payload.into();
-        x
+        Finding {
+            title: title.into(), severity: sev.into(), cwe: cwe.into(),
+            endpoint: ep.into(), evidence: ev.into(), payload: payload.into(),
+            ..Default::default()
+        }
     }
 
     #[test]

@@ -372,6 +372,23 @@ pub fn parse_verdict(text: &str) -> Verdict {
     Verdict::Unclear
 }
 
+/// Severity-aware confirmation quorum. False High/Critical findings are the most
+/// costly, so they require ≥2 validators AND ≥2/3 agreement; lower severities
+/// pass on a strict majority (more than half). With only one validator available
+/// (single-model panel) the majority rule applies to all severities.
+pub fn quorum_confirmed(severity: &str, yes: usize, total: usize) -> bool {
+    if total == 0 {
+        return false;
+    }
+    let s = severity.to_lowercase();
+    let high = s.starts_with("crit") || s.starts_with("high");
+    if high && total >= 2 {
+        yes * 3 >= total * 2 // ≥ two-thirds
+    } else {
+        yes * 2 > total // strict majority
+    }
+}
+
 #[cfg(test)]
 mod verdict_tests {
     use super::*;
@@ -403,22 +420,5 @@ mod verdict_tests {
         assert!(!quorum_confirmed("Medium", 1, 2));
         assert!(quorum_confirmed("Low", 2, 3));
         assert!(!quorum_confirmed("Low", 0, 2));
-    }
-}
-
-/// Severity-aware confirmation quorum. False High/Critical findings are the most
-/// costly, so they require ≥2 validators AND ≥2/3 agreement; lower severities
-/// pass on a strict majority (more than half). With only one validator available
-/// (single-model panel) the majority rule applies to all severities.
-pub fn quorum_confirmed(severity: &str, yes: usize, total: usize) -> bool {
-    if total == 0 {
-        return false;
-    }
-    let s = severity.to_lowercase();
-    let high = s.starts_with("crit") || s.starts_with("high");
-    if high && total >= 2 {
-        yes * 3 >= total * 2 // ≥ two-thirds
-    } else {
-        yes * 2 > total // strict majority
     }
 }
