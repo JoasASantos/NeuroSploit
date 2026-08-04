@@ -1,3 +1,37 @@
+# NeuroSploit v3.6.7 — Release Notes
+
+**Release Date:** August 2026
+**Codename:** Chain & Exploit
+**License:** MIT
+**Credits:** Joas A Santos & Red Team Leaders
+
+## Highlights
+
+- **CVE exploitation pipeline — 4 new agents.** `cve_version_fingerprint` (pin
+  exact versions) → `cve_research_analyst` (map to NVD/GHSA, judge reachability) →
+  `cve_poc_finder` (locate/vet/adapt a public PoC) → `cve_exploit_scripter` (write
+  a custom exploit when none exists). Focus: actually exploiting vulns that have
+  CVEs, not just flagging versions.
+- **PoCs land in the run's `pocs/` folder and are listed in the report.** Every
+  agent writes runnable proofs to `$NEUROSPLOIT_POCS`; the report gains a
+  **"Reproduction — PoC scripts"** section so findings replay end-to-end.
+- **Chaining for any primitive.** New `CHAIN_DOCTRINE` + a `chain_cve_to_rce_to_pivot`
+  recipe turn any confirmed foothold into the next step (upload→RCE, SSRF→cloud
+  creds, IDOR→takeover, CVE→RCE→pivot), reusing looted creds and reasoning about
+  **business logic** — strictly non-destructive (no data loss / DB overwrite / DoS).
+- **`--only <agent>` — re-test a single vulnerability.** Runs exactly the named
+  agent(s), skipping recon selection. On `run` / `whitebox` / `greybox`; repeatable
+  or comma/semicolon-separated. (Implements the previously-dead `pinned` allowlist.)
+- **White-box stays white-box.** A `WHITEBOX_DOCTRINE` keeps code agents in static
+  source-review mode (symbolic `file:line` receipts, source→sink taint, manifest
+  version→CVE) and blocks hallucinated live/black-box network actions; agents can
+  emit a repro PoC.
+- **435 markdown agents** (was 430).
+
+**Full changelog:** https://github.com/JoasASantos/NeuroSploit/compare/v3.6.6...v3.6.7
+
+---
+
 # NeuroSploit v3.6.6 — Release Notes
 
 **Release Date:** August 2026

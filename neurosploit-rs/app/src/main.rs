@@ -1,4 +1,4 @@
-//! NeuroSploit v3.6.6 — interactive harness + CLI (`run` / `whitebox` / `agents` / `models`).
+//! NeuroSploit v3.6.7 — interactive harness + CLI (`run` / `whitebox` / `agents` / `models`).
 
 mod repl;
 mod tui;
@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 #[command(
     name = "neurosploit",
     version,
-    about = "NeuroSploit v3.6.6 — multi-model autonomous pentest harness",
-    long_about = "NeuroSploit v3.6.6 — a Rust multi-model harness that drives a pool of LLMs \
+    about = "NeuroSploit v3.6.7 — multi-model autonomous pentest harness",
+    long_about = "NeuroSploit v3.6.7 — a Rust multi-model harness that drives a pool of LLMs \
 (API key or local subscription: Claude/Codex/Gemini/Grok) to autonomously test a target. \
 After recon it INTELLIGENTLY selects only the agents matching the discovered surface, runs \
 them in parallel, then validates every finding by cross-model voting before reporting.\n\n\
@@ -77,6 +77,11 @@ enum Cmd {
         /// Open a Jira card per finding (needs the jira integration enabled).
         #[arg(long)]
         jira: bool,
+        /// Re-test ONLY these agent(s), skipping recon-based selection — repeatable
+        /// or comma/semicolon-separated (e.g. `--only sqli --only cve_hunter`).
+        /// Run `neurosploit agents` for the names.
+        #[arg(long = "only")]
+        only: Vec<String>,
         /// Verbose: log each agent as it launches, recon, and votes.
         #[arg(short, long)]
         verbose: bool,
@@ -105,6 +110,9 @@ enum Cmd {
         /// Open a Jira card per finding (needs the jira integration enabled).
         #[arg(long)]
         jira: bool,
+        /// Re-test ONLY these code agent(s) — repeatable or comma/semicolon-separated.
+        #[arg(long = "only")]
+        only: Vec<String>,
         #[arg(short, long)]
         verbose: bool,
     },
@@ -139,6 +147,9 @@ enum Cmd {
         subscription: bool,
         #[arg(long)]
         mcp: bool,
+        /// Re-test ONLY these agent(s) — repeatable or comma/semicolon-separated.
+        #[arg(long = "only")]
+        only: Vec<String>,
         #[arg(short, long)]
         verbose: bool,
     },
@@ -379,7 +390,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        Cmd::Run { url, models, max_agents, vote_n, chain_depth, recon, offline, subscription, mcp, creds, focus, objective, out_of_scope, jira, verbose } => {
+        Cmd::Run { url, models, max_agents, vote_n, chain_depth, recon, offline, subscription, mcp, creds, focus, objective, out_of_scope, jira, only, verbose } => {
             let url = if url.starts_with("http") { url } else { format!("https://{url}") };
             let mut cfg = RunConfig::new(&url);
             cfg.max_agents = max_agents;
@@ -392,6 +403,7 @@ async fn main() -> anyhow::Result<()> {
             cfg.instructions = focus;
             cfg.objective = objective;
             cfg.out_of_scope = out_of_scope;
+            cfg.pinned = parse_only(&only);
             if !models.is_empty() {
                 cfg.models = models;
             }
@@ -401,7 +413,7 @@ async fn main() -> anyhow::Result<()> {
             let ig = harness::integrations::Integrations::load(&repl::proj_dir());
             post_integrations(&ig, &url, &out, jira, false, None).await;
         }
-        Cmd::Whitebox { path, models, max_agents, vote_n, chain_depth, recon, offline, subscription, jira, verbose } => {
+        Cmd::Whitebox { path, models, max_agents, vote_n, chain_depth, recon, offline, subscription, jira, only, verbose } => {
             let path = resolve_source(&base, &path)?; // local path OR github URL/owner/repo
             let mut cfg = RunConfig::new(&path);
             cfg.max_agents = max_agents;
@@ -411,6 +423,7 @@ async fn main() -> anyhow::Result<()> {
             cfg.offline = offline;
             cfg.subscription = subscription;
             cfg.verbose = verbose;
+            cfg.pinned = parse_only(&only);
             if !models.is_empty() {
                 cfg.models = models;
             }
@@ -419,7 +432,7 @@ async fn main() -> anyhow::Result<()> {
             let ig = harness::integrations::Integrations::load(&repl::proj_dir());
             post_integrations(&ig, &path, &out, jira, false, None).await;
         }
-        Cmd::Greybox { repo, url, models, creds, focus, max_agents, vote_n, chain_depth, recon, offline, subscription, mcp, verbose } => {
+        Cmd::Greybox { repo, url, models, creds, focus, max_agents, vote_n, chain_depth, recon, offline, subscription, mcp, only, verbose } => {
             let repo = resolve_source(&base, &repo)?; // local path OR github URL/owner/repo
             let url = if url.starts_with("http") { url } else { format!("https://{url}") };
             let mut cfg = RunConfig::new(&url);
@@ -432,6 +445,7 @@ async fn main() -> anyhow::Result<()> {
             cfg.subscription = subscription;
             cfg.verbose = verbose;
             cfg.instructions = focus;
+            cfg.pinned = parse_only(&only);
             if !models.is_empty() {
                 cfg.models = models;
             }
@@ -751,7 +765,7 @@ pub(crate) fn spawn_engagement(base: &Path, mut cfg: RunConfig, mcp: bool, mode:
     println!("  │  ua     : {ua}");
     write_status(&workdir, "running", &format!("\"target\":{:?}", cfg.target));
 
-    println!("  ┌─ NeuroSploit v3.6.6  ·  by Joas A Santos & Red Team Leaders");
+    println!("  ┌─ NeuroSploit v3.6.7  ·  by Joas A Santos & Red Team Leaders");
     println!("  │  run id : {run_id}");
     println!("  │  target : {}", cfg.target);
     println!("  │  models : {}", cfg.models.join(", "));
@@ -894,6 +908,21 @@ pub(crate) fn print_findings(out: &RunOutput) {
         println!("  artifacts: {}", out.artifacts.join(", "));
         println!("  (full attack graph rendered in report.html)");
     }
+}
+
+/// Parse repeated `--only` values into a clean agent allowlist. Accepts repeats
+/// and comma/semicolon-separated lists (`--only sqli,xss` == `--only sqli --only xss`).
+fn parse_only(vals: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for v in vals {
+        for part in v.split([',', ';']) {
+            let name = part.trim();
+            if !name.is_empty() && !out.iter().any(|x| x == name) {
+                out.push(name.to_string());
+            }
+        }
+    }
+    out
 }
 
 fn sanitize(s: &str) -> String {
