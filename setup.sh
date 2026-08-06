@@ -28,7 +28,7 @@ cat <<'BANNER'
 
    ███╗   ██╗███████╗██╗   ██╗██████╗  ██████╗
    ████╗  ██║██╔════╝██║   ██║██╔══██╗██╔═══██╗   NeuroSploit installer
-   ██╔██╗ ██║█████╗  ██║   ██║██████╔╝██║   ██║   v3.6.1 — Rust harness
+   ██╔██╗ ██║█████╗  ██║   ██║██████╔╝██║   ██║   v3.6.8 — Rust harness
    ██║╚██╗██║██╔══╝  ██║   ██║██╔══██╗██║   ██║   by Joas A Santos
    ██║ ╚████║███████╗╚██████╔╝██║  ██║╚██████╔╝   & Red Team Leaders
    ╚═╝  ╚═══╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝ ╚═════╝
@@ -63,7 +63,7 @@ if [ -z "$REF" ]; then
   REF="$(dl "https://api.github.com/repos/${REPO_SLUG}/releases/latest" /dev/stdout 2>/dev/null \
          | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name" *: *"([^"]+)".*/\1/' || true)"
 fi
-[ -z "$REF" ] && REF="v3.6.1"
+[ -z "$REF" ] && REF="v3.6.8"
 say "Release: $REF"
 
 installed=0

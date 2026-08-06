@@ -1,4 +1,4 @@
-<h1 align="center">🧠 NeuroSploit v3.6.7</h1>
+<h1 align="center">🧠 NeuroSploit v3.6.8</h1>
 
 <p align="center">
   <a href="https://trendshift.io/repositories/22624?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-22624" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/22624/daily?language=Python" alt="JoasASantos%2FNeuroSploit | Trendshift" width="250" height="55"/></a>
@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-3.6.7-blue?style=flat-square">
+  <img src="https://img.shields.io/badge/Version-3.6.8-blue?style=flat-square">
   <img src="https://img.shields.io/badge/Harness-Rust%20%7C%20tokio-e6b673?style=flat-square">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
   <img src="https://img.shields.io/badge/MD%20Agents-435-red?style=flat-square">
