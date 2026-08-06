@@ -619,6 +619,9 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
     let transcript = transcript_of(&raw);
     let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
     let _ = tx.send(format!("{} candidate finding(s) (deduped) — validating by {}-model vote", candidates.len(), cfg.vote_n)).await;
+    if pool.candidates.len() == 1 && cfg.vote_n <= 1 {
+        let _ = tx.send("⚠ single-model panel with vote_n=1 — validation is weaker (same model validates its own findings). Consider --vote-n 2 or adding a second model for cross-validation.".into()).await;
+    }
 
     // ---- 4. Validate by N-model voting ---------------------------------
     let mut findings = validate(candidates, pool, VOTE_SYS, cfg.vote_n, &tx).await;
@@ -1148,9 +1151,26 @@ fn heuristic_select(ranked: &[Agent], recon: &str, focus: &str, cap: usize) -> V
 }
 
 async fn validate(candidates: Vec<Finding>, pool: &ModelPool, sys: &str, vote_n: usize, tx: &Sender<String>) -> Vec<Finding> {
+    // Fast-track: findings with no evidence are unverifiable — skip the vote
+    // and flag for human review instead of wasting a validator call that will
+    // always reject ("default to rejected when uncertain" + empty evidence).
+    let (have_evidence, no_evidence): (Vec<_>, Vec<_>) = candidates.into_iter().partition(|f| {
+        let e = f.evidence.trim();
+        !e.is_empty() && e != "N/A" && e != "n/a" && e != "none" && e != "-"
+    });
+    let mut flagged: Vec<Finding> = no_evidence.into_iter().map(|mut f| {
+        f.validated = false;
+        f.review_status = "needs-review".into();
+        f.review_reason = "no concrete evidence provided by agent — manual verification required".into();
+        f.votes = "0/0".into();
+        f
+    }).collect();
+    for f in &flagged {
+        let _ = tx.send(format!("vote {} → needs-review (no evidence)", f.title)).await;
+    }
     // Prefer a model other than the primary (likely finder) to adjudicate.
     let finder = pool.candidates.first().map(|m| m.label());
-    let validated: Vec<Finding> = stream::iter(candidates)
+    let validated: Vec<Finding> = stream::iter(have_evidence)
         .map(|mut f| {
             let txc = tx.clone();
             let finder = finder.clone();
@@ -1184,7 +1204,9 @@ async fn validate(candidates: Vec<Finding>, pool: &ModelPool, sys: &str, vote_n:
         .collect()
         .await;
     // Keep confirmed AND needs-review (human decides); drop only zero-support noise.
-    validated.into_iter().filter(|f| f.validated || f.review_status == "needs-review").collect()
+    // Include no-evidence flagged findings so the human loop sees them.
+    flagged.extend(validated.into_iter().filter(|f| f.validated || f.review_status == "needs-review"));
+    flagged
 }
 
 /// Adversarial refutation pass: every confirmed **High/Critical** finding is

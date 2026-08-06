@@ -1,11 +1,26 @@
-# NeuroSploit v3.6.7 — Release Notes
+# NeuroSploit v3.6.8 — Release Notes
 
 **Release Date:** August 2026
 **Codename:** Chain & Exploit
 **License:** MIT
 **Credits:** Joas A Santos & Red Team Leaders
 
-## Highlights
+## v3.6.8 — Bugfix: Ollama error handling, empty-evidence validation, single-model warnings
+
+- **Better Ollama/local provider error messages.** Connection-refused and timeout
+  errors now name the provider, URL, and suggest checking if the server is running.
+  Previously showed raw reqwest errors.
+- **Empty-evidence findings skip the vote and go straight to `needs-review`.**
+  Findings with no evidence are unverifiable by the adversarial validator (which
+  always rejects "no evidence" per its system prompt). Now they bypass the vote
+  and are flagged for human review instead of being silently dropped.
+- **Single-model + vote_n=1 warning.** When only one model is configured and
+  vote_n is 1, the pipeline emits a warning that validation is weaker (same model
+  validates its own findings).
+
+---
+
+## v3.6.7 Highlights
 
 - **CVE exploitation pipeline — 4 new agents.** `cve_version_fingerprint` (pin
   exact versions) → `cve_research_analyst` (map to NVD/GHSA, judge reachability) →

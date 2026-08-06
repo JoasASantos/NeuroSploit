@@ -163,7 +163,20 @@ impl ChatClient {
         if !key.is_empty() {
             if azure { req = req.header("api-key", &key); } else { req = req.bearer_auth(&key); }
         }
-        let resp = req.send().await?;
+        let resp = req.send().await.map_err(|e| {
+            if e.is_connect() {
+                let local = matches!(p.key, "ollama" | "litellm" | "llamacpp");
+                if local {
+                    anyhow!("{} connection refused at {} — is the server running? ({})", p.key, url, e)
+                } else {
+                    anyhow!("{} connection error: {}", p.key, e)
+                }
+            } else if e.is_timeout() {
+                anyhow!("{} request timed out (120s) for model '{}' — model may be too large for available memory", p.key, m.model)
+            } else {
+                anyhow!("{} request error: {}", p.key, e)
+            }
+        })?;
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
         if !status.is_success() {
