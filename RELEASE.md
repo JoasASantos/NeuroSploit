@@ -17,6 +17,13 @@
 - **Single-model + vote_n=1 warning.** When only one model is configured and
   vote_n is 1, the pipeline emits a warning that validation is weaker (same model
   validates its own findings).
+- **JSON parse resilience for local models.** `extract_findings` now logs when a
+  model returns text but no parseable JSON (previously silent drop — 0 findings
+  with no diagnostic). Also auto-fixes trailing-comma JSON (`[...,]`) which small
+  models commonly produce.
+- **Visible diagnostics when agents return 0 findings.** Pipeline emits the
+  response tail so the operator can see what the model actually returned (helps
+  debug model quality issues with local/small models).
 
 ---
 

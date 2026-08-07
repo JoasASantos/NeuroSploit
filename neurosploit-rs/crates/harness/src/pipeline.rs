@@ -598,6 +598,10 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
                     Ok((m, text)) => {
                         let f = extract_findings(&text, &ag.name);
                         let _ = txc.send(format!("exploit {} via {} → {} candidate(s)", ag.name, m.label(), f.len())).await;
+                        if f.is_empty() && !text.trim().is_empty() && text.trim() != "[]" {
+                            let tail: String = text.chars().rev().take(120).collect::<String>().chars().rev().collect();
+                            let _ = txc.send(format!("⚠ agent {} returned text but 0 parseable findings (model may have produced malformed JSON). Tail: {:?}", ag.name, tail)).await;
+                        }
                         // Live findings feed: surface each candidate the moment it appears.
                         for c in &f {
                             let _ = txc.send(format!("finding: [{}] {} @ {}", c.severity, c.title, c.endpoint)).await;
@@ -1458,12 +1462,27 @@ fn extract_findings(text: &str, agent: &str) -> Vec<Finding> {
         (Some(a), Some(b)) if b > a => &text[a..=b],
         _ => match (text.find('{'), text.rfind('}')) {
             (Some(a), Some(b)) if b > a => &text[a..=b],
-            _ => return vec![],
+            _ => {
+                if !text.trim().is_empty() && text.trim() != "[]" {
+                    eprintln!("[extract_findings] agent {agent}: model returned text but no JSON array/object found (len={}); raw tail: {:?}",
+                        text.len(), &text[text.len().saturating_sub(200)..]);
+                }
+                return vec![];
+            }
         },
     };
     let val: serde_json::Value = match serde_json::from_str(slice) {
         Ok(v) => v,
-        Err(_) => return vec![],
+        Err(e) => {
+            eprintln!("[extract_findings] agent {agent}: JSON parse failed: {e}; slice head: {:?}",
+                &slice[..slice.len().min(300)]);
+            // Attempt to salvage: strip trailing comma before ] (common LLM mistake)
+            let fixed = slice.replace(",]", "]").replace(",}", "}");
+            match serde_json::from_str(&fixed) {
+                Ok(v) => v,
+                Err(_) => return vec![],
+            }
+        }
     };
     let items: Vec<serde_json::Value> = match val {
         serde_json::Value::Array(a) => a,
