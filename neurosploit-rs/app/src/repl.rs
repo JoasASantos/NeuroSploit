@@ -68,6 +68,7 @@ impl RunLive {
             if self.feed.len() > 200 { self.feed.remove(0); }
         }
         if low.contains("token/quota exhausted") || low.contains("run is paused") { self.phase = "paused (quota)".into(); }
+        else if low.contains("authentication failed") || low.contains("auth failed") || low.contains("circuit breaker") { self.phase = "paused (auth)".into(); }
         else if low.contains("resumed — retrying") { self.phase = "exploiting".into(); }
         else if low.starts_with("recon") || low.starts_with("ai-recon") || low.contains("recon round") || low.contains("intensity") || low.starts_with("probe:") { self.phase = "recon".into(); }
         else if low.contains("selected") && low.contains("agent") {

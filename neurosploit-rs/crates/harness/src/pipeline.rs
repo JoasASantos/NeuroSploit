@@ -610,7 +610,12 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
                         (ag.name.clone(), text, f)
                     }
                     Err(e) => {
-                        let _ = txc.send(format!("exploit {} failed: {e}", ag.name)).await;
+                        let is_auth = crate::pool::is_auth_failure(&e);
+                        if is_auth {
+                            let _ = txc.send(format!("⚠ exploit {} auth failed — findings so far are SAFE, run is pausing: {e}", ag.name)).await;
+                        } else {
+                            let _ = txc.send(format!("exploit {} failed: {e}", ag.name)).await;
+                        }
                         (ag.name.clone(), format!("ERROR: {e}"), vec![])
                     }
                 }
@@ -1900,7 +1905,16 @@ async fn deep_recon(cfg: &RunConfig, pool: &ModelPool, probe_facts: &str, tx: &S
     let _ = tx.send(format!("recon: intensity {} — actively enumerating (installing tools as needed)…", intensity)).await;
     match pool.complete_routed(Task::Recon, "recon", RECON_SYS, &user).await {
         Ok((m, t)) => { let _ = tx.send(format!("recon round 1 complete via {}", m.label())).await; accum.push_str(&format!("\n\nMODEL RECON (round 1):\n{t}")); }
-        Err(e) => { let _ = tx.send(format!("recon round 1 failed ({e}) — probe facts only")).await; return accum; }
+        Err(e) => {
+            let is_auth = crate::pool::is_auth_failure(&e);
+            if is_auth {
+                let _ = tx.send(format!("recon round 1 auth failed ({e}) — continuing with probe facts; run will pause before exploit phase")).await;
+                accum.push_str(&format!("\n\nMODEL RECON (round 1):\n{e}"));
+            } else {
+                let _ = tx.send(format!("recon round 1 failed ({e}) — probe facts only")).await;
+            }
+            return accum;
+        }
     }
 
     // Follow-up expansion rounds — each digs further using what's known so far.
@@ -1921,7 +1935,11 @@ async fn deep_recon(cfg: &RunConfig, pool: &ModelPool, probe_facts: &str, tx: &S
                 if novel.len() > 20 { let _ = tx.send(format!("recon round {round} via {} — expanded surface", m.label())).await; accum.push_str(&format!("\n\nMODEL RECON (round {round}):\n{novel}")); }
                 else { let _ = tx.send(format!("recon round {round}: no new surface — recon converged")).await; break; }
             }
-            Err(e) => { let _ = tx.send(format!("recon round {round} failed ({e})")).await; break; }
+            Err(e) => {
+                let is_auth = crate::pool::is_auth_failure(&e);
+                let _ = tx.send(format!("recon round {round} {} ({e})", if is_auth { "auth failed" } else { "failed" })).await;
+                break;
+            }
         }
     }
     accum

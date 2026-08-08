@@ -5,7 +5,33 @@
 **License:** MIT
 **Credits:** Joas A Santos & Red Team Leaders
 
-## v3.6.8 — Bugfix: Ollama error handling, empty-evidence validation, single-model warnings
+## v3.6.8 — Auth resilience, circuit breaker, Ollama error handling, empty-evidence validation
+
+### Auth Resilience & Circuit Breaker (NEW)
+
+- **`is_auth_failure()` detector.** New function recognises OAuth token revocation
+  (401), session expiry, invalid/revoked API keys, and "not logged in" errors from
+  subscription CLIs. Distinct from `is_exhaustion()` (quota/rate-limit) — auth
+  failures are non-recoverable without re-login or provider switch.
+- **Circuit breaker (3 consecutive auth failures → auto-pause).** A shared atomic
+  counter tracks consecutive auth failures across ALL agents. After 3 failures the
+  pool pauses the run BEFORE burning through the remaining agents on a dead token.
+  Previously, a revoked OAuth token caused all 66+ agents to silently return 0
+  findings with no pause or warning.
+- **Auth-aware park: findings preserved, fallback offered.** When auth fails the
+  run parks with a clear message:
+  `⏸ authentication failed (...). Run is PAUSED — all findings so far are SAFE.`
+  The user can `/continue openai:gpt-5.1` (or any provider) to switch and resume.
+  All `LiveCheckpoint` findings on disk are preserved across the pause.
+- **No retry burn on auth failure.** `one()` returns immediately on auth errors
+  instead of retrying 3 times against a dead token (same as quota exhaustion).
+- **Recon preserves probe facts on auth failure.** When model recon fails with an
+  auth error, the HTTP probe data is still returned and the pipeline continues
+  with probe-only intelligence instead of silently dropping everything.
+- **Phase tracking for auth pauses.** The REPL status line shows `paused (auth)`
+  (distinct from `paused (quota)`) so the operator knows the root cause at a glance.
+
+### Bugfixes
 
 - **Better Ollama/local provider error messages.** Connection-refused and timeout
   errors now name the provider, URL, and suggest checking if the server is running.

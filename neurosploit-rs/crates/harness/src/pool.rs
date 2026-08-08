@@ -20,6 +20,24 @@ pub fn is_exhaustion(e: &anyhow::Error) -> bool {
     .any(|k| s.contains(k))
 }
 
+/// Does this error look like an **authentication / authorization failure**
+/// (revoked OAuth, expired session, invalid API key) — distinct from transient
+/// quota/rate issues? Auth failures are non-recoverable without re-login, so
+/// the run should pause immediately and offer fallback providers.
+pub fn is_auth_failure(e: &anyhow::Error) -> bool {
+    let s = format!("{e:#}").to_lowercase();
+    [
+        "401", "403", "unauthorized", "token has been revoked",
+        "token revoked", "access token", "oauth", "session expired",
+        "not authenticated", "not logged in", "please log in",
+        "please login", "invalid api key", "invalid_api_key",
+        "api key expired", "authentication failed", "failed to authenticate",
+        "run /login",
+    ]
+    .iter()
+    .any(|k| s.contains(k))
+}
+
 /// Task type used by the model router to pick the best model for the step.
 #[derive(Clone, Copy, Debug)]
 pub enum Task {
@@ -64,6 +82,10 @@ pub struct ModelPool {
     /// Fallback models the user added via `/continue <provider:model>` while
     /// paused — tried first on the next attempt.
     fallback: Arc<Mutex<Vec<ModelRef>>>,
+    /// Circuit breaker: consecutive auth/exhaustion failures across agents.
+    /// When this exceeds `AUTH_FAIL_THRESHOLD`, the pool auto-pauses instead of
+    /// burning through the remaining agents on a dead token.
+    consecutive_auth_fails: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl ModelPool {
@@ -96,7 +118,18 @@ impl ModelPool {
             paused: Arc::new(AtomicBool::new(false)),
             resume: Arc::new(Notify::new()),
             fallback: Arc::new(Mutex::new(Vec::new())),
+            consecutive_auth_fails: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
+    }
+
+    /// Reset the consecutive auth-failure counter (called on any successful completion).
+    fn reset_auth_fails(&self) {
+        self.consecutive_auth_fails.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Increment the consecutive auth-failure counter and return the new count.
+    fn inc_auth_fails(&self) -> usize {
+        self.consecutive_auth_fails.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
     }
 
     /// Attach a progress channel so the subscription CLI streams structured
@@ -146,20 +179,32 @@ impl ModelPool {
         self.paused.load(Ordering::Relaxed)
     }
 
-    /// Park the run on token/quota exhaustion: keep ALL state, emit a notice,
-    /// and wait until the user runs `/continue` (or cancels). Returns when the
-    /// run should retry (pause cleared) or give up (cancelled).
-    async fn park_exhausted(&self, err: &anyhow::Error) {
+    /// Consecutive auth/quota failures needed to trip the circuit breaker and
+    /// auto-pause the run. Low threshold: 3 consecutive failures on the same
+    /// provider is enough signal that the token is dead.
+    const AUTH_FAIL_THRESHOLD: usize = 3;
+
+    /// Park the run on token/quota exhaustion or auth failure: keep ALL state,
+    /// emit a notice, and wait until the user runs `/continue` (or cancels).
+    /// Returns when the run should retry (pause cleared) or give up (cancelled).
+    async fn park_exhausted(&self, err: &anyhow::Error, is_auth: bool) {
         self.paused.store(true, Ordering::Relaxed);
         if let Some(tx) = self.progress() {
             let msg = format!("{err:#}");
             let short = msg.lines().next().unwrap_or(&msg);
-            let _ = tx
-                .send(format!(
+            let notice = if is_auth {
+                format!(
+                    "notify: ⏸ authentication failed ({}). Run is PAUSED — all findings so far are SAFE. \
+                     Fix: /continue <provider:model> to switch provider, or re-login and /continue.",
+                    short.chars().take(120).collect::<String>()
+                )
+            } else {
+                format!(
                     "notify: ⏸ token/quota exhausted ({}). Run is PAUSED — type /continue when your quota renews, or switch with /model <provider:model> then /continue.",
                     short.chars().take(120).collect::<String>()
-                ))
-                .await;
+                )
+            };
+            let _ = tx.send(notice).await;
         }
         while self.paused.load(Ordering::Relaxed) && !self.is_cancelled() {
             let notified = self.resume.notified();
@@ -169,8 +214,9 @@ impl ModelPool {
             }
         }
         if !self.is_cancelled() {
+            self.reset_auth_fails(); // user resumed, reset counter
             if let Some(tx) = self.progress() {
-                let _ = tx.send("notify: ▶ resumed — retrying exhausted step.".to_string()).await;
+                let _ = tx.send("notify: ▶ resumed — retrying with updated credentials/model.".to_string()).await;
             }
         }
     }
@@ -212,9 +258,9 @@ impl ModelPool {
             };
             match r {
                 Ok(t) => return Ok(t),
-                // Don't burn retries on exhaustion — surface it so the caller
-                // can park and let the user /continue.
-                Err(e) if is_exhaustion(&e) => return Err(e),
+                // Don't burn retries on exhaustion or auth failure — surface
+                // immediately so the caller can park and let the user /continue.
+                Err(e) if is_exhaustion(&e) || is_auth_failure(&e) => return Err(e),
                 Err(e) => last = e,
             }
         }
@@ -233,6 +279,20 @@ impl ModelPool {
             if self.is_cancelled() {
                 return Err(anyhow!("cancelled"));
             }
+            // Circuit breaker: if we've seen N consecutive auth failures across
+            // agents, pause immediately — don't burn another agent on a dead token.
+            let fail_count = self.consecutive_auth_fails.load(std::sync::atomic::Ordering::Relaxed);
+            if fail_count >= Self::AUTH_FAIL_THRESHOLD && !self.is_cancelled() {
+                self.park_exhausted(
+                    &anyhow!("circuit breaker: {} consecutive auth failures — token/session likely dead", fail_count),
+                    true,
+                ).await;
+                if self.is_cancelled() {
+                    return Err(anyhow!("cancelled"));
+                }
+                // After resume, retry with potentially new fallback models.
+                continue;
+            }
             // User-supplied fallback models (via /continue) are tried first.
             let mut order = self.route(task);
             if let Ok(fb) = self.fallback.lock() {
@@ -244,25 +304,31 @@ impl ModelPool {
             }
             let mut last = anyhow!("no candidate models");
             let mut exhausted = false;
+            let mut auth_failed = false;
             for m in &order {
                 if self.is_cancelled() {
                     return Err(anyhow!("cancelled"));
                 }
                 match self.one(label, m, system, user).await {
-                    Ok(text) => return Ok((m.clone(), text)),
+                    Ok(text) => {
+                        self.reset_auth_fails(); // success resets circuit breaker
+                        return Ok((m.clone(), text));
+                    }
                     Err(e) => {
-                        if is_exhaustion(&e) {
+                        if is_auth_failure(&e) {
+                            auth_failed = true;
+                            self.inc_auth_fails();
+                        } else if is_exhaustion(&e) {
                             exhausted = true;
                         }
                         last = e;
                     }
                 }
             }
-            // Every candidate failed. If it was token/quota exhaustion, park the
-            // run until the user runs /continue, then retry the whole order (now
-            // including any fallback model they added). Otherwise, give up.
-            if exhausted && !self.is_cancelled() {
-                self.park_exhausted(&last).await;
+            // Every candidate failed. Park the run (keeping all state) so the user
+            // can fix auth or wait for quota renewal, then /continue.
+            if (auth_failed || exhausted) && !self.is_cancelled() {
+                self.park_exhausted(&last, auth_failed).await;
                 continue;
             }
             return Err(last);
