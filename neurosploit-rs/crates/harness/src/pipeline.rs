@@ -1888,6 +1888,11 @@ fn recon_intensity_directive(level: usize) -> String {
          (8) TLS/headers/cookies. Report counts (how many subdomains/urls/params/endpoints you actually found).\n\n")
 }
 
+/// Max wall-clock seconds for the ENTIRE recon phase (all rounds combined).
+/// This prevents recon from eating the whole run — exploitation must start.
+/// Per-round cap = total / (rounds + 1) so later rounds get equal time.
+const RECON_TOTAL_BUDGET_SECS: u64 = 300; // 5 minutes total
+
 /// Intense, multi-round recon: an initial deep pass, then follow-up rounds that
 /// EXPAND the surface (chase discovered subdomains/endpoints/params, install
 /// tools, dig where the previous round found signal). Returns the merged recon
@@ -1899,10 +1904,23 @@ async fn deep_recon(cfg: &RunConfig, pool: &ModelPool, probe_facts: &str, tx: &S
     let intensity_dir = recon_intensity_directive(intensity);
     let dir = operator_directives(cfg);
     let mut accum = format!("OBSERVED HTTP PROBE:\n{probe_facts}");
+    let recon_start = std::time::Instant::now();
+    let total_rounds = 1 + extra_rounds;
+
+    // Time-budget directive: subscription CLIs run commands autonomously, so they
+    // need an explicit cap to avoid running 150+ commands in a single round.
+    let budget_dir = format!(
+        "TIME BUDGET: you have ~{budget_secs} seconds for THIS recon round. Be EFFICIENT: \
+         prioritise high-signal actions (JS analysis, API mapping, SQLi/auth probes) over \
+         exhaustive crawling. AIM for 30-50 commands max per round — enough to map the surface, \
+         not so many that exploitation never starts. STOP EARLY if you have enough intel to \
+         select agents. When done, EMIT YOUR RESULTS IMMEDIATELY — do not start another pass.\n\n",
+        budget_secs = RECON_TOTAL_BUDGET_SECS / total_rounds as u64,
+    );
 
     // Initial deep pass.
-    let user = format!("{dir}{intensity_dir}{doctrine}OBSERVED HTTP PROBE (build on these, verify, go deeper):\n{probe_facts}\n\nTarget: {}", cfg.target);
-    let _ = tx.send(format!("recon: intensity {} — actively enumerating (installing tools as needed)…", intensity)).await;
+    let user = format!("{dir}{budget_dir}{intensity_dir}{doctrine}OBSERVED HTTP PROBE (build on these, verify, go deeper):\n{probe_facts}\n\nTarget: {}", cfg.target);
+    let _ = tx.send(format!("recon: intensity {} — actively enumerating (budget {}s total, {} round(s))…", intensity, RECON_TOTAL_BUDGET_SECS, total_rounds)).await;
     match pool.complete_routed(Task::Recon, "recon", RECON_SYS, &user).await {
         Ok((m, t)) => { let _ = tx.send(format!("recon round 1 complete via {}", m.label())).await; accum.push_str(&format!("\n\nMODEL RECON (round 1):\n{t}")); }
         Err(e) => {
@@ -1920,10 +1938,19 @@ async fn deep_recon(cfg: &RunConfig, pool: &ModelPool, probe_facts: &str, tx: &S
     // Follow-up expansion rounds — each digs further using what's known so far.
     for r in 0..extra_rounds {
         if pool.stop_exploiting() { break; }
+        // Time budget check: if recon has already consumed the total budget, stop
+        // and proceed to exploitation with whatever intelligence we gathered.
+        let elapsed = recon_start.elapsed().as_secs();
+        if elapsed >= RECON_TOTAL_BUDGET_SECS {
+            let _ = tx.send(format!("recon: time budget exhausted ({elapsed}s/{RECON_TOTAL_BUDGET_SECS}s) — proceeding to exploitation with current intel")).await;
+            break;
+        }
+        let remaining = RECON_TOTAL_BUDGET_SECS - elapsed;
         let round = r + 2;
         let known: String = accum.chars().rev().take(3000).collect::<String>().chars().rev().collect();
         let follow = format!(
-            "{dir}{intensity_dir}{doctrine}CONTINUE the recon — this is round {round}. Here is what recon has found so far:\n{known}\n\n\
+            "{dir}TIME BUDGET: you have ~{remaining} seconds remaining for recon. Be CONCISE — focus only on the highest-value leads.\n\n\
+             {intensity_dir}{doctrine}CONTINUE the recon — this is round {round}. Here is what recon has found so far:\n{known}\n\n\
              Now EXPAND: pick the most promising leads and go deeper — resolve & probe any NEW subdomains/hosts, crawl \
              and harvest URLs for endpoints not yet mapped, run content/parameter discovery where you saw interesting \
              paths, fingerprint exact versions of anything unclear, and enumerate the API/GraphQL further. Install any \

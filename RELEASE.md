@@ -5,7 +5,20 @@
 **License:** MIT
 **Credits:** Joas A Santos & Red Team Leaders
 
-## v3.6.8 — Auth resilience, circuit breaker, Ollama error handling, empty-evidence validation
+## v3.6.8 — Auth resilience, circuit breaker, recon budget, Ollama error handling, empty-evidence validation
+
+### Recon Time Budget (NEW)
+
+- **5-minute total recon budget.** Recon phase is now time-boxed to 300 seconds
+  across ALL rounds. Previously, a single recon round could run 150+ commands
+  over 15 minutes via subscription CLI, leaving no time for exploitation.
+- **Per-round budget directive.** Each recon round receives a prompt instruction
+  with its share of the time budget (e.g. "~100 seconds for this round") and a
+  command count guideline (30-50 commands max). The model is instructed to
+  prioritise high-signal actions and stop early when enough intel is gathered.
+- **Elapsed time check between rounds.** Before starting each follow-up round,
+  the pipeline checks elapsed time. If the budget is exhausted, recon stops
+  immediately and proceeds to exploitation with the intelligence gathered so far.
 
 ### Auth Resilience & Circuit Breaker (NEW)
 
