@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NeuroSploit v4.0.0 — Console</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧠</text></svg>">
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="sidebar">
+    <div class="sb-top">
+      <div class="brand">🧠</div>
+      <div class="sb-icons">
+        <button class="icon-btn" id="btnSearchRuns" title="Buscar engagement">⌕</button>
+        <button class="icon-btn" id="btnCollapseSidebar" title="Recolher">⟨⟩</button>
+      </div>
+    </div>
+
+    <button class="new-engagement" id="btnNewEngagement">+ Novo engagement</button>
+
+    <div class="sb-groups" id="sbGroups">
+      <!-- populated by app.js -->
+    </div>
+
+    <div class="sb-footer">
+      <div class="sb-meta" id="sbMeta">v4.0.0</div>
+      <button class="icon-btn" id="btnOpenRepl" title="Abrir REPL">⌘_</button>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <main class="main">
+
+    <!-- top bar -->
+    <header class="topbar">
+      <div class="search-wrap">
+        <span class="search-icon">⌕</span>
+        <input id="leadSearch" type="text" placeholder="Search lead" />
+      </div>
+      <div class="chips">
+        <button class="chip chip-active" data-filter="all">All <span id="chipAll">0</span></button>
+        <button class="chip" data-filter="selected">Selected <span id="chipSelected">0</span></button>
+        <button class="chip" data-filter="excluded">Excluded <span id="chipExcluded">0</span></button>
+      </div>
+      <div class="topbar-spacer"></div>
+      <button class="btn btn-ghost" id="btnCustomLead">+ Custom lead</button>
+      <button class="btn btn-primary" id="btnStartExploitation">Start Exploitation →</button>
+    </header>
+
+    <!-- engagement setup strip -->
+    <section class="engagement-bar" id="engagementBar">
+      <div class="eb-field eb-target">
+        <label>Target</label>
+        <input id="fieldTarget" type="text" placeholder="https://alvo.com ou owner/repo" />
+      </div>
+      <div class="eb-field">
+        <label>Modo</label>
+        <select id="fieldMode">
+          <option value="run">Black-box (run)</option>
+          <option value="whitebox">White-box</option>
+          <option value="greybox">Grey-box</option>
+          <option value="host">Host/Infra</option>
+          <option value="aitest">AI/LLM</option>
+        </select>
+      </div>
+      <div class="eb-field eb-repo" hidden>
+        <label>Repo (greybox)</label>
+        <input id="fieldRepo" type="text" placeholder="owner/repo ou path local" />
+      </div>
+      <div class="eb-field eb-narrow">
+        <label>Modelo</label>
+        <input id="fieldModel" type="text" placeholder="anthropic:claude-opus-4-8" />
+      </div>
+      <div class="eb-field eb-narrow">
+        <label>Votes</label>
+        <input id="fieldVotes" type="number" min="1" max="9" value="3" />
+      </div>
+      <div class="eb-field eb-narrow">
+        <label>Recon</label>
+        <select id="fieldRecon">
+          <option value="1">1 · quick</option>
+          <option value="2">2 · standard</option>
+          <option value="3" selected>3 · deep</option>
+          <option value="4">4 · exhaustive</option>
+        </select>
+      </div>
+      <div class="eb-field eb-narrow">
+        <label>Chain</label>
+        <input id="fieldChain" type="number" min="0" max="5" value="2" />
+      </div>
+      <label class="eb-check"><input type="checkbox" id="fieldSubscription" /> subscription</label>
+      <label class="eb-check"><input type="checkbox" id="fieldMcp" /> MCP</label>
+    </section>
+
+    <!-- ============ BOARD VIEW (lead picker) ============ -->
+    <section class="board" id="boardView">
+      <div class="board-scroll" id="boardScroll">
+        <h2 class="board-title">Set and modify the action plan</h2>
+        <div class="categories" id="categories"><!-- populated --></div>
+      </div>
+
+      <aside class="ask-panel">
+        <div class="ask-title">Ask anything</div>
+        <textarea id="askInput" placeholder="e.g. Prioritize the paths most likely to cause data leak"></textarea>
+        <div class="ask-row">
+          <select id="askKind">
+            <option value="focus">Focus</option>
+            <option value="objective">Objective</option>
+            <option value="scope-out">Out of scope</option>
+          </select>
+          <button class="btn btn-icon" id="btnAskSend" title="Aplicar">➤</button>
+        </div>
+        <div class="ask-hint" id="askHint"></div>
+      </aside>
+    </section>
+
+    <!-- ============ LIVE RUN VIEW ============ -->
+    <section class="liverun" id="liveView" hidden>
+      <div class="liverun-head">
+        <div>
+          <div class="liverun-target" id="liveTarget">—</div>
+          <div class="liverun-phase"><span class="phase-dot" id="phaseDot"></span><span id="livePhase">starting</span></div>
+        </div>
+        <div class="liverun-actions">
+          <a class="btn btn-ghost" id="btnOpenReport" target="_blank" hidden>Abrir report</a>
+          <button class="btn btn-danger" id="btnStopRun">Stop</button>
+          <button class="btn btn-ghost" id="btnBackToBoard">← Board</button>
+        </div>
+      </div>
+
+      <div class="progress-wrap">
+        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+        <div class="progress-label" id="progressLabel">0 / 0 agents</div>
+      </div>
+
+      <div class="liverun-body">
+        <div class="findings-col">
+          <div class="col-head">Findings <span id="findingsCount">0</span></div>
+          <div class="findings-list" id="findingsList"></div>
+        </div>
+        <div class="log-col">
+          <div class="col-head">Activity feed</div>
+          <div class="log-list" id="logList"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ RUN DETAIL VIEW (past run) ============ -->
+    <section class="rundetail" id="detailView" hidden>
+      <div class="liverun-head">
+        <div>
+          <div class="liverun-target" id="detailTarget">—</div>
+          <div class="liverun-phase" id="detailState">—</div>
+        </div>
+        <div class="liverun-actions">
+          <a class="btn btn-ghost" id="detailOpenReport" target="_blank" hidden>Abrir report</a>
+          <button class="btn btn-ghost" id="btnDetailBack">← Board</button>
+        </div>
+      </div>
+      <div class="findings-list" id="detailFindings"></div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ============ REPL DRAWER ============ -->
+<div class="repl-drawer" id="replDrawer" hidden>
+  <div class="repl-head">
+    <span>NeuroSploit CLI harness — REPL</span>
+    <div>
+      <button class="icon-btn" id="btnReplRestart" title="Reiniciar sessão">⟲</button>
+      <button class="icon-btn" id="btnReplClose" title="Fechar">✕</button>
+    </div>
+  </div>
+  <div class="repl-output" id="replOutput"></div>
+  <div class="repl-input-row">
+    <span class="repl-prompt">❭</span>
+    <input id="replInput" type="text" autocomplete="off" spellcheck="false" placeholder="/help · /run · /status · ou descreva em linguagem natural" />
+  </div>
+</div>
+
+<button class="fab" id="fabRepl" title="Abrir REPL">❭_</button>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-<h1 align="center">🧠 NeuroSploit v3.6.9</h1>
+<h1 align="center">🧠 NeuroSploit v4.0.0</h1>
 
 <p align="center">
   <a href="https://trendshift.io/repositories/22624?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-22624" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/22624/daily?language=Python" alt="JoasASantos%2FNeuroSploit | Trendshift" width="250" height="55"/></a>
@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-3.6.9-blue?style=flat-square">
+  <img src="https://img.shields.io/badge/Version-4.0.0-blue?style=flat-square">
   <img src="https://img.shields.io/badge/Harness-Rust%20%7C%20tokio-e6b673?style=flat-square">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
   <img src="https://img.shields.io/badge/MD%20Agents-435-red?style=flat-square">
@@ -211,6 +211,21 @@ neurosploit tui http://testphp.vulnweb.com/ --subscription --model anthropic:cla
 > Full step-by-step for every mode (black/white/grey/host) is in **[TUTORIAL.md](TUTORIAL.md)**.
 
 No login? Use an **API key** instead — see [Authentication](#authentication--run-via-api-key-or-subscription).
+
+---
+
+## 🖥️ Web console (NEW in v4.0.0)
+
+A browser UI for the same harness: a categorized lead board (toggle agents by category, add
+custom leads, `Start Exploitation`), a live structured findings view, run history, and a real
+REPL — all driven by spawning the compiled CLI, never a reimplementation of it.
+
+```bash
+cd neurosploit-rs && cargo build --release   # once
+node web/server.js                            # → http://localhost:4173
+```
+
+Zero npm dependencies. Full API reference: **[web/API.md](web/API.md)**.
 
 ---
 
