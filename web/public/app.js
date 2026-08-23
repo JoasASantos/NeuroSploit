@@ -98,6 +98,7 @@ function goToStep(n) {
 
 function validateStep(n) {
   if (n === 0) {
+    if (!$('#fieldName').value.trim()) { alert('Name the engagement first — it identifies this run in the sidebar and history.'); $('#fieldName').focus(); return false; }
     const target = $('#fieldTarget').value.trim();
     if (!target) { alert(`${MODE_LABELS[state.mode].target} is required.`); return false; }
     if (state.mode === 'greybox' && !$('#fieldRepo').value.trim()) { alert('Source repo is required for grey-box.'); return false; }
@@ -113,9 +114,11 @@ $$('.step-tab').forEach((tab) => tab.addEventListener('click', () => {
 }));
 
 function updateWizardSummary() {
+  const name = $('#fieldName').value.trim() || '(unnamed)';
   const target = $('#fieldTarget').value.trim() || '(not set)';
-  $('#wizardSummary').innerHTML = `Step ${state.step + 1} of ${STEP_COUNT} · <b>${esc(state.mode)}</b> · <b>${esc(target)}</b>`;
+  $('#wizardSummary').innerHTML = `Step ${state.step + 1} of ${STEP_COUNT} · <b>${esc(name)}</b> · ${esc(state.mode)} · ${esc(target)}`;
 }
+$('#fieldName').addEventListener('input', updateWizardSummary);
 
 // mode tiles
 function selectMode(mode) {
@@ -292,6 +295,7 @@ function renderReview() {
   const provider = $('#fieldProvider').value;
   const model = $('#fieldModelSelect').value;
   const items = [
+    { k: 'Engagement name', v: $('#fieldName').value.trim() || '(not set)' },
     { k: 'Mode', v: state.mode },
     { k: MODE_LABELS[state.mode].target, v: target || '(not set)', mono: true },
     ...(MODE_LABELS[state.mode].showRepo ? [{ k: 'Source repo', v: repo || '(not set)', mono: true }] : []),
@@ -314,7 +318,9 @@ function renderReview() {
 $('#btnLaunch').addEventListener('click', startExploitation);
 
 async function startExploitation() {
+  if (!validateStep(0)) { goToStep(0); return; }
   const mode = state.mode;
+  const name = $('#fieldName').value.trim();
   const target = $('#fieldTarget').value.trim();
   const repo = $('#fieldRepo').value.trim();
   const provider = $('#fieldProvider').value;
@@ -323,6 +329,7 @@ async function startExploitation() {
 
   const body = {
     mode,
+    name,
     target: mode === 'whitebox' ? undefined : target,
     repo: mode === 'whitebox' ? target : (repo || undefined),
     models: provider && model ? [`${provider}:${model}`] : [],
@@ -344,7 +351,7 @@ async function startExploitation() {
   $('#btnLaunch').textContent = 'Starting…';
   try {
     const { id } = await api('/api/exploit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    attachLiveJob(id, body.target || body.repo);
+    attachLiveJob(id, body.target || body.repo, name);
   } catch (e) {
     alert('Failed to start: ' + e.message);
   } finally {
@@ -367,14 +374,15 @@ function bindRunTabs(scopeEl) {
 bindRunTabs($('#liveView'));
 bindRunTabs($('#detailView'));
 
-function attachLiveJob(id, target) {
+function attachLiveJob(id, target, name) {
   if (state.currentJob?.es) state.currentJob.es.close();
-  state.currentJob = { id, es: null, findings: [], target, phase: 'starting', agents: 0, agentsDone: 0, reportUrl: null, runId: null };
+  state.currentJob = { id, es: null, findings: [], target, name, phase: 'starting', agents: 0, agentsDone: 0, reportUrl: null, runId: null };
 
   show($('#wizardView'), false);
   show($('#detailView'), false);
   show($('#liveView'), true);
-  $('#liveTarget').textContent = target || '—';
+  $('#liveTarget').textContent = name || target || '—';
+  $('#liveTargetSub').textContent = name ? target : '';
   $('#livePhase').textContent = 'starting';
   $('#phaseDot').style.background = '';
   $('#liveFindingsTable tbody').innerHTML = '';
@@ -525,7 +533,7 @@ function renderSidebar() {
     for (const r of g.items) {
       const btn = document.createElement('button');
       btn.className = 'sb-run' + (state.currentDetailId === r.id ? ' active' : '');
-      btn.innerHTML = `<span class="name">${esc(r.target)}</span><span class="sub">${esc(r.id)} · ${r.findings} finding(s)</span>`;
+      btn.innerHTML = `<span class="name">${esc(r.name || r.target)}</span><span class="sub">${r.name ? esc(r.target) + ' · ' : ''}${r.findings} finding(s)</span>`;
       btn.addEventListener('click', () => openRun(r));
       items.appendChild(btn);
       const isThisJob = r.state === 'running' && state.currentJob && r.id === state.currentJob.runId;
@@ -556,7 +564,9 @@ function openRun(run) {
 async function loadDetail(id) {
   clearInterval(state.detailPoll);
   const detail = await api(`/api/runs/${encodeURIComponent(id)}`);
-  $('#detailTarget').textContent = detail.status?.target || detail.meta?.target || id;
+  const target = detail.status?.target || detail.meta?.target || id;
+  $('#detailTarget').textContent = detail.name || target;
+  $('#detailTargetSub').textContent = detail.name ? target : '';
   $('#detailState').textContent = detail.status?.state || 'unknown';
   $('#detailFindingsCount').textContent = detail.findings.length;
   const tbody = $('#detailFindingsTable tbody');

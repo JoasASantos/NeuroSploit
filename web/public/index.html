@@ -57,6 +57,11 @@
 
         <!-- Step 1 — Asset -->
         <div class="wizard-panel" data-panel="0">
+          <div class="field-group">
+            <label class="field-label">Engagement name</label>
+            <input id="fieldName" type="text" placeholder="e.g. Keystone – Digital Banking" />
+            <div class="field-help">Identifies this engagement in the sidebar and run history — required.</div>
+          </div>
           <div>
             <div class="section-title">What are you testing?</div>
             <div class="section-desc">Pick the engagement type — this decides which CLI subcommand runs underneath.</div>
@@ -197,6 +202,7 @@
       <header class="run-head">
         <div>
           <div class="run-target" id="liveTarget">—</div>
+          <div class="run-meta" id="liveTargetSub" style="font-family: var(--mono);"></div>
           <div class="run-meta"><span class="phase-dot" id="phaseDot"></span><span id="livePhase">starting</span></div>
         </div>
         <div class="run-actions">
@@ -226,6 +232,7 @@
       <header class="run-head">
         <div>
           <div class="run-target" id="detailTarget">—</div>
+          <div class="run-meta" id="detailTargetSub" style="font-family: var(--mono);"></div>
           <div class="run-meta"><span class="phase-dot static" id="detailDot"></span><span id="detailState">—</span></div>
         </div>
         <div class="run-actions">

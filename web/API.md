@@ -94,14 +94,15 @@ Lists `runs/ns-*` directories, newest first, with a summary read from each run's
 `meta.json` / `status.json` / `findings.json`.
 
 ```json
-[ { "id": "ns-1787504238-testphp_vulnweb_com", "ts": 1787504238, "target": "http://testphp.vulnweb.com/", "state": "running", "findings": 3, "severities": { "High": 1, "Medium": 2 }, "hasReport": false } ]
+[ { "id": "ns-1787504238-testphp_vulnweb_com", "ts": 1787504238, "name": "Keystone – Digital Banking", "target": "http://testphp.vulnweb.com/", "state": "running", "findings": 3, "severities": { "High": 1, "Medium": 2 }, "hasReport": false } ]
 ```
 
 `state` mirrors the CLI's `status.json`: `running` | `complete` | `stopped-raw` | `discarded` | `unknown`.
 
 ### `GET /api/runs/:id`
 
-Full detail for one run: `{ id, meta, status, findings, assets }`. `findings` is the raw
+Full detail for one run: `{ id, name, meta, status, findings, assets }` (`name` is the engagement
+name set in the wizard, `""` if this run predates that or was started outside the web console). `findings` is the raw
 `findings.json` array (see [Finding shape](#finding-shape) below). `assets` lists which generated
 files exist (`report.html`, `report.pdf`, `report.md`, `recon.md`, `exploitation.md`).
 
@@ -126,6 +127,7 @@ Body:
 ```jsonc
 {
   "mode": "run",            // run | whitebox | greybox | host | aitest | skills
+  "name": "Keystone – Digital Banking",  // engagement name — required by the wizard UI
   "target": "https://example.com",   // required for run/host/aitest/greybox
   "repo": "owner/repo",      // required for whitebox; source repo for greybox
   "models": ["anthropic:claude-opus-4-8"],  // optional, repeatable in the CLI
@@ -153,6 +155,11 @@ If `creds` is omitted and either `auth` or `roles` is set, the server writes a m
 `os.tmpdir()/neurosploit-web/<job-id>.creds.yaml` and passes it via `--creds`. An explicit `creds`
 path always wins over `auth`/`roles`. These ephemeral files are not cleaned up automatically —
 they live in the OS temp dir, never in the repo.
+
+`name` is not a harness/CLI concept — the server persists a `runId -> name` map to
+`.neurosploit/web-engagement-names.json` (keyed on the CLI's own run id, captured from its
+"run id : ns-…" log line) so `/api/runs` and `/api/runs/:id` can label a run by its engagement
+name, surviving a server restart.
 
 Response: `{ "id": "<job-uuid>" }`. This `id` is the **web job id**, not the run id — the CLI's own
 `ns-<timestamp>-<target>` run id is discovered from its own log line and exposed as `runId` in the

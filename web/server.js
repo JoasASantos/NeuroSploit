@@ -31,6 +31,25 @@ const WEB_DIR = __dirname;
 const ROOT = path.resolve(WEB_DIR, '..'); // repo root — holds agents_md/, runs/
 const AGENTS_DIR = path.join(ROOT, 'agents_md');
 const RUNS_DIR = path.join(ROOT, 'runs');
+const NAMES_FILE = path.join(ROOT, '.neurosploit', 'web-engagement-names.json');
+
+// Engagement names are set by the operator in the wizard before launch (not
+// something the CLI/harness knows about) — persisted here as runId -> name so
+// the sidebar/run history can label a run by its engagement name across
+// restarts, not just by target/run-id.
+const engagementNames = new Map();
+try {
+  const raw = JSON.parse(fs.readFileSync(NAMES_FILE, 'utf8'));
+  for (const [k, v] of Object.entries(raw)) engagementNames.set(k, v);
+} catch { /* no file yet — fine */ }
+
+function saveEngagementName(runId, name) {
+  if (!runId || !name) return;
+  engagementNames.set(runId, name);
+  fsp.mkdir(path.dirname(NAMES_FILE), { recursive: true })
+    .then(() => fsp.writeFile(NAMES_FILE, JSON.stringify(Object.fromEntries(engagementNames), null, 2)))
+    .catch(() => {});
+}
 const PUBLIC_DIR = path.join(WEB_DIR, 'public');
 
 function findBinary() {
@@ -277,6 +296,7 @@ async function listRuns() {
     return {
       id,
       ts,
+      name: engagementNames.get(id) || '',
       target: status.target || meta.target || id.replace(/^ns-\d+-/, ''),
       state: status.state || 'unknown',
       findings: findings.length,
@@ -298,7 +318,7 @@ async function runDetail(id) {
   ]);
   const assets = ['report.html', 'report.pdf', 'report.md', 'recon.md', 'exploitation.md']
     .filter((f) => fs.existsSync(path.join(dir, f)));
-  return { id, meta, status, findings, assets };
+  return { id, name: engagementNames.get(id) || '', meta, status, findings, assets };
 }
 
 function safeRunDir(id) {
@@ -317,12 +337,13 @@ function safeRunDir(id) {
 const jobs = new Map(); // id -> Job
 
 class Job extends EventEmitter {
-  constructor(id, cmd, args, target) {
+  constructor(id, cmd, args, target, name) {
     super();
     this.id = id;
     this.cmd = cmd;
     this.args = args;
     this.target = target || '';
+    this.name = name || '';
     this.runId = null; // ns-<ts>-<target> workdir basename, once known
     this.phase = 'starting';
     this.findings = [];
@@ -344,6 +365,7 @@ class Job extends EventEmitter {
     return {
       id: this.id,
       target: this.target,
+      name: this.name,
       runId: this.runId,
       phase: this.phase,
       findings: this.findings,
@@ -392,7 +414,7 @@ function ingestLine(job, rawLine) {
   if (rep) job.reportUrl = rep[1];
 
   const rid = line.match(/run id\s*:\s*(\S+)/);
-  if (rid) job.runId = rid[1];
+  if (rid) { job.runId = rid[1]; saveEngagementName(job.runId, job.name); }
 }
 
 function buildArgs(body) {
@@ -428,7 +450,7 @@ async function startJob(body) {
   const id = crypto.randomUUID();
   const credsPath = await materializeCreds(body, id);
   const args = buildArgs({ ...body, creds: credsPath });
-  const job = new Job(id, BIN, args, body.repo || body.target || '');
+  const job = new Job(id, BIN, args, body.repo || body.target || '', body.name || '');
   jobs.set(id, job);
 
   const child = spawn(BIN, args, { cwd: ROOT, env: { ...process.env, ...envOverrides() } });
