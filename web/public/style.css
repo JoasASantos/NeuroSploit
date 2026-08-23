@@ -311,19 +311,14 @@ textarea { resize: vertical; min-height: 72px; }
 
 /* Generative Attack Path Chaining */
 .attackpath-empty { font-size: 12.5px; color: var(--text-faint); padding: var(--sp-5); text-align: center; border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); }
-.attackpath { display: flex; gap: var(--sp-4); overflow-x: auto; padding-bottom: var(--sp-3); }
-.ap-stage { flex: none; width: 220px; display: flex; flex-direction: column; gap: var(--sp-2); }
-.ap-stage-head { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--text-faint); padding-bottom: var(--sp-2); border-bottom: 1px solid var(--border); }
-.ap-node { border: 1px solid var(--border); border-left: 3px solid var(--text-faint); border-radius: var(--radius-sm); padding: var(--sp-2) var(--sp-3); background: var(--surface); font-size: 12px; }
-.ap-node.sev-critical { border-left-color: var(--sev-critical-fg); }
-.ap-node.sev-high { border-left-color: var(--sev-high-fg); }
-.ap-node.sev-medium { border-left-color: var(--sev-medium-fg); }
-.ap-node.sev-low { border-left-color: var(--sev-low-fg); }
-.ap-node.sev-info { border-left-color: var(--sev-info-fg); }
-.ap-node .t { font-weight: 600; }
-.ap-node .m { font-size: 10.5px; color: var(--text-faint); margin-top: 3px; font-family: var(--mono); }
-.ap-node .chain-from { font-size: 10.5px; color: var(--accent); margin-top: 3px; }
-.ap-arrow { flex: none; display: flex; align-items: center; color: var(--text-faint); font-size: 16px; }
+/* The graph canvas is intentionally fixed-dark regardless of the app theme —
+   a node/edge map reads better with bright severity colors against a near-
+   black surface, the way NodeZero/attack-graph tools render it, and it stays
+   legible whether the rest of the console is in light or dark mode. */
+.ap-canvas-wrap { border-radius: var(--radius-md); overflow: auto; background: #0f1115; border: 1px solid #24262d; }
+.ap-canvas { display: block; min-width: 100%; }
+.ap-canvas text { font-family: var(--sans); }
+.ap-node-g:hover rect:first-child { filter: brightness(1.35); }
 
 /* findings table */
 .data-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }

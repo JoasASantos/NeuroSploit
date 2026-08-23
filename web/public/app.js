@@ -498,7 +498,7 @@ function addFinding(f) {
   $('#liveFindingsTable tbody').insertAdjacentHTML('beforeend', findingRow(f, idx));
   $('#liveFindingsCount').textContent = state.currentJob.findings.length;
   show($('#liveFindingsEmpty'), false);
-  renderAttackPath($('#liveAttackPath'), state.currentJob.findings);
+  renderAttackPath($('#liveAttackPath'), state.currentJob.findings, state.currentJob.target);
 }
 
 function applySnapshot(snap) {
@@ -595,12 +595,33 @@ $('#findingModal').addEventListener('click', (e) => { if (e.target.id === 'findi
 
 const KILL_CHAIN_STAGES = ['recon', 'initial-access', 'execution', 'privesc', 'lateral', 'exfil', 'impact'];
 
-function renderAttackPath(container, findings) {
+// Bright, saturated palette for the dark graph canvas — the severity chip
+// colors elsewhere are tuned for text-on-light-background legibility and
+// read as muddy on a dark node graph.
+const CANVAS_SEV_COLOR = { critical: '#ff6b5b', high: '#ffab52', medium: '#f0cf5c', low: '#7fd99a', info: '#8fa3ef' };
+function canvasColor(sev) { return CANVAS_SEV_COLOR[['critical', 'high', 'medium', 'low', 'info'][sevRank(sev)]]; }
+
+function nodeIcon(f) {
+  const t = `${f.title} ${f.evidence} ${f.cwe} ${f.stage}`.toLowerCase();
+  if (/credential|password|secret|token|api[ _]?key|jwt/.test(t)) return '🔑';
+  if (/admin|privile|domain admin|root/.test(t)) return '🛡';
+  if (/account|user|identity/.test(t)) return '👤';
+  if (/host|server|ip |port|service/.test(t)) return '🖥';
+  if (/database|sql/.test(t)) return '🗄';
+  if (t.includes('impact') || t.includes('exfil')) return '💥';
+  return '⚠';
+}
+
+// Generative Attack Path Chaining — a real node graph (root = target, one
+// node per confirmed finding, edges from chains_from when the harness set
+// it, else fanned from root) instead of flat cards, so a single finding
+// still reads as a graph and not an empty list.
+function renderAttackPath(container, findings, target) {
   if (!findings.length) {
     container.innerHTML = '<div class="attackpath-empty">The attack path builds automatically as findings chain together — nothing confirmed yet.</div>';
     return;
   }
-  const byId = new Map(findings.map((f) => [f.id, f]));
+  const byId = new Map(findings.filter((f) => f.id).map((f) => [f.id, f]));
   const hasStages = findings.some((f) => f.stage);
   let groups;
   if (hasStages) {
@@ -610,29 +631,85 @@ function renderAttackPath(container, findings) {
     const other = findings.filter((f) => !f.stage);
     if (other.length) groups.push({ label: 'unstaged', items: other });
   } else {
-    const order = ['critical', 'high', 'medium', 'low', 'info'];
-    groups = order
-      .map((sev) => ({ label: sev, items: findings.filter((f) => (f.severity || '').toLowerCase().includes(sev)) }))
-      .filter((g) => g.items.length);
+    groups = [{ label: 'confirmed findings', items: findings }];
   }
+
+  // Layout: root at column 0; each kill-chain stage is its own column.
+  const COL_W = 210, ROW_H = 78, NODE_W = 176, NODE_H = 54, PAD = 40;
+  const rootX = PAD, rootY = PAD + (Math.max(...groups.map((g) => g.items.length)) * ROW_H) / 2;
+  const nodes = [{ id: '__root', x: rootX, y: rootY, root: true, label: target || 'target' }];
+  const nodeById = new Map(); // finding.id -> node (for chains_from edges)
+  groups.forEach((g, ci) => {
+    const colX = PAD + NODE_W / 2 + (ci + 1) * COL_W;
+    const colH = g.items.length * ROW_H;
+    const offsetY = rootY - colH / 2 + ROW_H / 2;
+    g.items.forEach((f, ri) => {
+      const node = { id: f.id || `${ci}-${ri}`, x: colX, y: offsetY + ri * ROW_H, finding: f, stageLabel: g.label };
+      nodes.push(node);
+      if (f.id) nodeById.set(f.id, node);
+    });
+  });
+
+  const edges = [];
+  for (const n of nodes) {
+    if (n.root) continue;
+    const parents = (n.finding.chains_from || []).map((cid) => nodeById.get(cid)).filter(Boolean);
+    if (parents.length) parents.forEach((p) => edges.push([p, n]));
+    else edges.push([nodes[0], n]);
+  }
+
+  const width = PAD * 2 + NODE_W + (groups.length) * COL_W;
+  const height = Math.max(...nodes.map((n) => n.y)) + NODE_H + PAD;
+
+  const edgePath = (a, b) => {
+    const x1 = a.root ? a.x + 14 : a.x + NODE_W / 2, y1 = a.y;
+    const x2 = b.x - NODE_W / 2, y2 = b.y;
+    const midX = (x1 + x2) / 2;
+    return `M ${x1},${y1} C ${midX},${y1} ${midX},${y2} ${x2},${y2}`;
+  };
+
+  const nodeSvg = (n) => {
+    if (n.root) {
+      return `<g>
+        <circle cx="${n.x}" cy="${n.y}" r="15" fill="#c0392b" stroke="#ff6b5b" stroke-width="2"/>
+        <text x="${n.x}" y="${n.y + 4}" text-anchor="middle" font-size="13" fill="#fff">🎯</text>
+        <text x="${n.x}" y="${n.y + 30}" text-anchor="middle" font-size="10.5" fill="#c9c6bf" font-family="var(--mono)">${esc(trimMid(n.label, 26))}</text>
+      </g>`;
+    }
+    const f = n.finding;
+    const color = canvasColor(f.severity);
+    const x = n.x - NODE_W / 2, y = n.y - NODE_H / 2;
+    return `<g class="ap-node-g" data-idx="${esc(findings.indexOf(f))}" style="cursor:pointer;">
+      <rect x="${x}" y="${y}" width="${NODE_W}" height="${NODE_H}" rx="8" fill="#181a20" stroke="${color}" stroke-width="1.6"/>
+      <text x="${x + 12}" y="${y + 20}" font-size="13">${nodeIcon(f)}</text>
+      <text x="${x + 32}" y="${y + 19}" font-size="11.5" fill="#e8e6e0" font-weight="600">${esc(trimMid(f.title, 22))}</text>
+      <text x="${x + 32}" y="${y + 36}" font-size="10" fill="#8b8880" font-family="var(--mono)">${esc((f.mitre || f.owasp || f.cwe || n.stageLabel || '').slice(0, 26))}</text>
+      <rect x="${x + NODE_W - 9}" y="${y + 6}" width="6" height="6" rx="1.5" fill="${color}"/>
+    </g>`;
+  };
+
   container.innerHTML = `
-    ${!hasStages ? '<div class="field-help" style="margin-bottom:8px;">No kill-chain stage data yet — grouped by severity.</div>' : ''}
-    <div class="attackpath">
-      ${groups.map((g, i) => `
-        ${i > 0 ? '<div class="ap-arrow">→</div>' : ''}
-        <div class="ap-stage">
-          <div class="ap-stage-head">${esc(g.label)} (${g.items.length})</div>
-          ${g.items.map((f) => `
-            <div class="ap-node ${sevClass(f.severity)}">
-              <div class="t">${esc(f.title)}</div>
-              <div class="m">${esc(f.mitre || f.owasp || f.cwe || '')}</div>
-              ${(f.chains_from || []).length ? `<div class="chain-from">⤷ chains from ${(f.chains_from).map((cid) => esc(byId.get(cid)?.title || cid)).join(', ')}</div>` : ''}
-            </div>
-          `).join('')}
-        </div>
-      `).join('')}
+    ${!hasStages ? '<div class="field-help" style="margin-bottom:8px;">No kill-chain stage data yet — shown as a flat graph from the target.</div>' : ''}
+    <div class="ap-canvas-wrap">
+      <svg class="ap-canvas" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">
+        ${groups.map((g, ci) => `<line x1="${PAD + NODE_W / 2 + (ci + 1) * COL_W - COL_W / 2}" y1="0" x2="${PAD + NODE_W / 2 + (ci + 1) * COL_W - COL_W / 2}" y2="${height}" stroke="#26282f" stroke-width="1"/>`).join('')}
+        ${edges.map(([a, b]) => `<path d="${edgePath(a, b)}" fill="none" stroke="#3a3d47" stroke-width="1.5"/>`).join('')}
+        ${nodes.map(nodeSvg).join('')}
+      </svg>
     </div>
   `;
+  container.querySelectorAll('.ap-node-g').forEach((g) => g.addEventListener('click', () => {
+    const f = findings[Number(g.dataset.idx)];
+    const isLive = container.id === 'liveAttackPath';
+    const pocs = isLive ? (state.currentJob?.pocs || []) : (state.detailPocs || []);
+    const runId = isLive ? state.currentJob?.runId : state.currentDetailId;
+    if (f) openFindingModal(f, pocs, runId);
+  }));
+}
+
+function trimMid(s, n) {
+  s = String(s || '');
+  return s.length > n ? s.slice(0, n - 1) + '…' : s;
 }
 
 // ---------------------------------------------------------------------------
@@ -712,7 +789,7 @@ async function loadDetail(id) {
   const tbody = $('#detailFindingsTable tbody');
   tbody.innerHTML = detail.findings.map((f, i) => findingRow(f, i)).join('');
   show($('#detailFindingsEmpty'), detail.findings.length === 0);
-  renderAttackPath($('#detailAttackPath'), detail.findings);
+  renderAttackPath($('#detailAttackPath'), detail.findings, target);
   const reportLink = $('#detailOpenReport');
   if (detail.assets.includes('report.html')) {
     reportLink.href = `/api/runs/${encodeURIComponent(id)}/asset/report.html`;
