@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/badge/Harness-Rust%20%7C%20tokio-e6b673?style=flat-square">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
   <img src="https://img.shields.io/badge/MD%20Agents-435-red?style=flat-square">
-  <img src="https://img.shields.io/badge/Models-16%20providers-success?style=flat-square">
+  <img src="https://img.shields.io/badge/Models-18%20providers-success?style=flat-square">
   <img src="https://img.shields.io/badge/Modes-Black%20%7C%20White%20%7C%20Grey%20%7C%20Host%20%7C%20AI-9cf?style=flat-square">
   <img src="https://img.shields.io/badge/Auth-API%20key%20%7C%20Subscription-orange?style=flat-square">
 </p>
@@ -216,16 +216,41 @@ No login? Use an **API key** instead — see [Authentication](#authentication--r
 
 ## 🖥️ Web console (NEW in v4.0.0)
 
-A browser UI for the same harness: a categorized lead board (toggle agents by category, add
-custom leads, `Start Exploitation`), a live structured findings view, run history, and a real
-REPL — all driven by spawning the compiled CLI, never a reimplementation of it.
+A browser UI for the same harness — every action spawns the real compiled CLI and parses its
+output; nothing about the harness logic is reimplemented in the browser.
 
 ```bash
 cd neurosploit-rs && cargo build --release   # once
 node web/server.js                            # → http://localhost:4173
 ```
 
-Zero npm dependencies. Full API reference: **[web/API.md](web/API.md)**.
+Zero npm dependencies (Node built-ins only).
+
+- **5-step engagement wizard** — Asset (mode + target/repo) → Scope & Auth (objective, focus,
+  out-of-scope) → Leads (the 435-agent board below) → Model & Run (provider/model picker,
+  API-key vs. subscription toggle, votes/chain-depth/recon) → Review. Every engagement is named
+  up front, so runs are identifiable in history instead of by raw target string.
+- **Lead board** — all 435 agents auto-categorized (Business Logic, Broken Access Control,
+  Injection, LLM Application, Auth & Session, SSRF & Network, Cloud & Infra, …). Toggle a single
+  lead, a whole category (indeterminate when partially selected), or use **Select all / Clear
+  all** — respects the active search filter. Leave everything off to let the harness's own
+  recon-driven selection choose.
+- **Custom lead → real agent** — "+ Custom lead" doesn't just add a text hint: it calls the
+  `claude` CLI (Opus, your Anthropic subscription) to generate an actual specialist-agent
+  markdown file into `agents_md/vulns/`, in the same format every built-in agent uses, pinnable
+  immediately. Falls back to a plain focus-text hint if Claude isn't available.
+- **Live run view** — phase/progress streamed over SSE from the CLI's own stdout, a findings
+  table, and **Generative Attack Path Chaining**: a node/edge graph (root = target, one node per
+  confirmed finding, positioned by kill-chain stage, edges from `chains_from` when the harness
+  set one) instead of a flat list — click any node or row for the full finding detail, including
+  any PoC script the exploiting agent wrote to `pocs/`.
+- **Auth & Keys** (one menu) — target auth header + named roles for IDOR/BOLA/BFLA testing
+  (materializes an ephemeral `creds.yaml` for the run), and per-provider API keys held in the
+  server process's memory only — never written to disk.
+- Survives a page refresh: an in-progress run reattaches to the same live stream instead of
+  resetting to the wizard.
+
+Full API reference: **[web/API.md](web/API.md)** · quick start: **[web/README.md](web/README.md)**.
 
 ---
 
@@ -450,6 +475,8 @@ export MOONSHOT_API_KEY=...                # moonshot:*  (Kimi K3/K2)
 export OPENROUTER_API_KEY=...              # openrouter:*
 export OPENCODE_API_KEY=...                # opencode:*  (OpenCode Zen gateway)
 export NOUS_API_KEY=...                    # nous:*  (Nous Portal — Hermes)
+export LITELLM_API_KEY=...                 # litellm:*  (your LiteLLM proxy)
+export AZURE_OPENAI_API_KEY=...            # azure:<deployment>  (also set AZURE_OPENAI_ENDPOINT)
 # ollama / llamacpp need no key (local)
 
 # then run via API (note: NO --subscription)
@@ -481,6 +508,8 @@ Or put the keys in a `.env` and source it (`cp .env.example .env`; edit; `set -a
 | `openrouter:` | `OPENROUTER_API_KEY` | openrouter.ai |
 | `opencode:` | `OPENCODE_API_KEY` | opencode.ai/zen (OpenCode Zen gateway) |
 | `nous:` | `NOUS_API_KEY` | inference-api.nousresearch.com (Hermes 4) |
+| `litellm:` | `LITELLM_API_KEY` | your LiteLLM proxy (`LITELLM_BASE_URL`, default localhost:4000) |
+| `azure:` | `AZURE_OPENAI_API_KEY` | your Azure OpenAI resource (`AZURE_OPENAI_ENDPOINT`) |
 | `ollama:` | _(none)_ | localhost:11434 |
 | `llamacpp:` | _(none)_ | localhost:8080 |
 
@@ -538,18 +567,22 @@ Every run writes a self-contained folder `runs/ns-<ts>-<target>/`:
 A reinforcement-learning reward store (`data/rl_state_rs.json`) biases agent
 selection on future runs.
 
-## Agent library — `agents_md/` (303)
+## Agent library — `agents_md/` (435)
 
 | Category | Count | Purpose |
 |----------|-------|---------|
-| `vulns/` | 196 | Exploit a specific vulnerability class |
-| `recon/` | 12 | Information gathering / attack surface |
+| `vulns/` | 245 | Exploit a specific vulnerability class (web/API) |
 | `code/` | 78 | White-box source-code (SAST) review |
-| `meta/` | 17 | Orchestrator, validator, scorers, reporter, RL |
+| `ai/` | 30 | AI/LLM red-teaming, jailbreaks, MCP threats |
+| `infra/` | 34 | Host/cloud: Linux, Windows, AD, AWS/GCP/Azure |
+| `meta/` | 23 | Orchestrator, validator, scorers, reporter, RL |
+| `chains/` | 13 | Multi-stage attack chains (SQLi→RCE→LPE, SSRF→cloud, …) |
+| `recon/` | 12 | Information gathering / attack surface |
 
 Each agent is a self-contained markdown playbook (`## User Prompt` methodology +
 `## System Prompt` strict anti-false-positive rules). Drop a new `.md` into the
-matching folder and the harness picks it up.
+matching folder — or generate one from the web console's "+ Custom lead" (see above) — and the
+harness picks it up; `neurosploit agents` shows live counts.
 
 ---
 
