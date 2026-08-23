@@ -49,22 +49,44 @@ fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
-/// Render an HTML report for the validated findings.
+/// Render an HTML report for the validated findings — same design language as
+/// the Typst PDF template (`templates/report.typ`): violet brand accent,
+/// severity-colored left-border finding cards, a 5-box executive-summary
+/// grid, and a vulnerability summary table. No attack-path/kill-chain
+/// section — that lives in the interactive web console's live graph instead.
 pub fn html(target: &str, findings: &[Finding], meta: &EngagementMeta) -> String {
     let mut sorted = findings.to_vec();
     sorted.sort_by_key(|f| sev_rank(&f.severity));
 
     let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
     for f in &sorted {
-        *counts.entry(f.severity.as_str()).or_default() += 1;
+        if !needs_review(f) { *counts.entry(f.severity.as_str()).or_default() += 1; }
     }
-    let chips: String = if counts.is_empty() {
-        "<span class=chip style=background:#27ae60>No validated findings</span>".into()
+    // Executive-summary grid: always all 5 severities, zero-count included —
+    // matches the Typst template's #grid(columns: 5, ...) exactly.
+    let summary_grid: String = ["Critical", "High", "Medium", "Low", "Info"]
+        .iter()
+        .map(|s| format!(
+            "<div class=sumbox style=border-color:{}><div class=sumn style=color:{}>{}</div><div class=suml>{}</div></div>",
+            sev_color(s), sev_color(s), counts.get(*s).copied().unwrap_or(0), s.to_uppercase()
+        ))
+        .collect();
+
+    // Vulnerability summary table — numbered, title, severity badge, status, OWASP.
+    let vuln_summary: String = if sorted.is_empty() {
+        String::new()
     } else {
-        counts
-            .iter()
-            .map(|(s, n)| format!("<span class=chip style=background:{}>{}: {}</span>", sev_color(s), s, n))
-            .collect()
+        let rows: String = sorted.iter().enumerate().map(|(i, f)| format!(
+            "<tr><td>{}</td><td>{}</td><td><span class=sev style=background:{}>{}</span></td>\
+             <td>{}</td><td>{}</td></tr>",
+            i + 1, esc(&f.title), sev_color(&f.severity), esc(&f.severity),
+            if needs_review(f) { "<span style=color:#8e44ad>needs-review</span>".to_string() } else { "<span style=color:#27ae60>confirmed</span>".to_string() },
+            esc(&f.owasp),
+        )).collect();
+        format!(
+            "<h2>Vulnerability Summary</h2>\
+             <table class=kc><tr><th>#</th><th>Vulnerability</th><th>Severity</th><th>Status</th><th>OWASP / CWE</th></tr>{rows}</table>"
+        )
     };
 
     let rows: String = sorted
@@ -72,14 +94,26 @@ pub fn html(target: &str, findings: &[Finding], meta: &EngagementMeta) -> String
         .enumerate()
         .map(|(i, f)| {
             format!(
-                "<section class=finding><h3><span class=sev style=background:{}>{}</span> {}. {}{review}</h3>\
-                 <div class=m>{} · {} · CVSS {} · votes {} · conf {:.2}</div>\
-                 <div class=m>Endpoint: {}</div>{authline}{reviewnote}\
-                 <h4>Payload</h4><pre>{}</pre><h4>Evidence</h4><pre>{}</pre>{shots}\
-                 <h4>Impact</h4><p>{}</p><h4>Remediation</h4><p>{}</p></section>",
-                sev_color(&f.severity), esc(&f.severity), i + 1, esc(&f.title),
-                esc(&f.agent), esc(&f.cwe), esc(&f.cvss), esc(&f.votes), f.confidence,
-                esc(&f.endpoint), esc(&f.payload), esc(&f.evidence), esc(&f.impact), esc(&f.remediation),
+                "<section class=finding style=border-left-color:{sevc}>\
+                 <h3><span class=sev style=background:{sevc}>{sev}</span> {i}. {title}{review}</h3>\
+                 <table class=fieldgrid>\
+                   <tr><td class=fk>Criticality</td><td>{sev}</td><td class=fk>Status</td><td>{status}</td></tr>\
+                   <tr><td class=fk>OWASP / CWE</td><td>{owaspcwe}</td><td class=fk>Confidence</td><td>{confline}</td></tr>\
+                   <tr><td class=fk>Location</td><td colspan=3>{endpoint}</td></tr>\
+                   <tr><td class=fk>Agent</td><td>{agent}</td>{authcell}</tr>\
+                 </table>\
+                 {reviewnote}\
+                 <h4>Description / Impact</h4><p>{impact}</p>\
+                 <h4>Proof of Concept</h4><pre>{payload}</pre>\
+                 <h4>Evidence</h4><pre>{evidence}</pre>{shots}\
+                 <h4>Remediation</h4><p>{remediation}</p></section>",
+                sevc = sev_color(&f.severity), sev = esc(&f.severity), i = i + 1, title = esc(&f.title),
+                agent = esc(&f.agent),
+                owaspcwe = [esc(&f.owasp), esc(&f.cwe)].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · "),
+                confline = if f.votes.is_empty() { format!("conf {:.2}", f.confidence) } else { format!("{} · conf {:.2}", esc(&f.votes), f.confidence) },
+                endpoint = esc(&f.endpoint), payload = esc(&f.payload), evidence = esc(&f.evidence),
+                impact = esc(&f.impact), remediation = esc(&f.remediation),
+                status = if needs_review(f) { "<span style=color:#8e44ad>needs-review</span>" } else { "<span style=color:#27ae60>confirmed</span>" },
                 shots = if f.screenshots.is_empty() { String::new() } else {
                     let imgs: String = f.screenshots.iter()
                         .map(|p| format!("<figure class=shot><img src=\"{}\" alt=\"proof for {}\"><figcaption>{}</figcaption></figure>",
@@ -90,13 +124,12 @@ pub fn html(target: &str, findings: &[Finding], meta: &EngagementMeta) -> String
                 reviewnote = if needs_review(f) && !f.review_reason.is_empty() {
                     format!("<div class=m style=color:#8e44ad>⚠ Needs human review — {}</div>", esc(&f.review_reason))
                 } else { String::new() },
-                authline = {
-                    // Show the auth context and which test account proved this finding.
-                    if f.auth_context.is_empty() && f.account.is_empty() { String::new() }
+                authcell = {
+                    if f.auth_context.is_empty() && f.account.is_empty() { "<td class=fk></td><td></td>".to_string() }
                     else {
-                        let ac = if f.auth_context.is_empty() { String::new() } else { format!("Auth: <b>{}</b>", esc(&f.auth_context)) };
-                        let acct = if f.account.is_empty() { String::new() } else { format!("{}Account: {}", if ac.is_empty() { "" } else { " · " }, esc(&f.account)) };
-                        format!("<div class=m>{ac}{acct}</div>")
+                        let ac = if f.auth_context.is_empty() { "—".to_string() } else { esc(&f.auth_context) };
+                        let acct = if f.account.is_empty() { String::new() } else { format!(" · {}", esc(&f.account)) };
+                        format!("<td class=fk>Auth context</td><td>{ac}{acct}</td>")
                     }
                 },
             )
@@ -108,43 +141,46 @@ pub fn html(target: &str, findings: &[Finding], meta: &EngagementMeta) -> String
         rows
     };
 
-    // Attack graph (Mermaid) + kill-chain table.
-    let graph = crate::attack_graph::mermaid(&sorted);
-    let graph_block = if graph.is_empty() {
-        String::new()
-    } else {
-        let rows: String = sorted.iter().map(|f| format!(
-            "<tr><td>{}</td><td><span class=sev style=background:{}>{}</span></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-            esc(&f.stage), sev_color(&f.severity), esc(&f.severity), esc(&f.title),
-            esc(&f.owasp), esc(&f.mitre), esc(&f.exploitability))).collect();
-        format!(
-            "<h2>Attack Path &amp; Kill Chain</h2>\
-             <div class=mermaid>{graph}</div>\
-             <table class=kc><tr><th>Stage</th><th>Sev</th><th>Finding</th><th>OWASP</th><th>MITRE</th><th>Exploitability</th></tr>{rows}</table>\
-             <script type=module>import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';mermaid.initialize({{startOnLoad:true,theme:'dark'}});</script>"
-        )
-    };
     format!(
         "<!DOCTYPE html><html><head><meta charset=utf-8><title>NeuroSploit Report — {t}</title><style>\
-         table.kc{{border-collapse:collapse;width:100%;margin:14px 0;font-size:13px}}table.kc th,table.kc td{{border:1px solid #e3e3e3;padding:6px 9px;text-align:left}}\
-         .mermaid{{background:#0f1117;border-radius:10px;padding:16px;margin:14px 0;overflow:auto}}\
+         :root{{--violet:#7c5cff}}\
          body{{font:14px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;max-width:860px;margin:40px auto;padding:0 24px}}\
-         h1{{margin:0}}.meta{{color:#666;margin:4px 0 18px}}.chip{{color:#fff;border-radius:999px;padding:4px 12px;margin-right:8px;font-size:13px;font-weight:600}}\
-         .finding{{border:1px solid #e3e3e3;border-radius:12px;padding:16px 20px;margin:16px 0}}.finding h3{{margin:0 0 8px;font-size:16px}}\
+         h1{{margin:0;font-size:26px}}h2{{font-size:15px;margin:22px 0 8px}}\
+         .b{{color:var(--violet);font-weight:800}}.sub{{color:#888;font-size:13px;margin:2px 0 16px}}\
+         table.assettbl{{border-collapse:collapse;width:100%;margin:0 0 16px;font-size:12.5px}}\
+         table.assettbl td{{border:0.5pt solid #ddd;padding:6px 9px}}table.assettbl td:first-child{{color:#888;width:160px}}\
+         .summary-grid{{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:10px 0 6px}}\
+         .sumbox{{border:1px solid #ddd;border-radius:6px;padding:10px 6px;text-align:center}}\
+         .sumn{{font-size:20px;font-weight:800}}.suml{{font-size:9px;letter-spacing:.4px;color:#888;margin-top:2px}}\
+         table.kc{{border-collapse:collapse;width:100%;margin:8px 0 16px;font-size:12.5px}}\
+         table.kc th,table.kc td{{border:0.5pt solid #ddd;padding:6px 9px;text-align:left}}\
+         table.kc th{{color:#555;font-size:11px;text-transform:uppercase;letter-spacing:.3px}}\
+         .finding{{border:0.5pt solid #ddd;border-left:3pt solid #999;border-radius:6px;padding:14px 18px;margin:14px 0}}\
+         .finding h3{{margin:0 0 8px;font-size:15px}}\
+         table.fieldgrid{{border-collapse:collapse;width:100%;font-size:11.5px;margin-bottom:6px}}\
+         table.fieldgrid td{{padding:3px 6px}}.fk{{color:#888;white-space:nowrap;width:1%}}\
          .sev{{color:#fff;border-radius:6px;padding:2px 8px;font-size:12px;margin-right:8px}}.m{{color:#666;font-size:12px}}\
-         pre{{background:#0f1117;color:#dfe6f3;padding:11px;border-radius:8px;overflow:auto;font-size:12.5px}}\
-         h4{{margin:12px 0 3px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:#8b5cf6}}\
+         pre{{background:#0f1117;color:#dfe6f3;padding:11px;border-radius:8px;overflow:auto;font-size:12.5px;white-space:pre-wrap}}\
+         h4{{margin:12px 0 3px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--violet)}}\
          .shots{{display:flex;flex-wrap:wrap;gap:12px;margin:6px 0}}\
-         .shot{{margin:0;max-width:100%}}.shot img{{max-width:100%;border:1px solid #e3e3e3;border-radius:8px;display:block}}\
+         .shot{{margin:0;max-width:100%}}.shot img{{max-width:100%;border:0.5pt solid #ddd;border-radius:8px;display:block}}\
          .shot figcaption{{color:#888;font-size:11px;margin-top:3px;font-family:ui-monospace,Menlo,monospace}}\
-         .b{{color:#8b5cf6;font-weight:800}}</style></head><body>\
-         <h1><span class=b>NeuroSploit</span> Penetration Test Report</h1>\
-         <div class=meta>Asset: <b>{asset}</b> · Target: <b>{t}</b>{techline} · v3.6.5 · multi-model validated</div>\
-         <div>{chips}</div>{graph_block}<h2>Findings ({n})</h2>{body}\
-         <p class=meta>Authorized testing only. Confirmed findings passed multi-model voting, receipt grounding and adversarial refute; \"needs-review\" are flagged for a human.<br>NeuroSploit v3.6.5 · by <b>Joas A Santos</b> &amp; <b>Red Team Leaders</b></p></body></html>",
-        t = esc(target), chips = chips, n = sorted.len(), body = body, graph_block = graph_block,
+         .footer{{color:#888;font-size:11px;margin-top:24px;border-top:0.5pt solid #ddd;padding-top:10px}}\
+         </style></head><body>\
+         <h1><span class=b>Neuro</span>Sploit</h1><div class=sub>Penetration Test Report</div>\
+         <table class=assettbl>\
+           <tr><td>Asset</td><td><b>{asset}</b></td></tr>\
+           <tr><td>URL / target</td><td>{t}</td></tr>\
+           {techrow}{serverrow}\
+         </table>\
+         <h2>Executive Summary</h2><div class=summary-grid>{summary_grid}</div>\
+         {vuln_summary}\
+         <h2>Findings ({n})</h2>{body}\
+         <p class=footer>Authorized testing only. Confirmed findings passed multi-model voting, receipt grounding and adversarial refute; \"needs-review\" are flagged for a human.<br>NeuroSploit v4.0.0 · by <b>Joas A Santos</b> &amp; <b>Red Team Leaders</b></p></body></html>",
+        t = esc(target), n = sorted.len(), body = body, summary_grid = summary_grid, vuln_summary = vuln_summary,
         asset = esc(if meta.asset.is_empty() { "unidentified web asset" } else { &meta.asset }),
-        techline = if meta.tech.is_empty() { String::new() } else { format!(" · {}", esc(&meta.tech.join(", "))) },
+        techrow = if meta.tech.is_empty() { String::new() } else { format!("<tr><td>Technology</td><td>{}</td></tr>", esc(&meta.tech.join(", "))) },
+        serverrow = if meta.server.is_empty() { String::new() } else { format!("<tr><td>Server</td><td>{}</td></tr>", esc(&meta.server)) },
     )
 }
 

@@ -143,7 +143,7 @@ struct LiveCheckpoint {
 const COMMANDS: &[&str] = &[
     "/help", "/onboard", "/show", "/config", "/providers", "/model", "/key", "/sub", "/target",
     "/repo", "/auth", "/creds", "/focus", "/objective", "/scope-out", "/attach", "/context", "/mcp", "/offline",
-    "/votes", "/chain", "/recon", "/tempmail", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/theme", "/clear", "/run", "/stop", "/continue", "/runs", "/results", "/report",
+    "/votes", "/chain", "/recon", "/tempmail", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/only", "/theme", "/clear", "/run", "/stop", "/continue", "/runs", "/results", "/report",
     "/status", "/logs", "/diff", "/retest", "/validate", "/finding", "/expand", "/integrations", "/quit",
 ];
 
@@ -264,6 +264,10 @@ struct Session {
     color: bool,
     /// Engagement scope from onboarding: web | infra | cloud | ai | skills.
     scope: &'static str,
+    /// Explicit agent allowlist (`/only <agent>[,agent2,...]`) — when non-empty,
+    /// /run tests EXACTLY these agents and skips recon-based selection, same as
+    /// the CLI's `--only` flag. Empty = normal recon-driven auto-selection.
+    pinned: Vec<String>,
 }
 
 impl Default for Session {
@@ -292,6 +296,7 @@ impl Default for Session {
             attachments: Vec::new(),
             color: true,
             scope: "web",
+            pinned: Vec::new(),
         }
     }
 }
@@ -662,6 +667,17 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
                     println!("  max agents: {} (0 = all) — set with /agents <n>, or /agents list for counts", s.max_agents);
                 } else {
                     s.max_agents = arg.parse().unwrap_or(s.max_agents); println!("  max agents: {}", s.max_agents);
+                }
+            }
+            "/only" => {
+                if arg.is_empty() {
+                    if s.pinned.is_empty() { println!("  pinned agents: (none) — recon-driven auto-selection · set with /only <agent>[,agent2,...] · /agents list for names"); }
+                    else { println!("  pinned agents ({}): {} — /run tests exactly these · /only clear to unpin", s.pinned.len(), s.pinned.join(", ")); }
+                } else if arg == "clear" {
+                    s.pinned.clear(); println!("  pinned agents cleared — back to recon-driven auto-selection");
+                } else {
+                    s.pinned = arg.split([',', ';']).map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect();
+                    println!("  pinned agents ({}): {} — /run tests exactly these, skipping recon-based selection", s.pinned.len(), s.pinned.join(", "));
                 }
             }
             "/clear" => { print!("\x1b[2J\x1b[H"); }
@@ -1108,6 +1124,7 @@ async fn run(base: &Path, s: &Session, history: &mut Vec<RunRecord>) {
     cfg.objective = s.objective.clone();
     cfg.out_of_scope = s.out_of_scope.clone();
     cfg.auth = s.auth.clone();
+    cfg.pinned = s.pinned.clone();
     // Multiple /auth identities → prepend the access-control (IDOR/BOLA/BFLA) directive.
     if let Some(rd) = roles_directive(&s.roles) {
         let base = cfg.instructions.clone().unwrap_or_default();
@@ -1182,6 +1199,7 @@ async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
     cfg.objective = s.objective.clone();
     cfg.out_of_scope = s.out_of_scope.clone();
     cfg.auth = s.auth.clone();
+    cfg.pinned = s.pinned.clone();
     if matches!(mode_e, crate::Mode::Grey) { cfg.repo = s.repo.clone(); }
     crate::apply_creds(&mut cfg, s.creds.as_deref()).await;
     crate::subscription_preflight(&cfg).await; // warn early if the CLI isn't logged in
@@ -1728,6 +1746,7 @@ fn help() {
     h("/sub on|off",        "use local subscription login instead of an API key");
 
     println!("\n  \x1b[2mRUN & MONITOR\x1b[0m");
+    h("/only <agent,..>",   "pin exact agent(s) for /run, skipping recon-based selection (clear to unpin)");
     h("/run",               "launch (runs in the BACKGROUND — keep typing)");
     h("/status [n]",        "live progress + findings while running (or a past run #)");
     h("/logs [n]",          "recent activity feed of the running test (recon/tools/findings)");
