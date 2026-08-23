@@ -250,9 +250,43 @@ function renderCustomLeads() {
     renderCustomLeads();
   }));
 }
-$('#btnCustomLead').addEventListener('click', () => {
-  const text = prompt('Describe the custom lead (free text — becomes agent focus context):');
-  if (text && text.trim()) { state.customLeads.push(text.trim()); renderCustomLeads(); }
+$('#btnCustomLead').addEventListener('click', async () => {
+  const text = prompt('Describe the custom lead — Claude (Opus, subscription) generates a real specialist agent for it, ready to pin:');
+  if (!text || !text.trim()) return;
+  const btn = $('#btnCustomLead');
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Generating…';
+  try {
+    const { agent } = await api('/api/leads/generate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: text.trim() }),
+    });
+    await loadAgents(); // re-read agents_md/ so the new file appears in its category
+    state.selected.add(agent.id);
+    renderBoard();
+    alert(`Generated and pinned: ${agent.title}`);
+  } catch (e) {
+    // Fall back to the old behavior — fold the raw text into --focus context
+    // — so a missing/logged-out Claude CLI doesn't lose the operator's intent.
+    state.customLeads.push(text.trim());
+    renderCustomLeads();
+    alert(`Couldn't generate a skill (${e.message}) — added as a focus hint instead.`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+});
+$('#btnSelectAll').addEventListener('click', () => {
+  // Respects the current search/filter — selects only what's visible, so a
+  // filtered view ("sql") + Select all pins just those leads, not all 412.
+  const visible = state.search.trim() ? allAgents().filter((a) => (a.title + ' ' + a.name).toLowerCase().includes(state.search.trim().toLowerCase())) : allAgents();
+  visible.forEach((a) => state.selected.add(a.id));
+  renderBoard();
+});
+$('#btnClearAll').addEventListener('click', () => {
+  const visible = state.search.trim() ? allAgents().filter((a) => (a.title + ' ' + a.name).toLowerCase().includes(state.search.trim().toLowerCase())) : allAgents();
+  visible.forEach((a) => state.selected.delete(a.id));
+  renderBoard();
 });
 
 // ---------------------------------------------------------------------------

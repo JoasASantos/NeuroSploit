@@ -188,6 +188,7 @@ const CATEGORY_RULES = [
 ];
 
 function classify(name, kind) {
+  if (name.startsWith('custom_')) return 'Custom Leads'; // generated via /api/leads/generate
   if (kind === 'chain') return 'Attack Chains';
   if (kind === 'recon') return 'Recon';
   if (kind === 'code') return 'Code Review';
@@ -248,6 +249,7 @@ async function loadAgents() {
   // Selectable leads only (exclude meta/orchestration from the pentest board —
   // they're internal doctrine agents, not testable "leads").
   const LEAD_ORDER = [
+    'Custom Leads',
     'Business Logic', 'Broken Access Control', 'Injection', 'Cross-Site Scripting',
     'LLM Application', 'Auth & Session', 'SSRF & Network', 'API & GraphQL',
     'Cloud & Infra', 'Client-Side', 'Cryptography', 'Rate Limiting & DoS',
@@ -261,6 +263,86 @@ async function loadAgents() {
   agentCache = { total: agents.length, agents, categories };
   agentCacheAt = now;
   return agentCache;
+}
+
+// ---------------------------------------------------------------------------
+// Custom leads — "+ Custom lead" generates a REAL specialist-agent markdown
+// file (same format agents_md/vulns/*.md uses) via the `claude` CLI on the
+// operator's Anthropic subscription, so a custom lead is an actual pinnable
+// agent, not just free text folded into --focus. Mirrors the exact one-shot
+// invocation harness::models::cli_login_status() uses for the same CLI.
+// ---------------------------------------------------------------------------
+
+const GEN_MODEL = 'claude-opus-4-8'; // matches Session::default() in app/src/repl.rs
+const GEN_TIMEOUT_MS = 90_000;
+
+function slugify(s) {
+  return (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'lead';
+}
+
+function buildSkillGenPrompt(description) {
+  return `Write ONE new security-testing specialist-agent file for this custom lead, in EXACTLY this markdown shape and nothing else — no code fences around the whole thing, no preamble, no explanation, just the file content starting at the first line:
+
+# <Short Title> Agent
+## User Prompt
+You are testing **{target}** for <the specific vulnerability class this lead targets>.
+**Recon Context:**
+{recon_json}
+**METHODOLOGY:**
+### 1. <step name>
+- <concrete technique>
+### 2. <step name>
+- <concrete technique>
+(as many numbered steps as the vuln class actually needs — terse, technical, no filler)
+### Report
+\`\`\`
+FINDING:
+- Title: ...
+- Severity: ...
+- CWE: CWE-<pick the single most fitting CWE number>
+- Endpoint: [URL]
+- Evidence: ...
+- Impact: ...
+- Remediation: ...
+\`\`\`
+## System Prompt
+<one paragraph: the agent's persona plus the ONE calibration rule that stops it from reporting a finding without real proof>
+
+The operator's custom lead request, verbatim: "${description}"
+
+Match the doctrine style of NeuroSploit's other agents_md/vulns/*.md files: terse, technical, no marketing language, one CWE, a real report template.
+
+Do not use any tools (no file writes, no bash, no search) — this is a pure text-completion task. Respond with ONLY the markdown file content above, nothing before it and nothing after it.`;
+}
+
+function generateCustomLead(description) {
+  return new Promise((resolve, reject) => {
+    if (!binaryOnPath('claude')) {
+      return reject(new Error("claude CLI not found on PATH — install Claude Code and run `claude` to log in first"));
+    }
+    // No --dangerously-skip-permissions here: this is a pure text-completion
+    // call (no bash/file tools needed), and granting tool access made claude
+    // try to write the file itself and narrate doing so instead of just
+    // returning text — see buildSkillGenPrompt()'s explicit "no tools" line.
+    const child = spawn('claude', ['-p', '--model', GEN_MODEL, '--output-format', 'text'], { env: process.env });
+    let out = '', err = '';
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('generation timed out')); }, GEN_TIMEOUT_MS);
+    child.stdout.on('data', (c) => { out += c; });
+    child.stderr.on('data', (c) => { err += c; });
+    child.on('error', (e) => { clearTimeout(timer); reject(new Error(`claude CLI failed to start: ${e.message}`)); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (!out.trim()) return reject(new Error(err.trim() || `claude exited ${code} with no output — is it logged in? run \`claude\` once to check.`));
+      resolve(out);
+    });
+    child.stdin.write(buildSkillGenPrompt(description));
+    child.stdin.end();
+  });
+}
+
+function binaryOnPath(bin) {
+  const dirs = (process.env.PATH || '').split(path.delimiter);
+  return dirs.some((d) => { try { return fs.existsSync(path.join(d, bin)); } catch { return false; } });
 }
 
 // ---------------------------------------------------------------------------
@@ -624,6 +706,35 @@ const server = http.createServer(async (req, res) => {
     // ---- agents / lead board ----
     if (req.method === 'GET' && p === '/api/agents') {
       return sendJson(res, 200, await loadAgents());
+    }
+    if (req.method === 'POST' && p === '/api/leads/generate') {
+      const body = await readBody(req);
+      const description = (body.description || '').trim();
+      if (!description) return sendJson(res, 400, { error: 'description is required' });
+      let raw;
+      try {
+        raw = await generateCustomLead(description);
+      } catch (e) {
+        return sendJson(res, 502, { error: e.message });
+      }
+      // Defensive: discard any wrapper text before the first '# ' heading —
+      // a model with tool access sometimes narrates ("I'll write the file
+      // now...") before the actual content despite being told not to.
+      const titleIdx = raw.search(/^#\s+/m);
+      if (titleIdx === -1) {
+        return sendJson(res, 502, { error: 'generation did not return a well-formed agent file', raw: raw.slice(0, 800) });
+      }
+      const clean = raw.slice(titleIdx).trim();
+      const titleMatch = clean.match(/^#\s+(.+?)\s*$/m);
+      if (!titleMatch || !/##\s*User Prompt/i.test(clean) || !/##\s*System Prompt/i.test(clean)) {
+        return sendJson(res, 502, { error: 'generation did not return a well-formed agent file', raw: raw.slice(0, 800) });
+      }
+      const slug = `custom_${slugify(titleMatch[1])}`;
+      await fsp.writeFile(path.join(AGENTS_DIR, 'vulns', `${slug}.md`), clean + '\n');
+      agentCache = null; // force a fresh read so the new lead shows up immediately
+      const { agents } = await loadAgents();
+      const created = agents.find((a) => a.id === slug);
+      return sendJson(res, 200, { agent: created, raw: clean });
     }
 
     // ---- runs ----
