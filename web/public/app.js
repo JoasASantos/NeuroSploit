@@ -357,7 +357,7 @@ async function startExploitation() {
   $('#btnLaunch').textContent = 'Starting…';
   try {
     const { id } = await api('/api/exploit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    attachLiveJob(id, body.target || body.repo, name);
+    attachLiveJob(id, body.target || body.repo, name, body.agents);
   } catch (e) {
     alert('Failed to start: ' + e.message);
   } finally {
@@ -380,9 +380,16 @@ function bindRunTabs(scopeEl) {
 bindRunTabs($('#liveView'));
 bindRunTabs($('#detailView'));
 
-function attachLiveJob(id, target, name) {
+const ACTIVE_JOB_KEY = 'ns-active-job';
+
+function attachLiveJob(id, target, name, pinnedAgents) {
   if (state.currentJob?.es) state.currentJob.es.close();
-  state.currentJob = { id, es: null, findings: [], target, name, phase: 'starting', agents: 0, agentsDone: 0, reportUrl: null, runId: null };
+  clearInterval(state.currentJob?.pocPoll);
+  state.currentJob = {
+    id, es: null, findings: [], target, name, phase: 'starting', agents: 0, agentsDone: 0,
+    reportUrl: null, runId: null, pinnedAgents: pinnedAgents || [], pocs: [], pocPoll: null,
+  };
+  localStorage.setItem(ACTIVE_JOB_KEY, id);
 
   show($('#wizardView'), false);
   show($('#detailView'), false);
@@ -391,13 +398,16 @@ function attachLiveJob(id, target, name) {
   $('#liveTargetSub').textContent = name ? target : '';
   $('#livePhase').textContent = 'starting';
   $('#phaseDot').style.background = '';
+  $('#phaseDot').classList.remove('static');
   $('#liveFindingsTable tbody').innerHTML = '';
   $('#liveAttackPath').innerHTML = '';
   $('#logList').innerHTML = '';
   $('#liveFindingsCount').textContent = '0';
   show($('#liveFindingsEmpty'), true);
+  $('#progressBar').classList.add('indeterminate');
   $('#progressFill').style.width = '0%';
-  $('#progressLabel').textContent = '0 / 0 agents';
+  $('#progressLabel').textContent = '0 / ? agents';
+  updatePinnedLine();
   show($('#btnOpenReport'), false);
 
   const es = new EventSource(`/api/exploit/${id}/events`);
@@ -405,8 +415,48 @@ function attachLiveJob(id, target, name) {
   es.addEventListener('log', (e) => appendLog(JSON.parse(e.data).line));
   es.addEventListener('finding', (e) => addFinding(JSON.parse(e.data).finding));
   es.addEventListener('snapshot', (e) => applySnapshot(JSON.parse(e.data)));
-  es.addEventListener('done', (e) => { applySnapshot(JSON.parse(e.data)); es.close(); refreshRuns(); });
+  es.addEventListener('done', (e) => {
+    applySnapshot(JSON.parse(e.data));
+    es.close();
+    clearInterval(state.currentJob.pocPoll);
+    refreshRuns();
+  });
   es.onerror = () => { /* EventSource auto-retries; the server replays its buffer on reconnect */ };
+
+  // PoC scripts land in runs/<id>/pocs/ during the run — poll for them once
+  // the CLI's own run id is known (see applySnapshot), so the finding modal
+  // can offer a generated PoC as soon as one exists, not just after the run
+  // finishes.
+  state.currentJob.pocPoll = setInterval(async () => {
+    if (!state.currentJob?.runId) return;
+    try {
+      const detail = await api(`/api/runs/${state.currentJob.runId}`);
+      state.currentJob.pocs = detail.pocs || [];
+    } catch { /* run dir not written yet */ }
+  }, 5000);
+}
+
+function updatePinnedLine() {
+  const n = state.currentJob?.pinnedAgents?.length || 0;
+  $('#livePinned').textContent = n
+    ? `${n} pinned lead(s): ${state.currentJob.pinnedAgents.join(', ')}`
+    : 'auto — recon-driven agent selection (no leads pinned)';
+}
+
+// Resume a live view across a page reload: the server-side job outlives the
+// browser tab, so re-attaching just reconnects SSE — the server replays its
+// full event buffer (log + findings) on connect.
+async function tryResumeActiveJob() {
+  const id = localStorage.getItem(ACTIVE_JOB_KEY);
+  if (!id) return false;
+  try {
+    const snap = await api(`/api/exploit/${id}`);
+    attachLiveJob(id, snap.target, snap.name, snap.pinnedAgents);
+    return true;
+  } catch {
+    localStorage.removeItem(ACTIVE_JOB_KEY); // job no longer exists (server restarted, etc.)
+    return false;
+  }
 }
 
 function appendLog(line) {
@@ -418,8 +468,8 @@ function appendLog(line) {
   list.scrollTop = list.scrollHeight;
 }
 
-function findingRow(f) {
-  return `<tr>
+function findingRow(f, idx) {
+  return `<tr data-idx="${idx}">
     <td><span class="sev ${sevClass(f.severity)}">${esc(f.severity)}</span></td>
     <td>${esc(f.title)}</td>
     <td class="col-endpoint" title="${esc(f.endpoint)}">${esc(f.endpoint)}</td>
@@ -429,9 +479,23 @@ function findingRow(f) {
   </tr>`;
 }
 
+// Click any finding row (live or past-run) to open the full detail modal —
+// evidence/impact/remediation/chain plus any PoC script the run wrote.
+function bindFindingTableClicks(tbodySel, getFindings, getRunId, getPocs) {
+  $(tbodySel).addEventListener('click', (e) => {
+    const tr = e.target.closest('tr');
+    if (!tr) return;
+    const f = getFindings()[Number(tr.dataset.idx)];
+    if (f) openFindingModal(f, getPocs(), getRunId());
+  });
+}
+bindFindingTableClicks('#liveFindingsTable tbody', () => state.currentJob?.findings || [], () => state.currentJob?.runId, () => state.currentJob?.pocs || []);
+bindFindingTableClicks('#detailFindingsTable tbody', () => state.detailFindings || [], () => state.currentDetailId, () => state.detailPocs || []);
+
 function addFinding(f) {
+  const idx = state.currentJob.findings.length;
   state.currentJob.findings.push(f);
-  $('#liveFindingsTable tbody').insertAdjacentHTML('beforeend', findingRow(f));
+  $('#liveFindingsTable tbody').insertAdjacentHTML('beforeend', findingRow(f, idx));
   $('#liveFindingsCount').textContent = state.currentJob.findings.length;
   show($('#liveFindingsEmpty'), false);
   renderAttackPath($('#liveAttackPath'), state.currentJob.findings);
@@ -440,7 +504,12 @@ function addFinding(f) {
 function applySnapshot(snap) {
   $('#livePhase').textContent = snap.phase;
   state.currentJob.runId = snap.runId;
+  if (snap.pinnedAgents?.length && !state.currentJob.pinnedAgents.length) {
+    state.currentJob.pinnedAgents = snap.pinnedAgents;
+    updatePinnedLine();
+  }
   $('#progressLabel').textContent = `${snap.agentsDone} / ${snap.agents || '?'} agents`;
+  $('#progressBar').classList.toggle('indeterminate', !snap.agents);
   if (snap.agents) $('#progressFill').style.width = `${Math.min(100, (snap.agentsDone / snap.agents) * 100)}%`;
   if (snap.reportUrl && snap.runId) {
     $('#btnOpenReport').href = `/api/runs/${snap.runId}/asset/report.html`;
@@ -453,13 +522,76 @@ $('#btnStopRun').addEventListener('click', async () => {
   if (!state.currentJob) return;
   await api(`/api/exploit/${state.currentJob.id}/stop`, { method: 'POST' });
 });
-$('#btnBackToBoard').addEventListener('click', () => { show($('#liveView'), false); show($('#wizardView'), true); });
+function leaveLiveJob() {
+  localStorage.removeItem(ACTIVE_JOB_KEY);
+  clearInterval(state.currentJob?.pocPoll);
+  state.currentJob?.es?.close();
+}
+$('#btnBackToBoard').addEventListener('click', () => { leaveLiveJob(); show($('#liveView'), false); show($('#wizardView'), true); });
 $('#btnDetailBack').addEventListener('click', () => { clearInterval(state.detailPoll); show($('#detailView'), false); show($('#wizardView'), true); });
-$('#btnNewEngagement').addEventListener('click', () => { clearInterval(state.detailPoll); show($('#detailView'), false); show($('#liveView'), false); show($('#wizardView'), true); });
+$('#btnNewEngagement').addEventListener('click', () => { leaveLiveJob(); clearInterval(state.detailPoll); show($('#detailView'), false); show($('#liveView'), false); show($('#wizardView'), true); });
 
 // ---------------------------------------------------------------------------
 // Generative Attack Path Chaining
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Finding detail modal — full evidence/impact/remediation + any PoC script
+// ---------------------------------------------------------------------------
+
+function openFindingModal(f, pocs, runId) {
+  $('#fmSev').className = `sev ${sevClass(f.severity)}`;
+  $('#fmSev').textContent = f.severity || 'info';
+  $('#fmTitle').textContent = f.title || '(untitled finding)';
+
+  const meta = [
+    ['CWE', f.cwe], ['CVSS', f.cvss], ['OWASP', f.owasp], ['MITRE', f.mitre],
+    ['Stage', f.stage], ['Exploitability', f.exploitability],
+    ['Confidence', f.confidence ? f.confidence.toFixed(2) : ''], ['Votes', f.votes],
+    ['Review status', f.review_status], ['Auth context', f.auth_context],
+    ['Account', f.account], ['Agent', f.agent],
+  ];
+  $('#fmMeta').innerHTML = meta.map(([k, v]) =>
+    `<div class="review-item"><div class="k">${esc(k)}</div><div class="v mono">${esc(v || '—')}</div></div>`).join('');
+
+  const section = (label, text) => text
+    ? `<div class="field-group"><label class="field-label">${esc(label)}</label><div class="poc-pre">${esc(text)}</div></div>`
+    : '';
+  $('#fmSection-evidence').innerHTML =
+    section('Endpoint / payload', [f.endpoint, f.payload].filter(Boolean).join('\n\n')) + section('Evidence', f.evidence);
+  $('#fmSection-impact').innerHTML = section('Impact', [f.impact, f.business_impact].filter(Boolean).join('\n\n'));
+  $('#fmSection-remediation').innerHTML = section('Remediation', f.remediation);
+  $('#fmSection-chains').innerHTML = (f.chains_from || []).length
+    ? `<div class="field-help">Chains from: ${esc(f.chains_from.join(', '))}</div>` : '';
+
+  // Proof of concept — doctrine tells agents to cite the PoC's file name in
+  // `evidence` (see pocs_line() in pipeline.rs), so match on that text first;
+  // fall back to whatever the run wrote to pocs/ if nothing was cited.
+  const citedIn = `${f.evidence || ''} ${f.payload || ''}`;
+  const matches = (pocs || []).filter((p) => citedIn.includes(p));
+  const list = matches.length ? matches : (pocs || []);
+  const pocRoot = $('#fmPocList');
+  if (!list.length) {
+    pocRoot.textContent = 'No PoC script written for this finding yet — the exploiting agent only writes one when the finding warrants a runnable repro.';
+  } else {
+    pocRoot.innerHTML = list.map((name) => `
+      <div class="poc-file">
+        <span class="fn">pocs/${esc(name)}</span>
+        <a class="btn btn-sm" href="/api/runs/${esc(runId)}/asset/pocs/${esc(name)}" target="_blank">Open raw</a>
+      </div>
+      <pre class="poc-pre" data-poc="${esc(name)}">loading…</pre>
+    `).join('');
+    for (const name of list) {
+      fetch(`/api/runs/${runId}/asset/pocs/${name}`).then((r) => r.text()).then((txt) => {
+        const pre = pocRoot.querySelector(`pre[data-poc="${CSS.escape(name)}"]`);
+        if (pre) pre.textContent = txt.slice(0, 4000);
+      }).catch(() => {});
+    }
+  }
+  show($('#findingModal'), true);
+}
+$('#btnCloseFinding').addEventListener('click', () => show($('#findingModal'), false));
+$('#findingModal').addEventListener('click', (e) => { if (e.target.id === 'findingModal') show($('#findingModal'), false); });
 
 const KILL_CHAIN_STAGES = ['recon', 'initial-access', 'execution', 'privesc', 'lateral', 'exfil', 'impact'];
 
@@ -575,8 +707,10 @@ async function loadDetail(id) {
   $('#detailTargetSub').textContent = detail.name ? target : '';
   $('#detailState').textContent = detail.status?.state || 'unknown';
   $('#detailFindingsCount').textContent = detail.findings.length;
+  state.detailFindings = detail.findings;
+  state.detailPocs = detail.pocs || [];
   const tbody = $('#detailFindingsTable tbody');
-  tbody.innerHTML = detail.findings.map(findingRow).join('');
+  tbody.innerHTML = detail.findings.map((f, i) => findingRow(f, i)).join('');
   show($('#detailFindingsEmpty'), detail.findings.length === 0);
   renderAttackPath($('#detailAttackPath'), detail.findings);
   const reportLink = $('#detailOpenReport');
@@ -713,6 +847,7 @@ async function boot() {
   $('#sbVersion').textContent = `v${meta.version || '4.0.0'}`;
   await Promise.all([loadAgents(), loadProviders()]);
   await refreshRuns();
+  await tryResumeActiveJob(); // survive an F5 while watching a live run
   setInterval(refreshRuns, 6000);
 }
 boot();

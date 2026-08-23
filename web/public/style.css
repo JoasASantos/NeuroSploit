@@ -65,6 +65,12 @@
 }
 
 * { box-sizing: border-box; }
+/* The [hidden] attribute must always win. Any component class that sets its
+   own `display` (buttons, chips, flex/grid containers, ...) has the SAME
+   specificity as the browser's built-in `[hidden] { display: none }` rule —
+   whichever is declared later in the cascade wins, which silently breaks
+   `el.hidden = true` on anything already styled with `display`. Force it. */
+[hidden] { display: none !important; }
 html, body { margin: 0; padding: 0; height: 100%; }
 body {
   background: var(--bg); color: var(--text); font-family: var(--sans);
@@ -288,8 +294,12 @@ textarea { resize: vertical; min-height: 72px; }
 .run-actions { display: flex; gap: var(--sp-2); }
 
 .progress-wrap { display: flex; align-items: center; gap: var(--sp-3); padding: 0 var(--sp-5) var(--sp-4); }
-.progress-bar { flex: 1; height: 6px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.progress-bar { flex: 1; height: 6px; border-radius: 999px; background: var(--surface-3); border: 1px solid var(--border); overflow: hidden; }
 .progress-fill { height: 100%; width: 0%; background: var(--accent); transition: width .3s; }
+/* agent count unknown yet (still reconning) — slide a segment instead of
+   sitting at a static, easy-to-miss 0% fill */
+.progress-bar.indeterminate .progress-fill { width: 30% !important; animation: progress-indeterminate 1.3s infinite linear; }
+@keyframes progress-indeterminate { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
 .progress-label { font-size: 11.5px; color: var(--text-faint); font-family: var(--mono); white-space: nowrap; }
 
 .run-tabs { display: flex; gap: var(--sp-1); padding: 0 var(--sp-5); border-bottom: 1px solid var(--border); }
@@ -319,7 +329,11 @@ textarea { resize: vertical; min-height: 72px; }
 .data-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .data-table th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-faint); font-weight: 600; padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border-strong); white-space: nowrap; }
 .data-table td { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); vertical-align: top; }
+.data-table tbody tr { cursor: pointer; }
 .data-table tbody tr:hover { background: var(--surface-2); }
+.poc-file { display: flex; align-items: center; gap: var(--sp-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-2); }
+.poc-file .fn { font-family: var(--mono); font-size: 12px; flex: 1; }
+.poc-pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--sp-3); font-family: var(--mono); font-size: 11.5px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin-top: var(--sp-2); }
 .data-table .col-endpoint { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 .data-table .col-conf { font-family: var(--mono); text-align: right; }
 .empty-state { padding: var(--sp-7) var(--sp-5); text-align: center; color: var(--text-faint); font-size: 12.5px; }

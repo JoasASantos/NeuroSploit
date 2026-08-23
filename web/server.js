@@ -318,7 +318,8 @@ async function runDetail(id) {
   ]);
   const assets = ['report.html', 'report.pdf', 'report.md', 'recon.md', 'exploitation.md']
     .filter((f) => fs.existsSync(path.join(dir, f)));
-  return { id, name: engagementNames.get(id) || '', meta, status, findings, assets };
+  const pocs = await fsp.readdir(path.join(dir, 'pocs')).catch(() => []);
+  return { id, name: engagementNames.get(id) || '', meta, status, findings, assets, pocs };
 }
 
 function safeRunDir(id) {
@@ -344,6 +345,7 @@ class Job extends EventEmitter {
     this.args = args;
     this.target = target || '';
     this.name = name || '';
+    this.pinnedAgents = [];
     this.runId = null; // ns-<ts>-<target> workdir basename, once known
     this.phase = 'starting';
     this.findings = [];
@@ -366,6 +368,7 @@ class Job extends EventEmitter {
       id: this.id,
       target: this.target,
       name: this.name,
+      pinnedAgents: this.pinnedAgents,
       runId: this.runId,
       phase: this.phase,
       findings: this.findings,
@@ -451,6 +454,7 @@ async function startJob(body) {
   const credsPath = await materializeCreds(body, id);
   const args = buildArgs({ ...body, creds: credsPath });
   const job = new Job(id, BIN, args, body.repo || body.target || '', body.name || '');
+  job.pinnedAgents = body.agents || [];
   jobs.set(id, job);
 
   const child = spawn(BIN, args, { cwd: ROOT, env: { ...process.env, ...envOverrides() } });

@@ -204,6 +204,7 @@
           <div class="run-target" id="liveTarget">—</div>
           <div class="run-meta" id="liveTargetSub" style="font-family: var(--mono);"></div>
           <div class="run-meta"><span class="phase-dot" id="phaseDot"></span><span id="livePhase">starting</span></div>
+          <div class="run-meta" id="livePinned" style="font-family: var(--mono);"></div>
         </div>
         <div class="run-actions">
           <a class="btn" id="btnOpenReport" target="_blank" hidden>Open report</a>
@@ -212,7 +213,7 @@
         </div>
       </header>
       <div class="progress-wrap">
-        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+        <div class="progress-bar" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
         <div class="progress-label" id="progressLabel">0 / 0 agents</div>
       </div>
       <nav class="run-tabs">
@@ -289,6 +290,32 @@
           <input id="credsPath" type="text" placeholder="creds.yaml" />
           <div class="field-help">An explicit file on disk — see neurosploit-rs/creds.example.yaml for the schema (jwt/header/cookie/login/roles/ssh/windows/cloud).</div>
         </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ FINDING DETAIL MODAL ============ -->
+<div class="modal-overlay" id="findingModal" hidden>
+  <div class="modal" style="width: 760px;">
+    <div class="modal-head">
+      <div>
+        <span class="sev" id="fmSev">—</span>
+        <span class="title" id="fmTitle" style="margin-left:8px;">—</span>
+      </div>
+      <button class="icon-btn" id="btnCloseFinding">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="review-grid" id="fmMeta" style="margin-bottom: var(--sp-5);"></div>
+
+      <div id="fmSection-evidence"></div>
+      <div id="fmSection-impact"></div>
+      <div id="fmSection-remediation"></div>
+      <div id="fmSection-chains"></div>
+
+      <div class="field-group">
+        <label class="field-label">Proof of concept</label>
+        <div id="fmPocList" class="field-help">—</div>
       </div>
     </div>
   </div>

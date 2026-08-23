@@ -175,9 +175,13 @@ fn proxy_line() -> String {
 fn pocs_line() -> String {
     match std::env::var("NEUROSPLOIT_POCS").ok().filter(|v| !v.trim().is_empty()) {
         Some(d) => format!(
-            "POCS: when an issue needs a custom multi-step exploit/script to prove it, WRITE a runnable PoC \
-             (curl/python/bash) to {d}/ with a short header comment (target, what it proves, usage), run it to \
-             confirm, and reference the file path in the finding evidence.\n         "),
+            "POCS (required for every confirmed Medium+ finding): before reporting it, WRITE a standalone, \
+             runnable PoC to {d}/<short-slug>.py or {d}/<short-slug>.sh (prefer Python or Bash — one file per \
+             finding, not per step) that reproduces the vulnerability end-to-end: target, exact payload/request, \
+             and the observable proof (response snippet, status code, timing, etc.). Header comment: what it \
+             proves, how to run it. Actually RUN it once to confirm it works before citing it. Put the exact file \
+             name (e.g. `pocs/idor_order_id.py`) in the finding's `evidence` field so the report and UI can link \
+             it — a finding without a cited PoC path looks unproven.\n         "),
         None => String::new(),
     }
 }
