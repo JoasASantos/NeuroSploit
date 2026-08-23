@@ -183,7 +183,13 @@ function renderBoard() {
       if (e.target.closest('.switch')) return;
       card.classList.toggle('collapsed');
     });
-    card.querySelector('.cat-toggle').addEventListener('change', (e) => {
+    const catToggle = card.querySelector('.cat-toggle');
+    // A partial selection (some but not all agents on) must look "partial",
+    // not "off" — an unchecked master switch reads as "category disabled"
+    // even when most of its agents are still on. Indeterminate = the middle
+    // state; clicking it from there selects everything (browser default).
+    catToggle.indeterminate = selCount > 0 && selCount < group.agents.length;
+    catToggle.addEventListener('change', (e) => {
       const on = e.target.checked;
       for (const a of group.agents) { if (on) state.selected.add(a.id); else state.selected.delete(a.id); }
       renderBoard();

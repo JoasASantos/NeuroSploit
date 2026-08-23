@@ -253,6 +253,9 @@ textarea { resize: vertical; min-height: 72px; }
 .switch .thumb { position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--surface); transition: transform .15s; box-shadow: 0 1px 2px rgba(0,0,0,.25); }
 .switch input:checked + .track { background: var(--accent); }
 .switch input:checked + .track + .thumb { transform: translateX(13px); }
+/* partial selection (some agents on, not all) — reads as "partial", not "off" */
+.switch input:indeterminate + .track { background: var(--border-strong); }
+.switch input:indeterminate + .track + .thumb { transform: translateX(7px); background: var(--accent); }
 
 .custom-leads { display: flex; flex-direction: column; gap: var(--sp-2); }
 .custom-lead-chip { display: flex; align-items: center; gap: var(--sp-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px var(--sp-3); font-size: 12px; background: var(--surface-2); }
