@@ -339,6 +339,12 @@ textarea { resize: vertical; min-height: 72px; }
 
 .log-panel { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); max-height: 100%; overflow-y: auto; padding: var(--sp-3); }
 .log-line { font-family: var(--mono); font-size: 11px; color: var(--text-dim); padding: 1px 0; white-space: pre-wrap; word-break: break-word; }
+.log-tab-panel { display: flex; flex-direction: column; height: 100%; gap: var(--sp-2); }
+.log-tab-panel .log-panel { flex: 1; }
+.send-prompt-row { display: flex; align-items: center; gap: var(--sp-2); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: var(--sp-2) var(--sp-3); background: var(--surface); }
+.send-prompt-row .repl-prompt { color: var(--accent); font-family: var(--mono); }
+#sendPromptInput { flex: 1; border: none; background: transparent; font-family: var(--mono); font-size: 12.5px; outline: none; color: var(--text); }
+.log-echo { color: var(--accent); }
 
 /* ============================================================ Modal (Auth & Keys) */
 

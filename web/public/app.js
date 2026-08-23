@@ -443,6 +443,8 @@ function attachLiveJob(id, target, name, pinnedAgents) {
   $('#progressLabel').textContent = '0 / ? agents';
   updatePinnedLine();
   show($('#btnOpenReport'), false);
+  show($('#sendPromptRow'), false);
+  show($('#sendPromptHelp'), false);
 
   const es = new EventSource(`/api/exploit/${id}/events`);
   state.currentJob.es = es;
@@ -502,6 +504,29 @@ function appendLog(line) {
   list.scrollTop = list.scrollHeight;
 }
 
+// Only run/whitebox/greybox jobs are REPL-backed (interactive: true) — the
+// session keeps reading stdin while the engagement streams, so this is a
+// real command line into the SAME process, not a fire-and-forget note.
+$('#sendPromptInput').addEventListener('keydown', async (e) => {
+  if (e.key !== 'Enter' || !state.currentJob) return;
+  const line = e.target.value;
+  if (!line.trim()) return;
+  e.target.value = '';
+  const div = document.createElement('div');
+  div.className = 'log-line log-echo';
+  div.textContent = `❭ ${line}`;
+  const list = $('#logList');
+  list.appendChild(div);
+  list.scrollTop = list.scrollHeight;
+  try {
+    await api(`/api/exploit/${state.currentJob.id}/input`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ line }),
+    });
+  } catch (err) {
+    appendLog(`[web] couldn't send: ${err.message}`);
+  }
+});
+
 function findingRow(f, idx) {
   return `<tr data-idx="${idx}">
     <td><span class="sev ${sevClass(f.severity)}">${esc(f.severity)}</span></td>
@@ -538,6 +563,9 @@ function addFinding(f) {
 function applySnapshot(snap) {
   $('#livePhase').textContent = snap.phase;
   state.currentJob.runId = snap.runId;
+  state.currentJob.interactive = !!snap.interactive;
+  show($('#sendPromptRow'), snap.interactive && !snap.done);
+  show($('#sendPromptHelp'), snap.interactive && !snap.done);
   if (snap.pinnedAgents?.length && !state.currentJob.pinnedAgents.length) {
     state.currentJob.pinnedAgents = snap.pinnedAgents;
     updatePinnedLine();

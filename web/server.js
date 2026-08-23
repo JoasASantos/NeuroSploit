@@ -451,6 +451,7 @@ class Job extends EventEmitter {
       target: this.target,
       name: this.name,
       pinnedAgents: this.pinnedAgents,
+      interactive: !!this.repl,
       runId: this.runId,
       phase: this.phase,
       findings: this.findings,
@@ -482,7 +483,13 @@ function ingestLine(job, rawLine) {
   } else if (low.startsWith('exploit') || low.startsWith('test ') || low.includes('launching agent')) job.phase = 'exploiting';
   else if (low.startsWith('vote') || low.includes('validating')) job.phase = 'validating';
   else if (low.startsWith('chain')) job.phase = 'chaining';
-  else if (low.includes('phase complete') || low.includes('validated finding(s)')) job.phase = 'complete';
+  else if (low.includes('phase complete') || low.includes('validated finding(s)')) {
+    job.phase = 'complete';
+    // A REPL-backed job's child process doesn't exit when the engagement
+    // finishes (the session stays open for /report, /continue, another
+    // /run, ...) — so 'done' has to come from content, not process exit.
+    if (job.repl && !job.done) { job.done = true; job.push({ type: 'done', exitCode: 0 }); }
+  }
 
   if (/candidate\(s\)/.test(low) && /^(exploit |test |analyze |review )/.test(low)) job.agentsDone += 1;
 
@@ -565,6 +572,80 @@ async function startJob(body) {
     job.push({ type: 'log', line: `[web] failed to start neurosploit: ${err.message}` });
     job.push({ type: 'done', exitCode: -1 });
   });
+  return job;
+}
+
+/// Turn the wizard's config into the REPL commands that produce the same
+/// engagement (`/target`/`/repo` → `/model` → toggles → `/only` → `/run`).
+/// `/only` is what makes this equivalent to the CLI's `--only` — REPL had no
+/// such command before this feature (added to app/src/repl.rs alongside it).
+function buildReplScript(body) {
+  const lines = [];
+  if (body.mode === 'whitebox') lines.push(`/repo ${body.repo || body.target}`);
+  else {
+    if (body.target) lines.push(`/target ${body.target}`);
+    if (body.mode === 'greybox' && body.repo) lines.push(`/repo ${body.repo}`);
+  }
+  if ((body.models || []).length) lines.push(`/model ${body.models.join(',')}`);
+  lines.push(`/sub ${body.subscription ? 'on' : 'off'}`);
+  lines.push(`/mcp ${body.mcp ? 'on' : 'off'}`);
+  if (body.votes) lines.push(`/votes ${body.votes}`);
+  if (body.chainDepth !== undefined) lines.push(`/chain ${body.chainDepth}`);
+  if (body.recon) lines.push(`/recon ${body.recon}`);
+  if (body.focus) lines.push(`/focus ${body.focus}`);
+  if (body.objective) lines.push(`/objective ${body.objective}`);
+  if (body.outOfScope) lines.push(`/scope-out ${body.outOfScope}`);
+  if (body.creds) lines.push(`/creds ${body.creds}`);
+  lines.push((body.agents || []).length ? `/only ${body.agents.join(',')}` : '/only clear');
+  lines.push('/run');
+  return lines;
+}
+
+/// Same job abstraction as startJob(), but driven through a REAL interactive
+/// REPL session instead of a one-shot `neurosploit run ...` subprocess — the
+/// engagement streams identically (same underlying pipeline, same tagged
+/// lines), but the session KEEPS reading stdin while it runs, so the web UI
+/// can send more input mid-run (natural language, /status, /stop, /continue)
+/// via POST /api/exploit/:id/input. Only run/whitebox/greybox support this —
+/// host/aitest/skills need onboarding's scope picker, which is an interactive
+/// arrow-key menu that skips itself entirely over a piped stdin.
+async function startJobViaRepl(body) {
+  if (!BIN) throw new Error('neurosploit binary not found — run `cargo build --release` in neurosploit-rs/');
+  const id = crypto.randomUUID();
+  const credsPath = await materializeCreds(body, id);
+  const script = buildReplScript({ ...body, creds: credsPath });
+  const job = new Job(id, BIN, [], body.repo || body.target || '', body.name || '');
+  job.pinnedAgents = body.agents || [];
+  job.repl = true;
+  jobs.set(id, job);
+
+  const child = spawn(BIN, [], { cwd: ROOT, env: { ...process.env, ...envOverrides() } });
+  job.child = child;
+  let buf = '';
+  const onData = (chunk) => {
+    buf += chunk.toString('utf8');
+    let idx;
+    while ((idx = buf.indexOf('\n')) !== -1) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      if (line.length) ingestLine(job, line);
+    }
+  };
+  child.stdout.on('data', onData);
+  child.stderr.on('data', onData);
+  // The REPL process itself exiting (e.g. after /quit) is ALSO a valid done
+  // signal, in addition to the content-based one in ingestLine().
+  child.on('close', (code) => {
+    if (buf.trim()) ingestLine(job, buf);
+    if (!job.done) { job.done = true; job.push({ type: 'done', exitCode: code }); }
+    job.exitCode = code;
+  });
+  child.on('error', (err) => {
+    job.done = true;
+    job.push({ type: 'log', line: `[web] failed to start neurosploit: ${err.message}` });
+    job.push({ type: 'done', exitCode: -1 });
+  });
+  for (const line of script) child.stdin.write(line + '\n');
   return job;
 }
 
@@ -758,8 +839,13 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && p === '/api/exploit') {
       const body = await readBody(req);
-      const job = await startJob(body);
-      return sendJson(res, 200, { id: job.id });
+      // run/whitebox/greybox go through a real REPL session so the operator
+      // can keep sending it input while it streams; host/aitest/skills need
+      // the onboarding scope picker (an interactive menu that only works on
+      // a real TTY), so they stay on the plain one-shot CLI subprocess.
+      const replCapable = ['run', 'whitebox', 'greybox'].includes(body.mode || 'run');
+      const job = replCapable ? await startJobViaRepl(body) : await startJob(body);
+      return sendJson(res, 200, { id: job.id, interactive: !!job.repl });
     }
     m = p.match(/^\/api\/exploit\/([^/]+)$/);
     if (req.method === 'GET' && m) {
@@ -771,7 +857,25 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && m) {
       const job = jobs.get(m[1]);
       if (!job) return sendJson(res, 404, { error: 'job not found' });
-      job.child?.kill('SIGINT');
+      if (job.repl && job.child?.stdin?.writable) {
+        // The REPL's own graceful stop: /stop then choose "1" — validate
+        // what's found so far, then report. Plain SIGINT doesn't map to
+        // anything here (no signal handler in the REPL's own input loop).
+        job.child.stdin.write('/stop\n1\n');
+      } else {
+        job.child?.kill('SIGINT');
+      }
+      return sendJson(res, 200, { ok: true });
+    }
+    m = p.match(/^\/api\/exploit\/([^/]+)\/input$/);
+    if (req.method === 'POST' && m) {
+      const job = jobs.get(m[1]);
+      if (!job) return sendJson(res, 404, { error: 'job not found' });
+      if (!job.repl || !job.child?.stdin?.writable) {
+        return sendJson(res, 409, { error: 'this job is not an interactive session (host/aitest/skills engagements run non-interactively)' });
+      }
+      const body = await readBody(req);
+      job.child.stdin.write(String(body.line ?? '') + '\n');
       return sendJson(res, 200, { ok: true });
     }
     m = p.match(/^\/api\/exploit\/([^/]+)\/events$/);

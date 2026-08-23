@@ -227,7 +227,14 @@
       <div class="run-body">
         <div class="run-tab-panel" data-tabpanel="findings"><table class="data-table" id="liveFindingsTable"><thead><tr><th>Severity</th><th>Title</th><th>Endpoint</th><th>CWE</th><th>Agent</th><th>Conf.</th></tr></thead><tbody></tbody></table><div class="empty-state" id="liveFindingsEmpty">No validated findings yet.</div></div>
         <div class="run-tab-panel" data-tabpanel="attackpath" hidden><div id="liveAttackPath"></div></div>
-        <div class="run-tab-panel" data-tabpanel="log" hidden><div class="log-panel" id="logList" style="height: 100%;"></div></div>
+        <div class="run-tab-panel log-tab-panel" data-tabpanel="log" hidden>
+          <div class="log-panel" id="logList"></div>
+          <div class="send-prompt-row" id="sendPromptRow" hidden>
+            <span class="repl-prompt">❭</span>
+            <input id="sendPromptInput" type="text" autocomplete="off" spellcheck="false" placeholder="/status · /stop · /continue · or describe it in plain language" />
+          </div>
+          <div class="field-help" id="sendPromptHelp" hidden>This session stays interactive while the engagement runs — type a command or plain instruction and press Enter.</div>
+        </div>
       </div>
     </section>
 
