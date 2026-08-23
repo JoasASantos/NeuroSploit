@@ -554,15 +554,37 @@ function openFindingModal(f, pocs, runId) {
   $('#fmMeta').innerHTML = meta.map(([k, v]) =>
     `<div class="review-item"><div class="k">${esc(k)}</div><div class="v mono">${esc(v || '—')}</div></div>`).join('');
 
-  const section = (label, text) => text
-    ? `<div class="field-group"><label class="field-label">${esc(label)}</label><div class="poc-pre">${esc(text)}</div></div>`
-    : '';
+  // The report footer ("Identified and validated by NeuroSploit...") gets
+  // baked into impact/business_impact by the reporter — strip it from every
+  // field so it doesn't repeat per-section, and surface it once at the
+  // bottom of the modal instead.
+  const ATTRIBUTION_RE = /Identified and validated by NeuroSploit[\s\S]*?Red Team Leaders\.?/i;
+  let attributed = false;
+  const clean = (text) => {
+    if (!text) return '';
+    const stripped = text.replace(ATTRIBUTION_RE, () => { attributed = true; return ''; });
+    return stripped.split(/\n\n+/).map((p) => p.trim()).filter(Boolean).join('\n\n');
+  };
+  // Technical evidence (endpoint/payload/curl) reads as code; prose
+  // (description/impact/remediation) reads as a paragraph, not a code block.
+  const codeBlock = (label, text) => text
+    ? `<div class="field-group"><label class="field-label">${esc(label)}</label><pre class="poc-pre">${esc(text)}</pre></div>` : '';
+  const proseBlock = (label, text) => text
+    ? `<div class="field-group"><label class="field-label">${esc(label)}</label><div class="fm-prose">${esc(text)}</div></div>` : '';
+
+  const impactText = clean(f.impact);
+  const bizText = clean(f.business_impact);
+  const impactCombined = bizText && bizText !== impactText
+    ? [impactText, bizText].filter(Boolean).join('\n\n') : impactText;
+
   $('#fmSection-evidence').innerHTML =
-    section('Endpoint / payload', [f.endpoint, f.payload].filter(Boolean).join('\n\n')) + section('Evidence', f.evidence);
-  $('#fmSection-impact').innerHTML = section('Impact', [f.impact, f.business_impact].filter(Boolean).join('\n\n'));
-  $('#fmSection-remediation').innerHTML = section('Remediation', f.remediation);
-  $('#fmSection-chains').innerHTML = (f.chains_from || []).length
-    ? `<div class="field-help">Chains from: ${esc(f.chains_from.join(', '))}</div>` : '';
+    proseBlock('Description', clean(f.evidence)) +
+    codeBlock('Technical evidence', [f.endpoint, f.payload].filter(Boolean).join('\n\n'));
+  $('#fmSection-impact').innerHTML = proseBlock('Impact', impactCombined);
+  $('#fmSection-remediation').innerHTML = proseBlock('Remediation', clean(f.remediation));
+  $('#fmSection-chains').innerHTML =
+    ((f.chains_from || []).length ? `<div class="field-help">Chains from: ${esc(f.chains_from.join(', '))}</div>` : '') +
+    (attributed ? '<div class="field-help" style="margin-top:6px;">Identified and validated by NeuroSploit (multi-model adversarial validation) — full methodology in the generated report.</div>' : '');
 
   // Proof of concept — doctrine tells agents to cite the PoC's file name in
   // `evidence` (see pocs_line() in pipeline.rs), so match on that text first;
