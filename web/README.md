@@ -1,8 +1,22 @@
 # NeuroSploit v4.0.0 — web console
 
-A browser UI for the `neurosploit` CLI harness: a lead board (categorized agent picker + custom
-leads → `Start Exploitation`), a live structured findings view, run history, and a real REPL —
-all driven by spawning the actual CLI binary, never a reimplementation of harness logic.
+A browser UI for the `neurosploit` CLI harness: a 5-step engagement wizard (Asset → Scope & Auth
+→ Leads → Model & Run → Review), a live structured findings view with a generative attack-path
+graph, run history, an Auth & Keys menu, and a real REPL — all driven by spawning the actual CLI
+binary, never a reimplementation of harness logic.
+
+- **Asset** — pick black/white/grey-box, host/infra, or AI/LLM, set the target or repo.
+- **Scope & Auth** — objective, focus, out-of-scope, and a link into the Auth & Keys menu.
+- **Leads** — the categorized agent picker (435 agents auto-classified) + custom leads.
+- **Model & Run** — pick a provider/model from the live catalog, API-key vs. subscription auth
+  mode, votes/chain-depth/recon intensity.
+- **Review** — confirm the plan, then `Start Exploitation` spawns the real CLI.
+- **Auth & Keys** (one menu, 🔑 in the sidebar) — target auth header + named roles for
+  IDOR/BOLA/BFLA testing, per-provider API keys (kept in server memory only, never on disk), and
+  an explicit `creds.yaml` path override.
+- **Generative Attack Path Chaining** — findings are grouped into kill-chain columns
+  (recon → initial-access → execution → privesc → lateral → exfil → impact) with chained findings
+  linked back to their parent, built live as findings stream in.
 
 ```bash
 cd neurosploit-rs && cargo build --release   # build the CLI once

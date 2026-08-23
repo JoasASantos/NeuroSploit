@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -12,160 +12,279 @@
 <div class="app">
 
   <!-- ============ SIDEBAR ============ -->
-  <aside class="sidebar">
+  <aside class="sidebar" id="sidebar">
     <div class="sb-top">
-      <div class="brand">🧠</div>
-      <div class="sb-icons">
-        <button class="icon-btn" id="btnSearchRuns" title="Buscar engagement">⌕</button>
-        <button class="icon-btn" id="btnCollapseSidebar" title="Recolher">⟨⟩</button>
+      <div class="brand"><span class="mark">NS</span> NeuroSploit</div>
+      <button class="icon-btn" id="btnThemeToggle" title="Toggle light / dark theme">☾</button>
+    </div>
+
+    <button class="sb-new" id="btnNewEngagement">+ New engagement</button>
+
+    <div class="sb-groups" id="sbGroups"><!-- populated by app.js --></div>
+
+    <div class="sb-bottom">
+      <span class="sb-version" id="sbVersion">v4.0.0</span>
+      <div class="sb-bottom-actions">
+        <button class="icon-btn" id="btnOpenAuth" title="Auth &amp; API keys">🔑</button>
+        <button class="icon-btn" id="btnOpenRepl" title="Open REPL">❭_</button>
       </div>
-    </div>
-
-    <button class="new-engagement" id="btnNewEngagement">+ Novo engagement</button>
-
-    <div class="sb-groups" id="sbGroups">
-      <!-- populated by app.js -->
-    </div>
-
-    <div class="sb-footer">
-      <div class="sb-meta" id="sbMeta">v4.0.0</div>
-      <button class="icon-btn" id="btnOpenRepl" title="Abrir REPL">⌘_</button>
     </div>
   </aside>
 
   <!-- ============ MAIN ============ -->
   <main class="main">
 
-    <!-- top bar -->
-    <header class="topbar">
-      <div class="search-wrap">
-        <span class="search-icon">⌕</span>
-        <input id="leadSearch" type="text" placeholder="Search lead" />
-      </div>
-      <div class="chips">
-        <button class="chip chip-active" data-filter="all">All <span id="chipAll">0</span></button>
-        <button class="chip" data-filter="selected">Selected <span id="chipSelected">0</span></button>
-        <button class="chip" data-filter="excluded">Excluded <span id="chipExcluded">0</span></button>
-      </div>
-      <div class="topbar-spacer"></div>
-      <button class="btn btn-ghost" id="btnCustomLead">+ Custom lead</button>
-      <button class="btn btn-primary" id="btnStartExploitation">Start Exploitation →</button>
-    </header>
-
-    <!-- engagement setup strip -->
-    <section class="engagement-bar" id="engagementBar">
-      <div class="eb-field eb-target">
-        <label>Target</label>
-        <input id="fieldTarget" type="text" placeholder="https://alvo.com ou owner/repo" />
-      </div>
-      <div class="eb-field">
-        <label>Modo</label>
-        <select id="fieldMode">
-          <option value="run">Black-box (run)</option>
-          <option value="whitebox">White-box</option>
-          <option value="greybox">Grey-box</option>
-          <option value="host">Host/Infra</option>
-          <option value="aitest">AI/LLM</option>
-        </select>
-      </div>
-      <div class="eb-field eb-repo" hidden>
-        <label>Repo (greybox)</label>
-        <input id="fieldRepo" type="text" placeholder="owner/repo ou path local" />
-      </div>
-      <div class="eb-field eb-narrow">
-        <label>Modelo</label>
-        <input id="fieldModel" type="text" placeholder="anthropic:claude-opus-4-8" />
-      </div>
-      <div class="eb-field eb-narrow">
-        <label>Votes</label>
-        <input id="fieldVotes" type="number" min="1" max="9" value="3" />
-      </div>
-      <div class="eb-field eb-narrow">
-        <label>Recon</label>
-        <select id="fieldRecon">
-          <option value="1">1 · quick</option>
-          <option value="2">2 · standard</option>
-          <option value="3" selected>3 · deep</option>
-          <option value="4">4 · exhaustive</option>
-        </select>
-      </div>
-      <div class="eb-field eb-narrow">
-        <label>Chain</label>
-        <input id="fieldChain" type="number" min="0" max="5" value="2" />
-      </div>
-      <label class="eb-check"><input type="checkbox" id="fieldSubscription" /> subscription</label>
-      <label class="eb-check"><input type="checkbox" id="fieldMcp" /> MCP</label>
-    </section>
-
-    <!-- ============ BOARD VIEW (lead picker) ============ -->
-    <section class="board" id="boardView">
-      <div class="board-scroll" id="boardScroll">
-        <h2 class="board-title">Set and modify the action plan</h2>
-        <div class="categories" id="categories"><!-- populated --></div>
-      </div>
-
-      <aside class="ask-panel">
-        <div class="ask-title">Ask anything</div>
-        <textarea id="askInput" placeholder="e.g. Prioritize the paths most likely to cause data leak"></textarea>
-        <div class="ask-row">
-          <select id="askKind">
-            <option value="focus">Focus</option>
-            <option value="objective">Objective</option>
-            <option value="scope-out">Out of scope</option>
-          </select>
-          <button class="btn btn-icon" id="btnAskSend" title="Aplicar">➤</button>
-        </div>
-        <div class="ask-hint" id="askHint"></div>
-      </aside>
-    </section>
-
-    <!-- ============ LIVE RUN VIEW ============ -->
-    <section class="liverun" id="liveView" hidden>
-      <div class="liverun-head">
+    <!-- ============ WIZARD (new engagement) ============ -->
+    <section class="wizard" id="wizardView">
+      <header class="topbar">
         <div>
-          <div class="liverun-target" id="liveTarget">—</div>
-          <div class="liverun-phase"><span class="phase-dot" id="phaseDot"></span><span id="livePhase">starting</span></div>
+          <div class="topbar-title">New engagement</div>
+          <div class="topbar-sub">Asset → Scope &amp; Auth → Leads → Model &amp; Run → Review</div>
         </div>
-        <div class="liverun-actions">
-          <a class="btn btn-ghost" id="btnOpenReport" target="_blank" hidden>Abrir report</a>
-          <button class="btn btn-danger" id="btnStopRun">Stop</button>
-          <button class="btn btn-ghost" id="btnBackToBoard">← Board</button>
+        <div class="topbar-spacer"></div>
+        <button class="btn" id="btnOpenAuth2">🔑 Auth &amp; Keys</button>
+      </header>
+
+      <nav class="stepper" id="stepper">
+        <button class="step-tab active" data-step="0"><span class="n">1</span> Asset</button>
+        <button class="step-tab" data-step="1"><span class="n">2</span> Scope &amp; Auth</button>
+        <button class="step-tab" data-step="2"><span class="n">3</span> Leads</button>
+        <button class="step-tab" data-step="3"><span class="n">4</span> Model &amp; Run</button>
+        <button class="step-tab" data-step="4"><span class="n">5</span> Review</button>
+      </nav>
+
+      <div class="wizard-body">
+
+        <!-- Step 1 — Asset -->
+        <div class="wizard-panel" data-panel="0">
+          <div>
+            <div class="section-title">What are you testing?</div>
+            <div class="section-desc">Pick the engagement type — this decides which CLI subcommand runs underneath.</div>
+          </div>
+          <div class="mode-tiles" id="modeTiles">
+            <button class="mode-tile" data-mode="run"><span class="t">Black-box</span><span class="d">URL only — recon-driven</span></button>
+            <button class="mode-tile" data-mode="whitebox"><span class="t">White-box</span><span class="d">Source repo — SAST agents</span></button>
+            <button class="mode-tile" data-mode="greybox"><span class="t">Grey-box</span><span class="d">URL + source together</span></button>
+            <button class="mode-tile" data-mode="host"><span class="t">Host / Infra</span><span class="d">IP — Linux/Windows/AD</span></button>
+            <button class="mode-tile" data-mode="aitest"><span class="t">AI / LLM</span><span class="d">Live AI agent or MCP endpoint</span></button>
+          </div>
+
+          <div class="field-group" id="fieldTargetGroup">
+            <label class="field-label" id="targetLabel">Target URL</label>
+            <input id="fieldTarget" type="text" placeholder="https://target.example.com" />
+            <div class="field-help" id="targetHelp">The application, host, or endpoint to test.</div>
+          </div>
+          <div class="field-group" id="fieldRepoGroup" hidden>
+            <label class="field-label">Source repo</label>
+            <input id="fieldRepo" type="text" placeholder="owner/repo, a GitHub URL, or a local path" />
+            <div class="field-help">Cloned automatically if it's a GitHub URL or owner/repo shorthand.</div>
+          </div>
         </div>
+
+        <!-- Step 2 — Scope & Auth -->
+        <div class="wizard-panel" data-panel="1" hidden>
+          <div>
+            <div class="section-title">Objective &amp; focus</div>
+            <div class="section-desc">Steers what the agents prioritise and what counts as impact.</div>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Objective</label>
+            <textarea id="fieldObjective" placeholder="e.g. Pre-launch review of the checkout flow — prove any path to unauthorized order access."></textarea>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Focus</label>
+            <textarea id="fieldFocus" placeholder="e.g. Prioritize the paths most likely to cause data leakage."></textarea>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Out of scope</label>
+            <textarea id="fieldOutOfScope" placeholder="Hosts, paths, or techniques the agents must not touch."></textarea>
+          </div>
+          <div>
+            <div class="section-title">Authentication</div>
+            <div class="section-desc">Test as a logged-in user. Configured in the <button class="btn btn-sm" id="btnOpenAuth3" style="display:inline">🔑 Auth &amp; Keys</button> menu.</div>
+          </div>
+        </div>
+
+        <!-- Step 3 — Leads -->
+        <div class="wizard-panel" data-panel="2" hidden style="max-width: none;">
+          <div>
+            <div class="section-title">Set the action plan</div>
+            <div class="section-desc">Toggle specific leads to test, or leave everything off to let recon-driven auto-selection choose.</div>
+          </div>
+          <div class="lead-toolbar">
+            <div class="search-wrap">
+              <span class="search-icon">⌕</span>
+              <input id="leadSearch" type="text" placeholder="Search lead" />
+            </div>
+            <div class="chips">
+              <button class="chip chip-active" data-filter="all">All <span id="chipAll">0</span></button>
+              <button class="chip" data-filter="selected">Selected <span id="chipSelected">0</span></button>
+              <button class="chip" data-filter="excluded">Excluded <span id="chipExcluded">0</span></button>
+            </div>
+            <div class="topbar-spacer"></div>
+            <button class="btn btn-sm" id="btnCustomLead">+ Custom lead</button>
+          </div>
+          <div class="custom-leads" id="customLeadsList"></div>
+          <div class="categories" id="categories"><!-- populated --></div>
+        </div>
+
+        <!-- Step 4 — Model & Run -->
+        <div class="wizard-panel" data-panel="3" hidden>
+          <div>
+            <div class="section-title">Model</div>
+            <div class="section-desc">Pick a provider and model from the harness's live catalog.</div>
+          </div>
+          <div class="field-row">
+            <div class="field-group">
+              <label class="field-label">Provider</label>
+              <select id="fieldProvider"></select>
+            </div>
+            <div class="field-group">
+              <label class="field-label">Model</label>
+              <select id="fieldModelSelect"></select>
+            </div>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Auth mode</label>
+            <div class="auth-mode-toggle" id="authModeToggle">
+              <button data-mode="api" class="selected">API key</button>
+              <button data-mode="subscription">Subscription (local CLI login)</button>
+            </div>
+            <div class="field-help" id="authModeHelp">Uses the API key set in Auth &amp; Keys for this provider.</div>
+          </div>
+          <div class="check-row"><input type="checkbox" id="fieldMcp" /> <label for="fieldMcp">Playwright MCP (browser tool access, subscription backends only)</label></div>
+
+          <div>
+            <div class="section-title">Run settings</div>
+          </div>
+          <div class="field-row">
+            <div class="field-group"><label class="field-label">Votes</label><input class="narrow" id="fieldVotes" type="number" min="1" max="9" value="3" /></div>
+            <div class="field-group"><label class="field-label">Chain depth</label><input class="narrow" id="fieldChain" type="number" min="0" max="5" value="2" /></div>
+            <div class="field-group"><label class="field-label">Recon intensity</label>
+              <select class="narrow" id="fieldRecon">
+                <option value="1">1 · quick</option>
+                <option value="2">2 · standard</option>
+                <option value="3" selected>3 · deep</option>
+                <option value="4">4 · exhaustive</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 5 — Review -->
+        <div class="wizard-panel" data-panel="4" hidden>
+          <div>
+            <div class="section-title">Review</div>
+            <div class="section-desc">Confirm before launching — this spawns the real CLI harness.</div>
+          </div>
+          <div class="review-grid" id="reviewGrid"></div>
+        </div>
+
       </div>
 
+      <footer class="wizard-footer">
+        <div class="summary-line" id="wizardSummary"></div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn" id="btnStepBack">← Back</button>
+          <button class="btn btn-primary" id="btnStepNext">Next →</button>
+          <button class="btn btn-primary" id="btnLaunch" hidden>Start Exploitation →</button>
+        </div>
+      </footer>
+    </section>
+
+    <!-- ============ LIVE RUN ============ -->
+    <section class="runpage" id="liveView" hidden>
+      <header class="run-head">
+        <div>
+          <div class="run-target" id="liveTarget">—</div>
+          <div class="run-meta"><span class="phase-dot" id="phaseDot"></span><span id="livePhase">starting</span></div>
+        </div>
+        <div class="run-actions">
+          <a class="btn" id="btnOpenReport" target="_blank" hidden>Open report</a>
+          <button class="btn btn-danger" id="btnStopRun">Stop</button>
+          <button class="btn" id="btnBackToBoard">← New engagement</button>
+        </div>
+      </header>
       <div class="progress-wrap">
         <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
         <div class="progress-label" id="progressLabel">0 / 0 agents</div>
       </div>
-
-      <div class="liverun-body">
-        <div class="findings-col">
-          <div class="col-head">Findings <span id="findingsCount">0</span></div>
-          <div class="findings-list" id="findingsList"></div>
-        </div>
-        <div class="log-col">
-          <div class="col-head">Activity feed</div>
-          <div class="log-list" id="logList"></div>
-        </div>
+      <nav class="run-tabs">
+        <button class="run-tab active" data-tab="findings">Findings <span id="liveFindingsCount">0</span></button>
+        <button class="run-tab" data-tab="attackpath">Generative Attack Path Chaining</button>
+        <button class="run-tab" data-tab="log">Activity log</button>
+      </nav>
+      <div class="run-body">
+        <div class="run-tab-panel" data-tabpanel="findings"><table class="data-table" id="liveFindingsTable"><thead><tr><th>Severity</th><th>Title</th><th>Endpoint</th><th>CWE</th><th>Agent</th><th>Conf.</th></tr></thead><tbody></tbody></table><div class="empty-state" id="liveFindingsEmpty">No validated findings yet.</div></div>
+        <div class="run-tab-panel" data-tabpanel="attackpath" hidden><div id="liveAttackPath"></div></div>
+        <div class="run-tab-panel" data-tabpanel="log" hidden><div class="log-panel" id="logList" style="height: 100%;"></div></div>
       </div>
     </section>
 
-    <!-- ============ RUN DETAIL VIEW (past run) ============ -->
-    <section class="rundetail" id="detailView" hidden>
-      <div class="liverun-head">
+    <!-- ============ RUN DETAIL (past run) ============ -->
+    <section class="runpage" id="detailView" hidden>
+      <header class="run-head">
         <div>
-          <div class="liverun-target" id="detailTarget">—</div>
-          <div class="liverun-phase" id="detailState">—</div>
+          <div class="run-target" id="detailTarget">—</div>
+          <div class="run-meta"><span class="phase-dot static" id="detailDot"></span><span id="detailState">—</span></div>
         </div>
-        <div class="liverun-actions">
-          <a class="btn btn-ghost" id="detailOpenReport" target="_blank" hidden>Abrir report</a>
-          <button class="btn btn-ghost" id="btnDetailBack">← Board</button>
+        <div class="run-actions">
+          <a class="btn" id="detailOpenReport" target="_blank" hidden>Open report</a>
+          <button class="btn" id="btnDetailBack">← New engagement</button>
         </div>
+      </header>
+      <nav class="run-tabs">
+        <button class="run-tab active" data-tab="findings">Findings <span id="detailFindingsCount">0</span></button>
+        <button class="run-tab" data-tab="attackpath">Generative Attack Path Chaining</button>
+      </nav>
+      <div class="run-body">
+        <div class="run-tab-panel" data-tabpanel="findings"><table class="data-table" id="detailFindingsTable"><thead><tr><th>Severity</th><th>Title</th><th>Endpoint</th><th>CWE</th><th>Agent</th><th>Conf.</th></tr></thead><tbody></tbody></table><div class="empty-state" id="detailFindingsEmpty">No validated findings.</div></div>
+        <div class="run-tab-panel" data-tabpanel="attackpath" hidden><div id="detailAttackPath"></div></div>
       </div>
-      <div class="findings-list" id="detailFindings"></div>
     </section>
 
   </main>
+</div>
+
+<!-- ============ AUTH & KEYS MODAL ============ -->
+<div class="modal-overlay" id="authModal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <div class="title">Auth &amp; Keys</div>
+      <button class="icon-btn" id="btnCloseAuth">✕</button>
+    </div>
+    <div class="modal-tabs">
+      <button class="modal-tab active" data-mtab="target">Target auth</button>
+      <button class="modal-tab" data-mtab="keys">API keys</button>
+      <button class="modal-tab" data-mtab="creds">Creds file</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-panel" data-mpanel="target">
+        <div class="field-group">
+          <label class="field-label">Auth header</label>
+          <input id="authHeader" type="text" placeholder="Authorization: Bearer &lt;token&gt;  or  Cookie: session=..." />
+          <div class="field-help">Used so agents test as a logged-in user. Kept only for this session, sent to the CLI as an ephemeral creds file.</div>
+        </div>
+        <div class="field-group">
+          <label class="field-label">Named roles (multi-identity access-control testing)</label>
+          <div class="role-list" id="roleList"></div>
+          <button class="btn btn-sm" id="btnAddRole" style="align-self:flex-start;">+ Add role</button>
+          <div class="field-help">Two or more roles enable IDOR/BOLA/BFLA cross-role testing.</div>
+        </div>
+      </div>
+      <div class="modal-panel" data-mpanel="keys" hidden>
+        <div class="field-help" style="margin-bottom:12px;">Keys are kept in this server process's memory only — never written to disk. Cleared on restart.</div>
+        <div id="providerKeyList"></div>
+      </div>
+      <div class="modal-panel" data-mpanel="creds" hidden>
+        <div class="field-group">
+          <label class="field-label">creds.yaml path (overrides target auth above)</label>
+          <input id="credsPath" type="text" placeholder="creds.yaml" />
+          <div class="field-help">An explicit file on disk — see neurosploit-rs/creds.example.yaml for the schema (jwt/header/cookie/login/roles/ssh/windows/cloud).</div>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- ============ REPL DRAWER ============ -->
@@ -173,18 +292,18 @@
   <div class="repl-head">
     <span>NeuroSploit CLI harness — REPL</span>
     <div>
-      <button class="icon-btn" id="btnReplRestart" title="Reiniciar sessão">⟲</button>
-      <button class="icon-btn" id="btnReplClose" title="Fechar">✕</button>
+      <button class="icon-btn" id="btnReplRestart" title="Restart session">⟲</button>
+      <button class="icon-btn" id="btnReplClose" title="Close">✕</button>
     </div>
   </div>
   <div class="repl-output" id="replOutput"></div>
   <div class="repl-input-row">
     <span class="repl-prompt">❭</span>
-    <input id="replInput" type="text" autocomplete="off" spellcheck="false" placeholder="/help · /run · /status · ou descreva em linguagem natural" />
+    <input id="replInput" type="text" autocomplete="off" spellcheck="false" placeholder="/help · /run · /status · or describe it in plain language" />
   </div>
 </div>
 
-<button class="fab" id="fabRepl" title="Abrir REPL">❭_</button>
+<button class="fab" id="fabRepl" title="Open REPL">❭_</button>
 
 <script src="/app.js"></script>
 </body>

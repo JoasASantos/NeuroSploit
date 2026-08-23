@@ -52,6 +52,40 @@ An agent's `id`/`name` is exactly what the CLI's `--only <name>` flag expects (s
 
 ---
 
+## Providers / models / API keys
+
+### `GET /api/providers`
+
+Static mirror of `crates/harness/src/models.rs` `providers()` — every provider the harness
+supports, its models, and whether it's usable via a local CLI subscription login (`kind: "cli"`)
+or API key only (`kind: "api"`).
+
+```json
+[ { "key": "anthropic", "label": "Anthropic Claude", "kind": "cli", "models": ["claude-opus-5", "..."] } ]
+```
+
+### `GET /api/keys`
+
+Which providers currently have an API key set **in this server process's memory** (booleans only
+— never the value):
+
+```json
+[ { "provider": "anthropic", "set": true }, { "provider": "openai", "set": false } ]
+```
+
+### `POST /api/keys`
+
+Body `{ "provider": "anthropic", "key": "sk-..." }`. Stores the key in an in-memory `Map` —
+**never written to disk**, lost on server restart. Every subsequent `/api/exploit` and `/api/repl`
+child process is spawned with `<provider>.envKey` set from this store (merged over `process.env`).
+Omitting `key` (or passing an empty string) clears it. 400 on an unknown provider.
+
+### `DELETE /api/keys/:provider`
+
+Clears one provider's key.
+
+---
+
 ## Runs (history)
 
 ### `GET /api/runs`
@@ -106,9 +140,19 @@ Body:
   "focus": "injection and business logic",   // --focus
   "objective": "pre-launch review of checkout",  // --objective
   "outOfScope": "staging.example.com",           // --out-of-scope
-  "agents": ["sqli_error", "idor"]  // --only <name>, repeated — the lead-board selection
+  "agents": ["sqli_error", "idor"],  // --only <name>, repeated — the lead-board selection
+  "auth": "Authorization: Bearer <token>",  // target auth header — see Target auth below
+  "roles": [{ "name": "admin", "header": "Authorization: Bearer ..." }],  // multi-identity access-control testing
 }
 ```
+
+### Target auth (`auth` / `roles`)
+
+If `creds` is omitted and either `auth` or `roles` is set, the server writes a minimal
+`creds.yaml`-compatible file (matching `neurosploit-rs/creds.example.yaml`'s schema) to
+`os.tmpdir()/neurosploit-web/<job-id>.creds.yaml` and passes it via `--creds`. An explicit `creds`
+path always wins over `auth`/`roles`. These ephemeral files are not cleaned up automatically —
+they live in the OS temp dir, never in the repo.
 
 Response: `{ "id": "<job-uuid>" }`. This `id` is the **web job id**, not the run id — the CLI's own
 `ns-<timestamp>-<target>` run id is discovered from its own log line and exposed as `runId` in the
