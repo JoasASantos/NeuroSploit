@@ -595,11 +595,9 @@ $('#findingModal').addEventListener('click', (e) => { if (e.target.id === 'findi
 
 const KILL_CHAIN_STAGES = ['recon', 'initial-access', 'execution', 'privesc', 'lateral', 'exfil', 'impact'];
 
-// Bright, saturated palette for the dark graph canvas — the severity chip
-// colors elsewhere are tuned for text-on-light-background legibility and
-// read as muddy on a dark node graph.
-const CANVAS_SEV_COLOR = { critical: '#ff6b5b', high: '#ffab52', medium: '#f0cf5c', low: '#7fd99a', info: '#8fa3ef' };
-function canvasColor(sev) { return CANVAS_SEV_COLOR[['critical', 'high', 'medium', 'low', 'info'][sevRank(sev)]]; }
+// Same severity tokens the rest of the console uses — the graph canvas
+// follows the light/dark theme instead of a fixed dark palette.
+function canvasColor(sev) { return `var(--sev-${['critical', 'high', 'medium', 'low', 'info'][sevRank(sev)]}-fg)`; }
 
 function nodeIcon(f) {
   const t = `${f.title} ${f.evidence} ${f.cwe} ${f.stage}`.toLowerCase();
@@ -671,20 +669,20 @@ function renderAttackPath(container, findings, target) {
   const nodeSvg = (n) => {
     if (n.root) {
       return `<g>
-        <circle cx="${n.x}" cy="${n.y}" r="15" fill="#c0392b" stroke="#ff6b5b" stroke-width="2"/>
-        <text x="${n.x}" y="${n.y + 4}" text-anchor="middle" font-size="13" fill="#fff">🎯</text>
-        <text x="${n.x}" y="${n.y + 30}" text-anchor="middle" font-size="10.5" fill="#c9c6bf" font-family="var(--mono)">${esc(trimMid(n.label, 26))}</text>
+        <circle cx="${n.x}" cy="${n.y}" r="15" style="fill:var(--accent);stroke:var(--accent-hover);" stroke-width="2"/>
+        <text x="${n.x}" y="${n.y + 4}" text-anchor="middle" font-size="13" style="fill:var(--accent-contrast);">🎯</text>
+        <text x="${n.x}" y="${n.y + 30}" text-anchor="middle" font-size="10.5" style="fill:var(--text-dim);" font-family="var(--mono)">${esc(trimMid(n.label, 26))}</text>
       </g>`;
     }
     const f = n.finding;
     const color = canvasColor(f.severity);
     const x = n.x - NODE_W / 2, y = n.y - NODE_H / 2;
     return `<g class="ap-node-g" data-idx="${esc(findings.indexOf(f))}" style="cursor:pointer;">
-      <rect x="${x}" y="${y}" width="${NODE_W}" height="${NODE_H}" rx="8" fill="#181a20" stroke="${color}" stroke-width="1.6"/>
+      <rect x="${x}" y="${y}" width="${NODE_W}" height="${NODE_H}" rx="8" style="fill:var(--surface);stroke:${color};" stroke-width="1.6"/>
       <text x="${x + 12}" y="${y + 20}" font-size="13">${nodeIcon(f)}</text>
-      <text x="${x + 32}" y="${y + 19}" font-size="11.5" fill="#e8e6e0" font-weight="600">${esc(trimMid(f.title, 22))}</text>
-      <text x="${x + 32}" y="${y + 36}" font-size="10" fill="#8b8880" font-family="var(--mono)">${esc((f.mitre || f.owasp || f.cwe || n.stageLabel || '').slice(0, 26))}</text>
-      <rect x="${x + NODE_W - 9}" y="${y + 6}" width="6" height="6" rx="1.5" fill="${color}"/>
+      <text x="${x + 32}" y="${y + 19}" font-size="11.5" style="fill:var(--text);" font-weight="600">${esc(trimMid(f.title, 22))}</text>
+      <text x="${x + 32}" y="${y + 36}" font-size="10" style="fill:var(--text-faint);" font-family="var(--mono)">${esc((f.mitre || f.owasp || f.cwe || n.stageLabel || '').slice(0, 26))}</text>
+      <rect x="${x + NODE_W - 9}" y="${y + 6}" width="6" height="6" rx="1.5" style="fill:${color};"/>
     </g>`;
   };
 
@@ -692,8 +690,8 @@ function renderAttackPath(container, findings, target) {
     ${!hasStages ? '<div class="field-help" style="margin-bottom:8px;">No kill-chain stage data yet — shown as a flat graph from the target.</div>' : ''}
     <div class="ap-canvas-wrap">
       <svg class="ap-canvas" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">
-        ${groups.map((g, ci) => `<line x1="${PAD + NODE_W / 2 + (ci + 1) * COL_W - COL_W / 2}" y1="0" x2="${PAD + NODE_W / 2 + (ci + 1) * COL_W - COL_W / 2}" y2="${height}" stroke="#26282f" stroke-width="1"/>`).join('')}
-        ${edges.map(([a, b]) => `<path d="${edgePath(a, b)}" fill="none" stroke="#3a3d47" stroke-width="1.5"/>`).join('')}
+        ${groups.map((g, ci) => `<line x1="${PAD + NODE_W / 2 + (ci + 1) * COL_W - COL_W / 2}" y1="0" x2="${PAD + NODE_W / 2 + (ci + 1) * COL_W - COL_W / 2}" y2="${height}" style="stroke:var(--border);" stroke-width="1"/>`).join('')}
+        ${edges.map(([a, b]) => `<path d="${edgePath(a, b)}" fill="none" style="stroke:var(--border-strong);" stroke-width="1.5"/>`).join('')}
         ${nodes.map(nodeSvg).join('')}
       </svg>
     </div>

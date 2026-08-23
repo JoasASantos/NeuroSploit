@@ -311,14 +311,10 @@ textarea { resize: vertical; min-height: 72px; }
 
 /* Generative Attack Path Chaining */
 .attackpath-empty { font-size: 12.5px; color: var(--text-faint); padding: var(--sp-5); text-align: center; border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); }
-/* The graph canvas is intentionally fixed-dark regardless of the app theme —
-   a node/edge map reads better with bright severity colors against a near-
-   black surface, the way NodeZero/attack-graph tools render it, and it stays
-   legible whether the rest of the console is in light or dark mode. */
-.ap-canvas-wrap { border-radius: var(--radius-md); overflow: auto; background: #0f1115; border: 1px solid #24262d; }
+.ap-canvas-wrap { border-radius: var(--radius-md); overflow: auto; background: var(--surface-2); border: 1px solid var(--border); }
 .ap-canvas { display: block; min-width: 100%; }
 .ap-canvas text { font-family: var(--sans); }
-.ap-node-g:hover rect:first-child { filter: brightness(1.35); }
+.ap-node-g:hover rect:first-child { filter: brightness(0.97); }
 
 /* findings table */
 .data-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
