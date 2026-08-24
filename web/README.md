@@ -17,6 +17,11 @@ binary, never a reimplementation of harness logic.
 - **Generative Attack Path Chaining** — findings are grouped into kill-chain columns
   (recon → initial-access → execution → privesc → lateral → exfil → impact) with chained findings
   linked back to their parent, built live as findings stream in.
+- **Real REPL underneath run/whitebox/greybox** — the wizard scripts an actual interactive
+  `neurosploit` session instead of a one-shot CLI call, so it keeps reading stdin while the
+  engagement streams. The Activity log tab grows a `❭` prompt box to send `/status`, `/stop`,
+  `/continue`, or a plain-language instruction mid-run. `host`/`aitest`/`skills` stay one-shot
+  (their onboarding scope picker can't be scripted over piped stdin).
 
 ```bash
 cd neurosploit-rs && cargo build --release   # build the CLI once

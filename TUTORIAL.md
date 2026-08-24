@@ -22,15 +22,16 @@ the autonomous, multi-model penetration-testing harness.
    - [Host / Infra (Linux / Windows / AD)](#54-host--infra-linux--windows--ad)
 6. [The interactive REPL](#6-the-interactive-repl)
 7. [Mission Control TUI](#7-mission-control-tui)
-8. [Credentials (`creds.yaml`)](#8-credentials-credsyaml)
-9. [Steering the tests (focus & instructions)](#9-steering-the-tests)
-10. [Outputs, reports & artifacts](#10-outputs-reports--artifacts)
-11. [Per-project memory & resume](#11-per-project-memory--resume)
-12. [How it decides: POMDP, grounding, chaining](#12-how-it-decides)
-13. [The agent library](#13-the-agent-library)
-14. [Playwright MCP & extra tools](#14-playwright-mcp--extra-tools)
-15. [Tips, tuning & troubleshooting](#15-tips-tuning--troubleshooting)
-16. [Command & flag reference](#16-command--flag-reference)
+8. [Web console](#8-web-console)
+9. [Credentials (`creds.yaml`)](#9-credentials-credsyaml)
+10. [Steering the tests (focus & instructions)](#10-steering-the-tests)
+11. [Outputs, reports & artifacts](#11-outputs-reports--artifacts)
+12. [Per-project memory & resume](#12-per-project-memory--resume)
+13. [How it decides: POMDP, grounding, chaining](#13-how-it-decides)
+14. [The agent library](#14-the-agent-library)
+15. [Playwright MCP & extra tools](#15-playwright-mcp--extra-tools)
+16. [Tips, tuning & troubleshooting](#16-tips-tuning--troubleshooting)
+17. [Command & flag reference](#17-command--flag-reference)
 
 ---
 
@@ -429,14 +430,64 @@ neurosploit tui http://testphp.vulnweb.com/ --subscription --model anthropic:cla
 
 ---
 
-## 8. Credentials (`creds.yaml`)
+## 8. Web console
+
+A browser UI for the same harness — one `node` process serves the SPA and drives the compiled
+`neurosploit` binary; nothing about the harness logic is reimplemented in the browser.
+
+```bash
+cd neurosploit-rs && cargo build --release   # once
+node web/server.js                            # → http://localhost:4173
+```
+
+Zero npm dependencies (Node ≥18 built-ins only). Override the port with
+`NEUROSPLOIT_WEB_PORT` (or `PORT`).
+
+**The 5-step wizard:**
+
+1. **Asset** — pick black/white/grey-box, host/infra, or AI/LLM, then the target URL or repo
+   path.
+2. **Scope & Auth** — objective, focus, out-of-scope, and a link into the **Auth & Keys** menu
+   (target auth header, named roles for IDOR/BOLA/BFLA, per-provider API keys — kept in the
+   server process's memory only, never written to disk).
+3. **Leads** — the 435-agent board, auto-categorized (Business Logic, Broken Access Control,
+   Injection, LLM Application, Auth & Session, SSRF & Network, Cloud & Infra, …). Toggle a
+   single lead, a whole category, or **Select all / Clear all** (respects the active search
+   filter). Leave everything off to let the harness's own recon-driven selection choose. **+
+   Custom lead** calls the `claude` CLI to generate a real specialist-agent markdown file into
+   `agents_md/vulns/`, pinnable immediately.
+4. **Model & Run** — provider/model picker from the live catalog, API-key vs. subscription
+   toggle, votes / chain-depth / recon intensity.
+5. **Review** — confirm the plan, then **Start Exploitation**.
+
+**What actually runs `run` / `whitebox` / `greybox`:** the wizard's config is turned into a
+scripted **interactive REPL session** (`/target` or `/repo`, `/model`, `/sub`, `/mcp`, `/votes`,
+`/chain`, `/recon`, `/focus`, `/objective`, `/scope-out`, `/creds`, `/only <agents>`, `/run`) —
+the same session described in [§6](#6-the-interactive-repl) — instead of a one-shot CLI
+invocation, because that's the only harness path that keeps reading stdin **while** the
+engagement streams. That's why the live-run view's **Activity log** tab grows a `❭` prompt box:
+type `/status`, `/stop`, `/continue`, or a plain-language instruction and it goes straight into
+the running session. `host` / `aitest` / `skills` engagements stay one-shot (their onboarding
+scope picker is an interactive arrow-key menu that silently skips itself over piped stdin).
+
+**Live run view** — phase/progress over SSE, a findings table, and **Generative Attack Path
+Chaining**: a node/edge graph (root = target, one node per confirmed finding, positioned by
+kill-chain stage, edges from `chains_from`) — click any node or row for the full finding detail,
+including any PoC script written to `pocs/`. A page refresh reattaches to the same live stream
+instead of resetting to the wizard.
+
+Full API reference: [`web/API.md`](web/API.md) · quick start: [`web/README.md`](web/README.md).
+
+---
+
+## 9. Credentials (`creds.yaml`)
 
 One file covers web auth, **multiple roles** (for access-control testing), SSH,
 Windows/AD and **cloud** (AWS/GCP/Azure). Mix only the blocks you need. It's a
 small YAML subset — flat `key: value` plus one-level nested blocks (2-space indent),
 `#` comments, values optionally quoted.
 
-### 8.1 Web auth (single identity)
+### 9.1 Web auth (single identity)
 
 ```yaml
 # --- pick one ---
@@ -459,7 +510,7 @@ login:
 - A `login:` block is **executed** (real HTTP) to capture a live session
   cookie/token; if it fails, agents are told to authenticate themselves.
 
-### 8.2 Multiple identities — access-control testing (IDOR / BOLA / BFLA / privesc)
+### 9.2 Multiple identities — access-control testing (IDOR / BOLA / BFLA / privesc)
 
 Define two or more **named roles**. With ≥2 roles the harness authenticates as
 each and tests **cross-role** access (a low-priv role reaching another user's
@@ -484,7 +535,7 @@ Per role you may use: `jwt` · `header` (raw) · `cookie` · `apikey` · or
 `login` + `username` + `password`. The first role also becomes the default
 session for normal (non-access-control) tests.
 
-### 8.3 Linux host (SSH) & Windows/AD
+### 9.3 Linux host (SSH) & Windows/AD
 
 ```yaml
 ssh:
@@ -505,7 +556,7 @@ windows:
 `ssh:` / `windows:` tell **host-mode** agents how to authenticate (Linux enum /
 privesc, Windows/AD via crackmapexec/impacket/evil-winrm/bloodhound).
 
-### 8.4 Cloud (AWS / GCP / Azure)
+### 9.4 Cloud (AWS / GCP / Azure)
 
 Exports the right env vars so the `aws` / `gcloud` / `az` CLIs authenticate
 automatically (read-only-first, non-destructive):
@@ -529,7 +580,7 @@ azure:                             # service principal (best for automation)
   subscription_id: ...
 ```
 
-### 8.5 Using it
+### 9.5 Using it
 
 ```bash
 neurosploit run https://app.example --creds creds.yaml \
@@ -542,7 +593,7 @@ written elsewhere (inline GCP JSON is copied to a temp file only for the SDK).
 
 ---
 
-## 9. Steering the tests
+## 10. Steering the tests
 
 Tell the harness what to prioritise — it biases both agent **selection** and
 **execution**:
@@ -556,7 +607,7 @@ stack trace with `@file`, `@folder`, or `@file:10-40`.
 
 ---
 
-## 10. Outputs, reports & artifacts
+## 11. Outputs, reports & artifacts
 
 Every run writes a self-contained folder `runs/ns-<ts>-<target>/`:
 
@@ -573,7 +624,7 @@ The CLI prints a severity summary, an ASCII kill-chain, and the token/cost total
 
 ---
 
-## 11. Per-project memory & resume
+## 12. Per-project memory & resume
 
 When you launch the REPL in a project directory, NeuroSploit creates
 `<cwd>/.neurosploit/`:
@@ -593,7 +644,7 @@ No database needed — it's structured state.
 
 ---
 
-## 12. How it decides
+## 13. How it decides
 
 NeuroSploit treats the target as **partially observable** (a POMDP):
 
@@ -616,7 +667,7 @@ built from SAST/dataflow), so uncertainty becomes *path reachability*, not state
 
 ---
 
-## 13. The agent library
+## 14. The agent library
 
 `agents_md/` holds **430** markdown agents in categories:
 
@@ -636,7 +687,7 @@ the matching folder — it's picked up automatically.
 
 ---
 
-## 14. Playwright MCP & extra tools
+## 15. Playwright MCP & extra tools
 
 `--mcp` (subscription path) drives a real **Playwright** browser for JS-heavy pages
 and to *prove* client-side issues (XSS firing, DOM, screenshots). It's
@@ -646,7 +697,7 @@ back to `curl`. You can add more MCP servers by placing a `mcp.servers.json`
 
 ---
 
-## 15. Tips, tuning & troubleshooting
+## 16. Tips, tuning & troubleshooting
 
 - **No findings on a live target?** It may be unreachable from your network, or the
   app is genuinely static — the harness refuses to fabricate. Check `recon.md`.
@@ -662,7 +713,7 @@ back to `curl`. You can add more MCP servers by placing a `mcp.servers.json`
 
 ---
 
-## 16. Command & flag reference
+## 17. Command & flag reference
 
 ```
 neurosploit                       # interactive REPL (resumes per project)
