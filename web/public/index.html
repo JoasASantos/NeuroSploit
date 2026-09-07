@@ -22,6 +22,12 @@
     </div>
 
     <button class="sb-new" id="btnNewEngagement">+ New engagement</button>
+    <button class="sb-link" id="btnDashboard">▤ Dashboard</button>
+
+    <div class="sb-search">
+      <span class="search-icon" aria-hidden="true">⌕</span>
+      <input id="runFilter" type="text" autocomplete="off" placeholder="Filter runs" aria-label="Filter runs" />
+    </div>
 
     <div class="sb-groups" id="sbGroups"><!-- populated by app.js --></div>
 
@@ -36,6 +42,27 @@
 
   <!-- ============ MAIN ============ -->
   <main class="main">
+
+    <!-- ============ DASHBOARD ============ -->
+    <section class="dashboard" id="dashView" hidden>
+      <header class="topbar">
+        <div>
+          <div class="topbar-title">Dashboard</div>
+          <div class="topbar-sub">Coverage, findings and FAIR loss exposure across every run</div>
+        </div>
+        <div class="topbar-spacer"></div>
+        <select id="dashRange" class="dash-range" title="Time range">
+          <option value="0">all time</option>
+          <option value="7">last 7 days</option>
+          <option value="30">last 30 days</option>
+          <option value="90">last 90 days</option>
+        </select>
+        <button class="btn" id="btnDashRefresh">Refresh</button>
+      </header>
+      <div class="dash-body" id="dashBody">
+        <div class="empty-state">Loading…</div>
+      </div>
+    </section>
 
     <!-- ============ WIZARD (new engagement) ============ -->
     <section class="wizard" id="wizardView">

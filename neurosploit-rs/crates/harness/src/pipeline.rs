@@ -49,10 +49,65 @@ fn operator_directives(cfg: &RunConfig) -> String {
     if let Some(auth) = cfg.auth.as_deref().filter(|x| !x.trim().is_empty()) {
         s.push_str(&format!("AUTHENTICATION — test as an authenticated user; send this with each request: {auth}\n"));
     }
+    let recalled = memory_directives(cfg);
+    if !recalled.is_empty() {
+        s.push_str(&recalled);
+    }
     if !s.is_empty() {
         s.push('\n');
     }
     s
+}
+
+/// Where this project's durable state lives. The app already points
+/// `vault_dir` at `<cwd>/.neurosploit/vault`, so its parent is the project
+/// store; a caller that set neither falls back to the run's own workdir, which
+/// keeps a one-off run from writing into an unrelated directory.
+pub(crate) fn proj_store(cfg: &RunConfig) -> PathBuf {
+    if let Some(v) = cfg.vault_dir.as_deref() {
+        if let Some(parent) = Path::new(v).parent() {
+            return parent.to_path_buf();
+        }
+    }
+    cfg.workdir
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(".neurosploit"))
+}
+
+/// The run id used as provenance in the graph and memory: the workdir basename
+/// (`ns-<ts>-<target>`), which is also what the report and the web console use.
+pub(crate) fn run_id(cfg: &RunConfig) -> String {
+    cfg.workdir
+        .as_deref()
+        .and_then(|d| Path::new(d).file_name())
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+/// Prior knowledge about this target, injected into recon/exploit prompts.
+///
+/// An engagement is usually not the first look at a host, but every model call
+/// starts blank — without this the harness re-derives the same stack, the same
+/// endpoints and the same dead ends on every run. Recall is scored and capped
+/// (see [`crate::memory`]) so the block stays a handful of lines, and it is
+/// explicitly framed as leads to verify: prior belief must not become an
+/// assertion the model is willing to report.
+fn memory_directives(cfg: &RunConfig) -> String {
+    let dir = proj_store(cfg).join("memory");
+    let q = crate::memory::Query {
+        text: format!(
+            "{} {} {}",
+            cfg.target,
+            cfg.objective.clone().unwrap_or_default(),
+            cfg.instructions.clone().unwrap_or_default()
+        ),
+        target: cfg.target.clone(),
+        limit: 6,
+        ..Default::default()
+    };
+    let Ok(mut mem) = crate::memory::shared(&dir).lock() else { return String::new() };
+    mem.prompt_block(&q)
 }
 
 /// Tool-usage doctrine prepended to recon/exploit prompts so the agent knows
@@ -485,6 +540,12 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
         let selected: Vec<Agent> = ranked.into_iter().take(cap).collect();
         let _ = tx.send(format!("selected {} specialist agents (RL-ranked)", selected.len())).await;
         let _ = tx.send("offline: no exploitation performed (provide API keys or --subscription to run live)".into()).await;
+        // Recon still learned something about the target even with no
+        // exploitation, and that is exactly the kind of knowledge the next run
+        // should not have to re-derive.
+        for n in absorb(&cfg, &recon, &[]) {
+            let _ = tx.send(n).await;
+        }
         let artifacts = persist(&cfg, &recon, "", &[]);
         return RunOutput { target: cfg.target.clone(), workdir: cfg.workdir.clone().unwrap_or_default(), findings: vec![], agents_ran: selected.iter().map(|a| a.name.clone()).collect(), candidates: 0, recon, artifacts };
     }
@@ -1394,6 +1455,13 @@ async fn finish(cfg: RunConfig, _lib: &Library, recon: String, transcript: Strin
         let _ = tx.send("RL rewards updated".into()).await;
     }
 
+    // Durable knowledge. Everything above this point is about *this* run; these
+    // two stores are what makes the next one start from further along.
+    let notes = absorb(&cfg, &recon, &findings);
+    for n in notes {
+        let _ = tx.send(n).await;
+    }
+
     let artifacts = persist(&cfg, &recon, &transcript, &findings);
     if !artifacts.is_empty() {
         let _ = tx.send(format!("notify: evidence saved → {}", cfg.workdir.clone().unwrap_or_default())).await;
@@ -1417,6 +1485,102 @@ async fn finish(cfg: RunConfig, _lib: &Library, recon: String, transcript: Strin
         recon,
         artifacts,
     }
+}
+
+/// Fold a finished run into the attack knowledge graph and the layered memory.
+///
+/// Returns the lines to report to the operator. It is deliberately synchronous
+/// and returns its messages instead of sending them: the memory store is behind
+/// a `std::sync::Mutex`, and holding that guard across an `.await` would make
+/// the pipeline future non-`Send`.
+fn absorb(cfg: &RunConfig, recon: &str, findings: &[Finding]) -> Vec<String> {
+    let mut out = Vec::new();
+    let rid = run_id(cfg);
+    let store = proj_store(cfg);
+
+    // Graph: the project-wide one accumulates across runs, and each run keeps
+    // its own copy so the report and the web console can draw just this run.
+    let proj_graph = store.join("graph.json");
+    let mut kg = crate::knowledge_graph::KnowledgeGraph::load(&proj_graph);
+    kg.ingest(&cfg.target, &rid, findings);
+    kg.save(&proj_graph);
+    if let Some(dir) = cfg.workdir.as_deref() {
+        let mut run_kg = crate::knowledge_graph::KnowledgeGraph::new();
+        run_kg.ingest(&cfg.target, &rid, findings);
+        run_kg.save(Path::new(dir).join("graph.json"));
+    }
+    let paths = kg.paths(1);
+    let depth = paths.first().map(|(p, _)| p.len()).unwrap_or(0);
+    out.push(format!(
+        "knowledge graph: {} node(s), {} edge(s), longest attack path {} step(s) → graph.json",
+        kg.nodes.len(),
+        kg.edges.len(),
+        depth
+    ));
+
+    // Memory: what was proven is engagement knowledge immediately (a validated
+    // finding is evidence, not a guess); everything else has to earn promotion.
+    let key = crate::memory::engagement_key(&cfg.target);
+    let Ok(mut mem) = crate::memory::shared(store.join("memory")).lock() else { return out };
+
+    for f in findings {
+        let where_ = if f.endpoint.is_empty() { cfg.target.as_str() } else { f.endpoint.as_str() };
+        let text = format!("{} — {} on {} [{} · {}]", f.title, f.severity, where_, f.cwe, f.stage);
+        let mut tags: Vec<String> = vec![format!("agent:{}", f.agent)];
+        if !f.cwe.is_empty() {
+            tags.push(format!("cwe:{}", f.cwe));
+        }
+        if !f.mitre.is_empty() {
+            tags.push(format!("technique:{}", f.mitre));
+        }
+        if !f.stage.is_empty() {
+            tags.push(f.stage.clone());
+        }
+        let refs: Vec<&str> = tags.iter().map(|s| s.as_str()).collect();
+        mem.remember(
+            crate::memory::Tier::Engagement,
+            &key,
+            &text,
+            &refs,
+            &cfg.target,
+            &rid,
+            f.confidence.clamp(0.4, 0.95),
+        );
+    }
+
+    // Recon facts go to working memory: one sighting of an endpoint is a lead,
+    // and only a repeat earns a place in the engagement's knowledge.
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(recon) {
+        for k in ["endpoints", "apis", "hosts", "subdomains"] {
+            if let Some(arr) = v.get(k).and_then(|x| x.as_array()) {
+                for item in arr.iter().take(25) {
+                    let s = item.as_str().map(|s| s.to_string()).unwrap_or_else(|| item.to_string());
+                    let s = s.trim_matches('"').trim();
+                    if s.len() > 2 {
+                        mem.note(&cfg.target, &rid, &format!("{k}: {s}"), &["recon", k]);
+                    }
+                }
+            }
+        }
+        if let Some(tech) = v.get("tech").and_then(|x| x.as_array()) {
+            let list: Vec<String> = tech.iter().filter_map(|t| t.as_str().map(|s| s.to_string())).collect();
+            if !list.is_empty() {
+                mem.note(&cfg.target, &rid, &format!("stack: {}", list.join(", ")), &["recon", "tech"]);
+            }
+        }
+    }
+
+    // Recall only earns credit when the run it informed actually found something.
+    if !findings.is_empty() {
+        mem.credit_recalled();
+    }
+    mem.decay(0.98);
+    let (e, t, r) = mem.consolidate(&cfg.target, &rid);
+    let (w, eng, tech, reuse) = mem.counts();
+    out.push(format!(
+        "memory: +{e} engagement, +{t} technique, +{r} reusable (now {w}/{eng}/{tech}/{reuse}) → memory/"
+    ));
+    out
 }
 
 /// Write recon/exploit/findings/report as json+md for downstream reuse.

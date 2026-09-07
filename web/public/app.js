@@ -534,6 +534,7 @@ function attachLiveJob(id, target, name, pinnedAgents) {
 
   show($('#wizardView'), false);
   show($('#detailView'), false);
+  show($('#dashView'), false);
   show($('#liveView'), true);
   $('#liveTarget').textContent = name || target || '—';
   $('#liveTargetSub').textContent = name ? target : '';
@@ -772,9 +773,9 @@ function leaveLiveJob() {
   state.currentJob = null;
   termSyncTargets();
 }
-$('#btnBackToBoard').addEventListener('click', () => { leaveLiveJob(); show($('#liveView'), false); show($('#wizardView'), true); });
-$('#btnDetailBack').addEventListener('click', () => { clearInterval(state.detailPoll); show($('#detailView'), false); show($('#wizardView'), true); });
-$('#btnNewEngagement').addEventListener('click', () => { leaveLiveJob(); clearInterval(state.detailPoll); show($('#detailView'), false); show($('#liveView'), false); show($('#wizardView'), true); });
+$('#btnBackToBoard').addEventListener('click', () => { leaveLiveJob(); show($('#liveView'), false); show($('#dashView'), false); show($('#wizardView'), true); });
+$('#btnDetailBack').addEventListener('click', () => { clearInterval(state.detailPoll); show($('#detailView'), false); show($('#dashView'), false); show($('#wizardView'), true); });
+$('#btnNewEngagement').addEventListener('click', () => { leaveLiveJob(); clearInterval(state.detailPoll); show($('#detailView'), false); show($('#liveView'), false); show($('#dashView'), false); show($('#wizardView'), true); });
 
 // ---------------------------------------------------------------------------
 // Generative Attack Path Chaining
@@ -860,7 +861,39 @@ function openFindingModal(f, pocs, runId) {
 $('#btnCloseFinding').addEventListener('click', () => show($('#findingModal'), false));
 $('#findingModal').addEventListener('click', (e) => { if (e.target.id === 'findingModal') show($('#findingModal'), false); });
 
-const KILL_CHAIN_STAGES = ['recon', 'initial-access', 'execution', 'privesc', 'lateral', 'exfil', 'impact'];
+// ---------------------------------------------------------------------------
+// Generative Attack Path Chaining
+//
+// The graph answers one question: how does an attacker get from the target to
+// impact? Three things it must not do, each of which the first version did:
+//
+//  1. **Drop findings.** Stages were matched against a hardcoded list of seven,
+//     so anything the harness emitted outside it (`credential-access`,
+//     `discovery`, `persistence`, …) silently vanished — 5 of 27 findings on a
+//     real run. The stage list now mirrors `knowledge_graph::STAGES`, and any
+//     unknown stage still gets its own column rather than being discarded.
+//  2. **Blur into unreadable boxes.** Titles were cut at 22 characters, so a
+//     column read "SQL Injection Authent…" six times. Nodes now wrap onto two
+//     lines and carry CWE / technique / exploitability.
+//  3. **Present a guess as evidence.** Agents only sometimes fill `chains_from`.
+//     Without it every node fanned off the root, which looks like a chain and
+//     is not one. Inferred progression edges are drawn dashed, counted
+//     separately in the toolbar, and can be hidden.
+//
+// When a run wrote `graph.json` (the harness's own knowledge graph), its edges
+// are used verbatim — including which ones it inferred. Older runs fall back to
+// deriving the same shape client-side, so the view degrades rather than empties.
+// ---------------------------------------------------------------------------
+
+// Mirrors knowledge_graph::STAGES on the Rust side. Order = attack progression.
+const KILL_CHAIN_STAGES = [
+  'recon', 'discovery', 'initial-access', 'execution', 'persistence',
+  'privesc', 'credential-access', 'lateral', 'collection', 'exfil', 'impact',
+];
+const stageRank = (s) => {
+  const i = KILL_CHAIN_STAGES.indexOf(s);
+  return i === -1 ? KILL_CHAIN_STAGES.length : i;
+};
 
 // Same severity tokens the rest of the console uses — the graph canvas
 // follows the light/dark theme instead of a fixed dark palette.
@@ -877,101 +910,350 @@ function nodeIcon(f) {
   return '⚠';
 }
 
-// Generative Attack Path Chaining — a real node graph (root = target, one
-// node per confirmed finding, edges from chains_from when the harness set
-// it, else fanned from root) instead of flat cards, so a single finding
-// still reads as a graph and not an empty list.
-function renderAttackPath(container, findings, target) {
-  if (!findings.length) {
+/// Greedy wrap into at most `lines` lines of `max` chars, ellipsizing the tail.
+function wrapLabel(s, max, lines) {
+  const words = String(s || '').split(/\s+/).filter(Boolean);
+  const out = [];
+  let cur = '';
+  for (const w of words) {
+    const next = cur ? `${cur} ${w}` : w;
+    if (next.length <= max) { cur = next; continue; }
+    if (out.length === lines - 1) { cur = `${next.slice(0, max - 1)}…`; break; }
+    out.push(cur || w.slice(0, max));
+    cur = cur ? w : '';
+  }
+  if (cur) out.push(cur);
+  return out.slice(0, lines);
+}
+
+/// Chain edges between findings, and where they came from.
+/// Returns `{ edges: [{from, to, inferred}], source }` with indices into
+/// `findings`, so the caller can tell the operator what it is looking at.
+function chainEdges(findings, graph) {
+  const byId = new Map(findings.map((f, i) => [f.id, i]));
+
+  // 1. The harness's own graph, when the run wrote one.
+  if (graph?.edges?.length) {
+    const nodeToFinding = new Map();
+    for (const [id, n] of Object.entries(graph.nodes || {})) {
+      const fid = n.meta?.finding_id;
+      if (n.kind === 'finding' && fid !== undefined && byId.has(fid)) nodeToFinding.set(id, byId.get(fid));
+    }
+    const edges = [];
+    for (const e of graph.edges) {
+      if (e.kind !== 'chains') continue;
+      const a = nodeToFinding.get(e.from), b = nodeToFinding.get(e.to);
+      if (a !== undefined && b !== undefined && a !== b) edges.push({ from: a, to: b, inferred: !!e.inferred });
+    }
+    if (edges.length) return { edges, source: edges.every((e) => e.inferred) ? 'graph-inferred' : 'graph' };
+  }
+
+  // 2. Edges the agents asserted on the findings themselves.
+  const asserted = [];
+  findings.forEach((f, i) => {
+    for (const src of f.chains_from || []) {
+      const a = byId.get(src);
+      if (a !== undefined && a !== i) asserted.push({ from: a, to: i, inferred: false });
+    }
+  });
+  if (asserted.length) return { edges: asserted, source: 'asserted' };
+
+  // 3. Derive progression the same way the harness does: forward only, between
+  // adjacent populated stages, from the strongest finding of the earlier one.
+  // A full cross-product would look richer and mean nothing.
+  const byStage = new Map();
+  findings.forEach((f, i) => {
+    const r = stageRank(f.stage || '');
+    if (!byStage.has(r)) byStage.set(r, []);
+    byStage.get(r).push(i);
+  });
+  const ranks = [...byStage.keys()].sort((a, b) => a - b);
+  const weight = (i) => (4 - sevRank(findings[i].severity)) * (findings[i].confidence || 0.5);
+  const edges = [];
+  for (let k = 0; k + 1 < ranks.length; k++) {
+    const from = byStage.get(ranks[k]).slice().sort((a, b) => weight(b) - weight(a))[0];
+    for (const to of byStage.get(ranks[k + 1])) edges.push({ from, to, inferred: true });
+  }
+  return { edges, source: edges.length ? 'derived' : 'none' };
+}
+
+const AP_SEV_FILTERS = ['all', 'critical', 'high', 'medium', 'low'];
+
+function renderAttackPath(container, allFindings, target, graph) {
+  const view = (container.__ap = container.__ap || { k: 1, tx: 0, ty: 0, sev: 'all', hideInferred: false, fitted: false });
+
+  if (!allFindings.length) {
     container.innerHTML = '<div class="attackpath-empty">The attack path builds automatically as findings chain together — nothing confirmed yet.</div>';
     return;
   }
-  const byId = new Map(findings.filter((f) => f.id).map((f) => [f.id, f]));
-  const hasStages = findings.some((f) => f.stage);
-  let groups;
-  if (hasStages) {
-    groups = KILL_CHAIN_STAGES
-      .map((stage) => ({ label: stage.replace('-', ' '), items: findings.filter((f) => (f.stage || '') === stage) }))
-      .filter((g) => g.items.length);
-    const other = findings.filter((f) => !f.stage);
-    if (other.length) groups.push({ label: 'unstaged', items: other });
-  } else {
-    groups = [{ label: 'confirmed findings', items: findings }];
+
+  const minRank = view.sev === 'all' ? 99 : sevRank(view.sev);
+  const findings = view.sev === 'all' ? allFindings : allFindings.filter((f) => sevRank(f.severity) <= minRank);
+  if (!findings.length) {
+    container.innerHTML = `<div class="attackpath-empty">No ${esc(view.sev)}-or-higher finding to chain. <button class="btn btn-sm" data-ap-reset>Show all severities</button></div>`;
+    container.querySelector('[data-ap-reset]')?.addEventListener('click', () => { view.sev = 'all'; renderAttackPath(container, allFindings, target, graph); });
+    return;
   }
 
-  // Layout: root at column 0; each kill-chain stage is its own column.
-  const COL_W = 210, ROW_H = 78, NODE_W = 176, NODE_H = 54, PAD = 40;
-  const rootX = PAD, rootY = PAD + (Math.max(...groups.map((g) => g.items.length)) * ROW_H) / 2;
-  const nodes = [{ id: '__root', x: rootX, y: rootY, root: true, label: target || 'target' }];
-  const nodeById = new Map(); // finding.id -> node (for chains_from edges)
-  groups.forEach((g, ci) => {
-    const colX = PAD + NODE_W / 2 + (ci + 1) * COL_W;
-    const colH = g.items.length * ROW_H;
-    const offsetY = rootY - colH / 2 + ROW_H / 2;
-    g.items.forEach((f, ri) => {
-      const node = { id: f.id || `${ci}-${ri}`, x: colX, y: offsetY + ri * ROW_H, finding: f, stageLabel: g.label };
-      nodes.push(node);
-      if (f.id) nodeById.set(f.id, node);
-    });
+  const model = chainEdges(findings, graph);
+  const edges = view.hideInferred ? model.edges.filter((e) => !e.inferred) : model.edges;
+
+  // ---- columns: one per stage actually present, in progression order --------
+  const groups = new Map();
+  findings.forEach((f, i) => {
+    const key = (f.stage || '').trim() || 'unstaged';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(i);
   });
-
-  const edges = [];
-  for (const n of nodes) {
-    if (n.root) continue;
-    const parents = (n.finding.chains_from || []).map((cid) => nodeById.get(cid)).filter(Boolean);
-    if (parents.length) parents.forEach((p) => edges.push([p, n]));
-    else edges.push([nodes[0], n]);
+  const cols = [...groups.entries()].sort((a, b) => {
+    const ra = a[0] === 'unstaged' ? 999 : stageRank(a[0]);
+    const rb = b[0] === 'unstaged' ? 999 : stageRank(b[0]);
+    return ra - rb || a[0].localeCompare(b[0]);
+  });
+  for (const [, idxs] of cols) {
+    idxs.sort((a, b) => sevRank(findings[a].severity) - sevRank(findings[b].severity) || (findings[b].confidence || 0) - (findings[a].confidence || 0));
   }
 
-  const width = PAD * 2 + NODE_W + (groups.length) * COL_W;
-  const height = Math.max(...nodes.map((n) => n.y)) + NODE_H + PAD;
+  const NODE_W = 236, NODE_H = 66, COL_GAP = 88, ROW_GAP = 14, PAD = 28, HEAD_H = 34, ROOT_W = 132;
+  const rowH = NODE_H + ROW_GAP;
+  const tallest = Math.max(...cols.map(([, v]) => v.length));
+  const bodyH = tallest * rowH;
+  const pos = new Map(); // finding index -> {x, y}
+  cols.forEach(([, idxs], ci) => {
+    const x = PAD + ROOT_W + ci * (NODE_W + COL_GAP);
+    const colH = idxs.length * rowH;
+    const top = PAD + HEAD_H + (bodyH - colH) / 2;
+    idxs.forEach((fi, ri) => pos.set(fi, { x, y: top + ri * rowH }));
+  });
+  const width = PAD * 2 + ROOT_W + cols.length * NODE_W + Math.max(0, cols.length - 1) * COL_GAP;
+  const height = PAD * 2 + HEAD_H + bodyH;
+  const rootY = PAD + HEAD_H + bodyH / 2;
 
-  const edgePath = (a, b) => {
-    const x1 = a.root ? a.x + 14 : a.x + NODE_W / 2, y1 = a.y;
-    const x2 = b.x - NODE_W / 2, y2 = b.y;
-    const midX = (x1 + x2) / 2;
-    return `M ${x1},${y1} C ${midX},${y1} ${midX},${y2} ${x2},${y2}`;
+  const hasParent = new Set(edges.map((e) => e.to));
+  const roots = findings.map((_, i) => i).filter((i) => !hasParent.has(i));
+
+  const curve = (x1, y1, x2, y2) => {
+    const mid = (x1 + x2) / 2;
+    return `M ${x1},${y1} C ${mid},${y1} ${mid},${y2} ${x2},${y2}`;
   };
 
-  const nodeSvg = (n) => {
-    if (n.root) {
-      return `<g>
-        <circle cx="${n.x}" cy="${n.y}" r="15" style="fill:var(--accent);stroke:var(--accent-hover);" stroke-width="2"/>
-        <text x="${n.x}" y="${n.y + 4}" text-anchor="middle" font-size="13" style="fill:var(--accent-contrast);">🎯</text>
-        <text x="${n.x}" y="${n.y + 30}" text-anchor="middle" font-size="10.5" style="fill:var(--text-dim);" font-family="var(--mono)">${esc(trimMid(n.label, 26))}</text>
-      </g>`;
-    }
-    const f = n.finding;
+  const edgeSvg = edges.map((e, i) => {
+    const a = pos.get(e.from), b = pos.get(e.to);
+    if (!a || !b) return '';
+    return `<path class="ap-edge${e.inferred ? ' inferred' : ''}" data-e="${i}" data-from="${e.from}" data-to="${e.to}"
+      d="${curve(a.x + NODE_W, a.y + NODE_H / 2, b.x, b.y + NODE_H / 2)}" fill="none" marker-end="url(#apArrow)" />`;
+  }).join('');
+
+  const rootEdges = roots.map((i) => {
+    const b = pos.get(i);
+    return `<path class="ap-edge root-edge" data-root-to="${i}" d="${curve(PAD + ROOT_W - 18, rootY, b.x, b.y + NODE_H / 2)}" fill="none" />`;
+  }).join('');
+
+  const nodeSvg = findings.map((f, i) => {
+    const p = pos.get(i);
+    if (!p) return '';
     const color = canvasColor(f.severity);
-    const x = n.x - NODE_W / 2, y = n.y - NODE_H / 2;
-    return `<g class="ap-node-g" data-idx="${esc(findings.indexOf(f))}" style="cursor:pointer;">
-      <rect x="${x}" y="${y}" width="${NODE_W}" height="${NODE_H}" rx="8" style="fill:var(--surface);stroke:${color};" stroke-width="1.6"/>
-      <text x="${x + 12}" y="${y + 20}" font-size="13">${nodeIcon(f)}</text>
-      <text x="${x + 32}" y="${y + 19}" font-size="11.5" style="fill:var(--text);" font-weight="600">${esc(trimMid(f.title, 22))}</text>
-      <text x="${x + 32}" y="${y + 36}" font-size="10" style="fill:var(--text-faint);" font-family="var(--mono)">${esc((f.mitre || f.owasp || f.cwe || n.stageLabel || '').slice(0, 26))}</text>
-      <rect x="${x + NODE_W - 9}" y="${y + 6}" width="6" height="6" rx="1.5" style="fill:${color};"/>
+    const title = wrapLabel(f.title, 30, 2);
+    const meta = [f.cwe, f.mitre || f.owasp, f.exploitability].filter(Boolean).join(' · ');
+    return `<g class="ap-node-g" data-idx="${i}" tabindex="0" role="button" aria-label="${esc(f.severity)}: ${esc(f.title)}">
+      <rect class="ap-node" x="${p.x}" y="${p.y}" width="${NODE_W}" height="${NODE_H}" rx="9" style="stroke:${color};" />
+      <rect class="ap-sevbar" x="${p.x}" y="${p.y}" width="4" height="${NODE_H}" rx="2" style="fill:${color};" />
+      <text class="ap-icon" x="${p.x + 14}" y="${p.y + 22}">${nodeIcon(f)}</text>
+      ${title.map((line, li) => `<text class="ap-title" x="${p.x + 34}" y="${p.y + 21 + li * 14}">${esc(line)}</text>`).join('')}
+      <text class="ap-meta" x="${p.x + 34}" y="${p.y + NODE_H - 12}">${esc(meta || f.agent)}</text>
+      <text class="ap-conf" x="${p.x + NODE_W - 10}" y="${p.y + NODE_H - 12}" text-anchor="end">${f.confidence ? f.confidence.toFixed(2) : ''}</text>
     </g>`;
-  };
+  }).join('');
+
+  // Column headers name the stage and count it — unlabelled separator lines
+  // made the columns unreadable, which defeats a kill-chain layout entirely.
+  const headSvg = cols.map(([stage, idxs], ci) => {
+    const x = PAD + ROOT_W + ci * (NODE_W + COL_GAP);
+    return `<g class="ap-col">
+      <line class="ap-col-line" x1="${x - COL_GAP / 2}" y1="${PAD}" x2="${x - COL_GAP / 2}" y2="${height - PAD}" />
+      <text class="ap-col-name" x="${x}" y="${PAD + 14}">${esc(stage.replace(/-/g, ' '))}</text>
+      <text class="ap-col-count" x="${x + NODE_W}" y="${PAD + 14}" text-anchor="end">${idxs.length}</text>
+    </g>`;
+  }).join('');
+
+  const inferredCount = model.edges.filter((e) => e.inferred).length;
+  const provenance = {
+    graph: 'chain edges from this run\'s knowledge graph',
+    'graph-inferred': 'no chain was asserted — progression inferred by the harness',
+    asserted: 'chain edges asserted by the agents',
+    derived: 'no chain was asserted — progression inferred from kill-chain stages',
+    none: 'no chain links',
+  }[model.source];
 
   container.innerHTML = `
-    ${!hasStages ? '<div class="field-help" style="margin-bottom:8px;">No kill-chain stage data yet — shown as a flat graph from the target.</div>' : ''}
-    <div class="ap-canvas-wrap">
-      <svg class="ap-canvas" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">
-        ${groups.map((g, ci) => `<line x1="${PAD + NODE_W / 2 + (ci + 1) * COL_W - COL_W / 2}" y1="0" x2="${PAD + NODE_W / 2 + (ci + 1) * COL_W - COL_W / 2}" y2="${height}" style="stroke:var(--border);" stroke-width="1"/>`).join('')}
-        ${edges.map(([a, b]) => `<path d="${edgePath(a, b)}" fill="none" style="stroke:var(--border-strong);" stroke-width="1.5"/>`).join('')}
-        ${nodes.map(nodeSvg).join('')}
-      </svg>
+    <div class="ap-toolbar">
+      <div class="ap-stats">
+        <b>${findings.length}</b> finding(s) · <b>${cols.length}</b> stage(s) · <b>${edges.length}</b> link(s)${inferredCount ? ` <span class="ap-inferred-note">(${inferredCount} inferred)</span>` : ''} · <b>${roots.length}</b> entry point(s)
+      </div>
+      <div class="topbar-spacer"></div>
+      <label class="ap-check"><input type="checkbox" id="apHideInferred" ${view.hideInferred ? 'checked' : ''} /> hide inferred</label>
+      <select class="ap-sev" id="apSev" title="Minimum severity">
+        ${AP_SEV_FILTERS.map((s) => `<option value="${s}"${view.sev === s ? ' selected' : ''}>${s === 'all' ? 'all severities' : `${s} and above`}</option>`).join('')}
+      </select>
+      <div class="ap-zoom">
+        <button class="btn btn-sm" data-ap-zoom="-1" title="Zoom out">−</button>
+        <button class="btn btn-sm" data-ap-fit title="Fit to window">fit</button>
+        <button class="btn btn-sm" data-ap-zoom="1" title="Zoom in">+</button>
+      </div>
     </div>
-  `;
-  container.querySelectorAll('.ap-node-g').forEach((g) => g.addEventListener('click', () => {
-    const f = findings[Number(g.dataset.idx)];
-    const isLive = container.id === 'liveAttackPath';
-    const pocs = isLive ? (state.currentJob?.pocs || []) : (state.detailPocs || []);
-    const runId = isLive ? state.currentJob?.runId : state.currentDetailId;
-    if (f) openFindingModal(f, pocs, runId);
-  }));
-}
+    <div class="ap-provenance">${esc(provenance)} — inferred links are hypotheses, drawn dashed.</div>
+    <div class="ap-canvas-wrap" id="apWrap">
+      <svg class="ap-canvas" id="apSvg" width="100%" height="100%">
+        <defs>
+          <marker id="apArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" />
+          </marker>
+        </defs>
+        <g class="ap-pan" id="apPan">
+          ${headSvg}
+          ${rootEdges}
+          ${edgeSvg}
+          <g class="ap-root">
+            <rect class="ap-node" x="${PAD}" y="${rootY - 22}" width="${ROOT_W - 18}" height="44" rx="9" />
+            <text class="ap-icon" x="${PAD + 14}" y="${rootY + 4}">🎯</text>
+            <text class="ap-title" x="${PAD + 34}" y="${rootY - 2}">target</text>
+            <text class="ap-meta" x="${PAD + 34}" y="${rootY + 12}">${esc(trimMid(target || '', 14))}</text>
+          </g>
+          ${nodeSvg}
+        </g>
+      </svg>
+      <div class="ap-hint">drag to pan · scroll to zoom · click a node for the finding</div>
+    </div>
+    <div class="ap-legend">
+      ${['critical', 'high', 'medium', 'low', 'info'].map((s) => `<span class="ap-key"><i style="background:var(--sev-${s}-fg)"></i>${s}</span>`).join('')}
+      <span class="ap-key"><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" class="ap-edge" /></svg>asserted chain</span>
+      <span class="ap-key"><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" class="ap-edge inferred" /></svg>inferred</span>
+    </div>`;
 
+  const svg = container.querySelector('#apSvg');
+  const pan = container.querySelector('#apPan');
+  const wrap = container.querySelector('#apWrap');
+
+  const apply = () => pan.setAttribute('transform', `translate(${view.tx},${view.ty}) scale(${view.k})`);
+  const fit = () => {
+    const box = wrap.getBoundingClientRect();
+    // The panel is rendered while its tab is still hidden, so the box measures
+    // zero and a "fit" there would lock in a garbage scale. Report the failure
+    // so the caller can try again once the tab is actually on screen.
+    if (!box.width || !box.height) return false;
+    view.k = Math.min(box.width / width, box.height / height, 1);
+    view.tx = (box.width - width * view.k) / 2;
+    view.ty = (box.height - height * view.k) / 2;
+    apply();
+    return true;
+  };
+  apply();
+  // Auto-fit once, and only once it can actually measure: re-fitting on every
+  // live finding would yank the canvas out from under someone mid-inspection.
+  if (!view.fitted) {
+    const tryFit = () => { if (fit()) view.fitted = true; };
+    requestAnimationFrame(tryFit);
+    if (window.ResizeObserver) {
+      const ro = new ResizeObserver(() => { if (view.fitted) ro.disconnect(); else tryFit(); });
+      ro.observe(wrap);
+    }
+  }
+
+  container.querySelector('[data-ap-fit]').addEventListener('click', fit);
+  container.querySelectorAll('[data-ap-zoom]').forEach((b) => b.addEventListener('click', () => {
+    const box = wrap.getBoundingClientRect();
+    const factor = Number(b.dataset.apZoom) > 0 ? 1.2 : 1 / 1.2;
+    const cx = box.width / 2, cy = box.height / 2;
+    view.tx = cx - (cx - view.tx) * factor;
+    view.ty = cy - (cy - view.ty) * factor;
+    view.k = Math.max(0.15, Math.min(3, view.k * factor));
+    apply();
+  }));
+  container.querySelector('#apHideInferred').addEventListener('change', (e) => {
+    view.hideInferred = e.target.checked;
+    renderAttackPath(container, allFindings, target, graph);
+  });
+  container.querySelector('#apSev').addEventListener('change', (e) => {
+    view.sev = e.target.value;
+    renderAttackPath(container, allFindings, target, graph);
+  });
+
+  wrap.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const box = wrap.getBoundingClientRect();
+    const mx = e.clientX - box.left, my = e.clientY - box.top;
+    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+    view.tx = mx - (mx - view.tx) * factor;
+    view.ty = my - (my - view.ty) * factor;
+    view.k = Math.max(0.15, Math.min(3, view.k * factor));
+    apply();
+  }, { passive: false });
+
+  let dragging = false, sx = 0, sy = 0, moved = 0;
+  wrap.addEventListener('pointerdown', (e) => {
+    dragging = true; moved = 0; sx = e.clientX - view.tx; sy = e.clientY - view.ty;
+    wrap.setPointerCapture(e.pointerId);
+    wrap.classList.add('dragging');
+  });
+  wrap.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    moved += Math.abs(e.movementX) + Math.abs(e.movementY);
+    view.tx = e.clientX - sx; view.ty = e.clientY - sy;
+    apply();
+  });
+  const endDrag = (e) => { dragging = false; wrap.classList.remove('dragging'); if (e?.pointerId !== undefined) { try { wrap.releasePointerCapture(e.pointerId); } catch { /* already released */ } } };
+  wrap.addEventListener('pointerup', endDrag);
+  wrap.addEventListener('pointercancel', endDrag);
+
+  // Highlight the whole path through a node, both directions — the question a
+  // reader has in front of a graph is "what led here, and where does it go".
+  const up = new Map(), down = new Map();
+  edges.forEach((e) => {
+    if (!down.has(e.from)) down.set(e.from, []);
+    down.get(e.from).push(e.to);
+    if (!up.has(e.to)) up.set(e.to, []);
+    up.get(e.to).push(e.from);
+  });
+  const reach = (start, map) => {
+    const seen = new Set(), stack = [start];
+    while (stack.length) {
+      const n = stack.pop();
+      for (const m of map.get(n) || []) if (!seen.has(m)) { seen.add(m); stack.push(m); }
+    }
+    return seen;
+  };
+  const focusOn = (idx) => {
+    const set = new Set([idx, ...reach(idx, up), ...reach(idx, down)]);
+    svg.classList.add('has-focus');
+    container.querySelectorAll('.ap-node-g').forEach((g) => g.classList.toggle('focus', set.has(Number(g.dataset.idx))));
+    container.querySelectorAll('.ap-edge').forEach((p) => {
+      const f = Number(p.dataset.from), t = Number(p.dataset.to);
+      const r = Number(p.dataset.rootTo);
+      p.classList.toggle('focus', (set.has(f) && set.has(t)) || (!Number.isNaN(r) && r === idx));
+    });
+  };
+  const clearFocus = () => {
+    svg.classList.remove('has-focus');
+    container.querySelectorAll('.focus').forEach((el) => el.classList.remove('focus'));
+  };
+
+  container.querySelectorAll('.ap-node-g').forEach((g) => {
+    const idx = Number(g.dataset.idx);
+    g.addEventListener('mouseenter', () => focusOn(idx));
+    g.addEventListener('focus', () => focusOn(idx));
+    g.addEventListener('mouseleave', clearFocus);
+    g.addEventListener('blur', clearFocus);
+    const open = () => {
+      const isLive = container.id === 'liveAttackPath';
+      const pocs = isLive ? (state.currentJob?.pocs || []) : (state.detailPocs || []);
+      const runId = isLive ? state.currentJob?.runId : state.currentDetailId;
+      openFindingModal(findings[idx], pocs, runId);
+    };
+    // A pan that ends on a node is not a click on it.
+    g.addEventListener('click', () => { if (moved < 6) open(); });
+    g.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+  });
+}
 function trimMid(s, n) {
   s = String(s || '');
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
@@ -997,34 +1279,80 @@ function stepClassFor(phase, step) {
   return 'pending';
 }
 
+/// Group runs into target folders. Twelve runs of three hosts was a flat list
+/// of twelve near-identical rows; the host is what an operator actually scans
+/// for, so it becomes the folder and the runs live inside it.
+function runFolders(runs) {
+  const folders = new Map();
+  for (const r of runs) {
+    const key = engagementKey(r.target || r.id);
+    if (!folders.has(key)) folders.set(key, { key, items: [], ts: 0, findings: 0, severities: {} });
+    const f = folders.get(key);
+    f.items.push(r);
+    f.ts = Math.max(f.ts, r.ts || 0);
+    f.findings += r.findings || 0;
+    for (const [k, n] of Object.entries(r.severities || {})) f.severities[k] = (f.severities[k] || 0) + n;
+  }
+  for (const f of folders.values()) f.items.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  return [...folders.values()].sort((a, b) => b.ts - a.ts);
+}
+
+/// Same normalization the harness uses for its engagement key, so a folder here
+/// and an engagement in the harness's memory mean the same thing.
+function engagementKey(target) {
+  const t = String(target || '').trim().toLowerCase();
+  const noScheme = t.includes('://') ? t.split('://')[1] : t;
+  const host = noScheme.split(/[/?#]/)[0].replace(/:\d+$/, '').replace(/^www\./, '');
+  return host || t || 'unknown';
+}
+
+function worstSeverity(severities) {
+  return SEV_ORDER.find((s) => Object.entries(severities || {}).some(([k, n]) => n && SEV_ORDER[sevRank(k)] === s));
+}
+
+const SB_OPEN_KEY = 'ns-sb-open';
+function openFolders() {
+  try { return new Set(JSON.parse(localStorage.getItem(SB_OPEN_KEY) || '[]')); } catch { return new Set(); }
+}
+function setFolderOpen(key, on) {
+  const s = openFolders();
+  if (on) s.add(key); else s.delete(key);
+  localStorage.setItem(SB_OPEN_KEY, JSON.stringify([...s]));
+}
+
+function runButton(r) {
+  const btn = document.createElement('button');
+  btn.className = 'sb-run' + (state.currentDetailId === r.id ? ' active' : '');
+  // Every line here truncates: a long target URL used to run past the
+  // sidebar's edge and collide with the main pane.
+  const worst = worstSeverity(r.severities);
+  btn.innerHTML = `
+    <span class="name">${worst ? `<span class="run-dot sev-dot-${worst}" title="worst severity: ${worst}"></span>` : ''}<span class="label">${esc(r.name || r.target)}</span></span>
+    <span class="sub">${r.name ? esc(r.target) : esc(r.id)}</span>
+    <span class="sub sub-facts"><span>${r.findings} finding${r.findings === 1 ? '' : 's'}</span><span>${esc(timeAgo(r.ts))}</span></span>`;
+  btn.title = `${r.name ? r.name + '\n' : ''}${r.target}\n${r.id}${r.ts ? '\n' + new Date(r.ts * 1000).toLocaleString() : ''}`;
+  btn.addEventListener('click', () => openRun(r));
+  return btn;
+}
+
 function renderSidebar() {
   const root = $('#sbGroups');
   root.innerHTML = '';
-  const running = state.runs.filter((r) => r.state === 'running');
-  const completed = state.runs.filter((r) => r.state !== 'running');
-  const groups = [{ label: 'Running', items: running }, { label: 'Completed', items: completed }];
+  const q = (state.runFilter || '').trim().toLowerCase();
+  const match = (r) => !q || `${r.name} ${r.target} ${r.id}`.toLowerCase().includes(q);
+  const runs = state.runs.filter(match);
+  const running = runs.filter((r) => r.state === 'running');
+  const past = runs.filter((r) => r.state !== 'running');
 
-  for (const g of groups) {
+  if (running.length) {
     const wrap = document.createElement('div');
     wrap.className = 'sb-group';
-    wrap.innerHTML = `<div class="sb-group-head"><span class="caret">▾</span><span>${g.label}</span><span class="count">${g.items.length}</span></div><div class="sb-items"></div>`;
+    wrap.innerHTML = `<div class="sb-group-head"><span class="caret">▾</span><span>Running</span><span class="count">${running.length}</span></div><div class="sb-items"></div>`;
     wrap.querySelector('.sb-group-head').addEventListener('click', () => wrap.classList.toggle('collapsed'));
     const items = wrap.querySelector('.sb-items');
-    for (const r of g.items) {
-      const btn = document.createElement('button');
-      btn.className = 'sb-run' + (state.currentDetailId === r.id ? ' active' : '');
-      // Every line here truncates: a long target URL used to run past the
-      // sidebar's edge and collide with the main pane.
-      const worst = SEV_ORDER.find((s) => Object.entries(r.severities || {}).some(([k, n]) => n && SEV_ORDER[sevRank(k)] === s));
-      btn.innerHTML = `
-        <span class="name">${worst ? `<span class="run-dot sev-dot-${worst}" title="worst severity: ${worst}"></span>` : ''}<span class="label">${esc(r.name || r.target)}</span></span>
-        <span class="sub">${r.name ? esc(r.target) : esc(r.id)}</span>
-        <span class="sub sub-facts"><span>${r.findings} finding${r.findings === 1 ? '' : 's'}</span><span>${esc(timeAgo(r.ts))}</span></span>`;
-      btn.title = `${r.name ? r.name + '\n' : ''}${r.target}\n${r.id}${r.ts ? '\n' + new Date(r.ts * 1000).toLocaleString() : ''}`;
-      btn.addEventListener('click', () => openRun(r));
-      items.appendChild(btn);
-      const isThisJob = r.state === 'running' && state.currentJob && r.id === state.currentJob.runId;
-      if (isThisJob) {
+    for (const r of running) {
+      items.appendChild(runButton(r));
+      if (state.currentJob && r.id === state.currentJob.runId) {
         const steps = document.createElement('div');
         steps.className = 'sb-steps';
         steps.innerHTML = ['recon', 'planning', 'exploiting', 'remediation'].map((s) =>
@@ -1034,16 +1362,51 @@ function renderSidebar() {
     }
     root.appendChild(wrap);
   }
+
+  const folders = runFolders(past);
+  if (!folders.length) {
+    const empty = document.createElement('div');
+    empty.className = 'sb-empty';
+    empty.textContent = q ? `No run matches “${q}”.` : 'No runs yet.';
+    root.appendChild(empty);
+    return;
+  }
+
+  const open = openFolders();
+  for (const f of folders) {
+    const holdsActive = f.items.some((r) => r.id === state.currentDetailId);
+    // A search is a request to see what matched — collapsing the results would
+    // hide the very thing that was searched for.
+    const isOpen = !!q || holdsActive || open.has(f.key);
+    const wrap = document.createElement('div');
+    wrap.className = 'sb-folder' + (isOpen ? '' : ' collapsed');
+    const worst = worstSeverity(f.severities);
+    wrap.innerHTML = `
+      <div class="sb-folder-head" title="${esc(f.key)} — ${f.items.length} run(s), ${f.findings} finding(s)">
+        <span class="caret">▾</span>
+        ${worst ? `<span class="run-dot sev-dot-${worst}"></span>` : '<span class="run-dot"></span>'}
+        <span class="fname">${esc(f.key)}</span>
+        <span class="fmeta">${f.items.length}</span>
+      </div>
+      <div class="sb-items"></div>`;
+    wrap.querySelector('.sb-folder-head').addEventListener('click', () => {
+      const nowCollapsed = wrap.classList.toggle('collapsed');
+      setFolderOpen(f.key, !nowCollapsed);
+    });
+    const items = wrap.querySelector('.sb-items');
+    for (const r of f.items) items.appendChild(runButton(r));
+    root.appendChild(wrap);
+  }
 }
 
 function openRun(run) {
   state.currentDetailId = run.id;
   if (run.state === 'running' && state.currentJob && run.id === state.currentJob.runId) {
-    show($('#wizardView'), false); show($('#detailView'), false); show($('#liveView'), true);
+    show($('#wizardView'), false); show($('#detailView'), false); show($('#dashView'), false); show($('#liveView'), true);
     renderSidebar();
     return;
   }
-  show($('#wizardView'), false); show($('#liveView'), false); show($('#detailView'), true);
+  show($('#wizardView'), false); show($('#liveView'), false); show($('#dashView'), false); show($('#detailView'), true);
   loadDetail(run.id);
   renderSidebar();
 }
@@ -1077,7 +1440,11 @@ async function loadDetail(id) {
     id,
   ].filter(Boolean);
   $('#detailFacts').innerHTML = facts.map((f) => `<span>${esc(f)}</span>`).join('');
-  renderAttackPath($('#detailAttackPath'), detail.findings, target);
+  // The harness writes graph.json per run (knowledge_graph::ingest). When it
+  // exists, its edges — including which ones it inferred — beat anything the
+  // browser could re-derive; older runs simply fall back.
+  const graph = await api(`/api/runs/${encodeURIComponent(id)}/asset/graph.json`).catch(() => null);
+  renderAttackPath($('#detailAttackPath'), detail.findings, target, graph);
   const reportLink = $('#detailOpenReport');
   if (detail.assets.includes('report.html')) {
     reportLink.href = `/api/runs/${encodeURIComponent(id)}/asset/report.html`;
@@ -1537,6 +1904,347 @@ document.addEventListener('keydown', (e) => {
   if (!$('#authModal').hidden) return show($('#authModal'), false);
   if (!$('#termDock').hidden) termClose();
 });
+
+
+// ---------------------------------------------------------------------------
+// Dashboard — coverage, findings, and FAIR loss exposure
+//
+// The console could show one run at a time and nothing about the programme as a
+// whole: how much has been tested, what keeps coming back, and what any of it
+// is worth in money. The last question is the one a security owner is actually
+// asked, and "14 highs" is not an answer to it.
+//
+// ## FAIR, and why the assumptions are on screen
+//
+// Risk here follows FAIR (Factor Analysis of Information Risk): annualized loss
+// exposure = Loss Event Frequency × Loss Magnitude, where
+//
+//   LEF = Threat Event Frequency × Vulnerability
+//
+// Both factors are estimates, not measurements. TEF (how often someone tries)
+// is derived from the harness's own `exploitability` rating — a trivially
+// exploitable bug on an internet-facing app gets attempted constantly, a hard
+// one rarely. Vulnerability (how often an attempt succeeds) uses the finding's
+// validation confidence, which is exactly what the multi-model vote measured.
+// Loss magnitude cannot be derived from a scan at all: it depends on the
+// business. So the defaults below are stated openly, shown in the UI, and
+// editable — and the result is a RANGE, never a single number, because a point
+// estimate of a distribution is the classic way risk quantification lies.
+// ---------------------------------------------------------------------------
+
+const FAIR_DEFAULTS = {
+  // Threat event frequency: attempts per year, by how easy the harness judged
+  // the finding to exploit.
+  tef: { trivial: 12, moderate: 4, hard: 1, unknown: 3 },
+  // Loss magnitude in USD per event: [minimum, most likely, maximum].
+  // Order-of-magnitude industry defaults — replace with your own loss data.
+  lm: {
+    critical: [250000, 1200000, 5000000],
+    high: [75000, 400000, 1500000],
+    medium: [15000, 80000, 300000],
+    low: [2000, 15000, 60000],
+    info: [0, 1000, 5000],
+  },
+};
+const FAIR_KEY = 'ns-fair-params';
+
+function fairParams() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(FAIR_KEY) || 'null');
+    if (saved?.tef && saved?.lm) return saved;
+  } catch { /* fall through to defaults */ }
+  return structuredClone(FAIR_DEFAULTS);
+}
+function saveFairParams(p) { localStorage.setItem(FAIR_KEY, JSON.stringify(p)); }
+
+const money = (n) => {
+  if (!isFinite(n)) return '—';
+  if (n >= 1e9) return `$${(n / 1e9).toFixed(1)}B`;
+  if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
+  if (n >= 1e3) return `$${Math.round(n / 1e3)}K`;
+  return `$${Math.round(n)}`;
+};
+
+/// Annualized loss exposure for one finding, as [min, likely, max].
+function fairForFinding(f, params) {
+  const sev = SEV_ORDER[sevRank(f.severity)];
+  const lm = params.lm[sev] || params.lm.info;
+  const tef = params.tef[(f.exploitability || 'unknown').toLowerCase()] ?? params.tef.unknown;
+  // A finding flagged for human review is a maybe, not a fact — halving its
+  // frequency keeps it visible without letting unreviewed leads drive the total.
+  const reviewFactor = f.reviewStatus === 'needs-review' ? 0.5 : 1;
+  const vuln = Math.min(0.95, Math.max(0.2, f.confidence || 0.5));
+  const lef = tef * vuln * reviewFactor;
+  return lm.map((m) => lef * m);
+}
+
+/// Heuristic posture score, 0-100. Deliberately simple and fully stated in the
+/// UI: an opaque score invites arguing with the number instead of the findings.
+///
+/// Subtracting a fixed penalty per finding hit zero after one critical and a
+/// handful of highs, which makes the score useless exactly when there is
+/// something to track — a programme that fixes half its criticals must be able
+/// to see the number move. The saturating form has diminishing returns instead,
+/// so it keeps discriminating at any volume and never quite reaches 0.
+const SCORE_WEIGHT = { critical: 10, high: 5, medium: 2, low: 0.5, info: 0.1 };
+const SCORE_SCALE = 25;
+function riskLoad(findings) {
+  return findings.reduce((acc, f) => {
+    const sev = SEV_ORDER[sevRank(f.severity)];
+    return acc + (SCORE_WEIGHT[sev] || 0) * Math.min(1, Math.max(0.3, f.confidence || 0.5));
+  }, 0);
+}
+function exposureScore(findings) {
+  return Math.round(100 / (1 + riskLoad(findings) / SCORE_SCALE));
+}
+function scoreBand(score) {
+  if (score >= 85) return { label: 'low exposure', cls: 'low' };
+  if (score >= 65) return { label: 'moderate exposure', cls: 'medium' };
+  if (score >= 40) return { label: 'high exposure', cls: 'high' };
+  return { label: 'critical exposure', cls: 'critical' };
+}
+
+/// One horizontal bar row: a label, a proportional fill, a direct value.
+/// Values are labeled on every row, so the bar is a second encoding of a number
+/// that is already readable — not the only way to read it.
+function barRow(label, value, max, cls, title) {
+  const pct = max > 0 ? Math.max(2, (value / max) * 100) : 0;
+  return `<div class="bar-row" title="${esc(title || `${label}: ${value}`)}">
+    <span class="bar-label">${esc(label)}</span>
+    <span class="bar-track"><span class="bar-fill${cls ? ` bar-${cls}` : ''}" style="width:${pct}%"></span></span>
+    <span class="bar-value">${esc(String(value))}</span>
+  </div>`;
+}
+
+function dashRangeCutoff() {
+  const days = Number($('#dashRange')?.value || 0);
+  return days > 0 ? Date.now() / 1000 - days * 86400 : 0;
+}
+
+async function renderDashboard() {
+  const body = $('#dashBody');
+  let data;
+  try {
+    data = await api('/api/stats');
+  } catch (e) {
+    body.innerHTML = `<div class="empty-state">Couldn't load stats: ${esc(e.message)}</div>`;
+    return;
+  }
+  const cutoff = dashRangeCutoff();
+  const runs = data.runs.filter((r) => !cutoff || r.ts >= cutoff);
+  const findings = data.findings.filter((f) => !cutoff || f.ts >= cutoff);
+  const params = fairParams();
+
+  if (!runs.length) {
+    body.innerHTML = '<div class="empty-state">No runs in this range yet — start an engagement and the dashboard fills in.</div>';
+    return;
+  }
+
+  const targets = new Set(runs.map((r) => engagementKey(r.target)));
+  const sevCounts = {};
+  for (const f of findings) {
+    const s = SEV_ORDER[sevRank(f.severity)];
+    sevCounts[s] = (sevCounts[s] || 0) + 1;
+  }
+  const needsReview = findings.filter((f) => f.reviewStatus === 'needs-review').length;
+  const score = exposureScore(findings);
+  const band = scoreBand(score);
+
+  const ale = findings.reduce((acc, f) => {
+    const [lo, ml, hi] = fairForFinding(f, params);
+    return [acc[0] + lo, acc[1] + ml, acc[2] + hi];
+  }, [0, 0, 0]);
+
+  // Which findings actually drive the exposure — the reason to quantify at all
+  // is to rank remediation, and the ranking is what gets acted on.
+  const contributors = findings
+    .map((f) => ({ f, ml: fairForFinding(f, params)[1] }))
+    .sort((a, b) => b.ml - a.ml)
+    .slice(0, 6);
+
+  const byCwe = {};
+  for (const f of findings) {
+    if (!f.cwe) continue;
+    byCwe[f.cwe] = (byCwe[f.cwe] || 0) + 1;
+  }
+  const topCwe = Object.entries(byCwe).sort((a, b) => b[1] - a[1]).slice(0, 6);
+
+  const byTarget = {};
+  for (const r of runs) {
+    const k = engagementKey(r.target);
+    byTarget[k] = byTarget[k] || { runs: 0, findings: 0, last: 0 };
+    byTarget[k].runs++;
+    byTarget[k].findings += r.findings;
+    byTarget[k].last = Math.max(byTarget[k].last, r.ts);
+  }
+  const targetRows = Object.entries(byTarget).sort((a, b) => b[1].findings - a[1].findings);
+
+  const maxSev = Math.max(1, ...Object.values(sevCounts));
+  const maxCwe = Math.max(1, ...topCwe.map(([, n]) => n));
+
+  body.innerHTML = `
+    <div class="stat-row">
+      <div class="stat-tile">
+        <div class="stat-k">Engagements</div>
+        <div class="stat-v">${runs.length}</div>
+        <div class="stat-sub">${targets.size} distinct target(s)</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-k">Findings</div>
+        <div class="stat-v">${findings.length}</div>
+        <div class="stat-sub">${needsReview} awaiting human review</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-k">Agents run</div>
+        <div class="stat-v">${runs.reduce((a, r) => a + (r.agentsRan || 0), 0).toLocaleString('en-US')}</div>
+        <div class="stat-sub">across ${runs.length} run(s)</div>
+      </div>
+      <div class="stat-tile stat-score sev-${band.cls}">
+        <div class="stat-k">Exposure score</div>
+        <div class="stat-v">${score}<span class="stat-unit">/100</span></div>
+        <div class="stat-sub">${esc(band.label)}</div>
+      </div>
+    </div>
+
+    <div class="dash-grid">
+      <section class="dash-card dash-fair">
+        <div class="dash-card-head">
+          <h3>Annualized loss exposure (FAIR)</h3>
+          <button class="btn btn-sm" id="btnFairParams">Assumptions</button>
+        </div>
+        <div class="fair-hero">
+          <div class="fair-range">
+            <div class="fair-point"><span class="k">minimum</span><span class="v">${money(ale[0])}</span></div>
+            <div class="fair-point fair-likely"><span class="k">most likely</span><span class="v">${money(ale[1])}</span></div>
+            <div class="fair-point"><span class="k">maximum</span><span class="v">${money(ale[2])}</span></div>
+          </div>
+          <div class="fair-note">
+            Loss Event Frequency × Loss Magnitude, summed over ${findings.length} finding(s).
+            Frequency comes from each finding's exploitability and validation confidence;
+            magnitude comes from the assumptions you set. A range, not a forecast.
+            Findings are summed independently, so shared root causes count twice —
+            read it as an upper bound on annual exposure, not a portfolio model.
+          </div>
+        </div>
+        <div class="fair-contrib">
+          <div class="dash-sub">Top contributors (most likely annual loss)</div>
+          ${contributors.map(({ f, ml }) => `
+            <div class="contrib-row" title="${esc(f.title)} — ${esc(f.target)}">
+              <span class="sev ${sevClass(f.severity)}">${esc(f.severity)}</span>
+              <span class="contrib-title">${esc(f.title || f.cwe || 'untitled')}</span>
+              <span class="contrib-v">${money(ml)}</span>
+            </div>`).join('') || '<div class="field-help">No findings in range.</div>'}
+        </div>
+      </section>
+
+      <section class="dash-card">
+        <h3>Findings by severity</h3>
+        ${SEV_ORDER.filter((s) => sevCounts[s]).map((s) =>
+          barRow(s, sevCounts[s], maxSev, s, `${sevCounts[s]} ${s} finding(s)`)).join('')
+          || '<div class="field-help">No findings in range.</div>'}
+      </section>
+
+      <section class="dash-card">
+        <h3>Most frequent weaknesses</h3>
+        ${topCwe.map(([cwe, n]) => barRow(cwe, n, maxCwe, 'neutral', `${cwe}: ${n} finding(s)`)).join('')
+          || '<div class="field-help">No CWE data in range.</div>'}
+      </section>
+
+      <section class="dash-card dash-wide">
+        <h3>Targets</h3>
+        <div class="table-wrap">
+          <table class="data-table dash-table">
+            <thead><tr><th>Target</th><th>Runs</th><th>Findings</th><th>Last tested</th></tr></thead>
+            <tbody>
+              ${targetRows.map(([k, v]) => `<tr data-target="${esc(k)}">
+                <td class="mono">${esc(k)}</td>
+                <td>${v.runs}</td>
+                <td>${v.findings}</td>
+                <td>${esc(timeAgo(v.last))}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <div class="dash-foot">Score = 100 / (1 + risk / ${SCORE_SCALE}) where risk = Σ(severity weight × confidence) = ${riskLoad(findings).toFixed(1)}. Weights: critical ${SCORE_WEIGHT.critical}, high ${SCORE_WEIGHT.high}, medium ${SCORE_WEIGHT.medium}, low ${SCORE_WEIGHT.low}, info ${SCORE_WEIGHT.info}. A heuristic for tracking direction over time, not a certification.</div>
+  `;
+
+  $('#btnFairParams').addEventListener('click', () => openFairParams(params));
+  $$('#dashBody tbody tr[data-target]').forEach((tr) => tr.addEventListener('click', () => {
+    state.runFilter = tr.dataset.target;
+    $('#runFilter').value = tr.dataset.target;
+    renderSidebar();
+  }));
+}
+
+/// The assumptions panel. FAIR without visible inputs is a magic number; with
+/// them it is a model the reader can disagree with concretely.
+function openFairParams(params) {
+  const p = structuredClone(params);
+  const body = $('#dashBody');
+  const host = document.createElement('div');
+  host.className = 'modal-overlay';
+  host.innerHTML = `
+    <div class="modal modal-sm">
+      <div class="modal-head"><div class="title">FAIR assumptions</div><button class="icon-btn" data-close>✕</button></div>
+      <div class="modal-body">
+        <div class="field-help">Threat event frequency — attempted events per year, by exploitability.</div>
+        <div class="fair-params">
+          ${Object.keys(p.tef).map((k) => `
+            <label class="fair-param"><span>${esc(k)}</span>
+              <input type="number" min="0" max="365" step="0.5" data-tef="${esc(k)}" value="${p.tef[k]}" /></label>`).join('')}
+        </div>
+        <div class="field-help" style="margin-top:var(--sp-4);">Loss magnitude per event (USD): minimum / most likely / maximum.</div>
+        <div class="fair-params fair-lm">
+          ${Object.keys(p.lm).map((k) => `
+            <label class="fair-param"><span class="sev ${sevClass(k)}">${esc(k)}</span>
+              <input type="number" min="0" step="1000" data-lm="${esc(k)}" data-i="0" value="${p.lm[k][0]}" />
+              <input type="number" min="0" step="1000" data-lm="${esc(k)}" data-i="1" value="${p.lm[k][1]}" />
+              <input type="number" min="0" step="1000" data-lm="${esc(k)}" data-i="2" value="${p.lm[k][2]}" />
+            </label>`).join('')}
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" data-reset>Reset to defaults</button>
+        <button class="btn btn-primary" data-save>Apply</button>
+      </div>
+    </div>`;
+  document.body.appendChild(host);
+  const close = () => host.remove();
+  host.addEventListener('click', (e) => { if (e.target === host) close(); });
+  host.querySelector('[data-close]').addEventListener('click', close);
+  host.querySelector('[data-reset]').addEventListener('click', () => {
+    saveFairParams(structuredClone(FAIR_DEFAULTS));
+    close();
+    renderDashboard();
+  });
+  host.querySelector('[data-save]').addEventListener('click', () => {
+    host.querySelectorAll('[data-tef]').forEach((i) => { p.tef[i.dataset.tef] = Number(i.value) || 0; });
+    host.querySelectorAll('[data-lm]').forEach((i) => { p.lm[i.dataset.lm][Number(i.dataset.i)] = Number(i.value) || 0; });
+    // A max below the minimum would silently invert the range.
+    for (const k of Object.keys(p.lm)) p.lm[k].sort((a, b) => a - b);
+    saveFairParams(p);
+    close();
+    renderDashboard();
+  });
+  body.scrollTop = body.scrollTop; // keep the page anchored while the modal opens
+}
+
+function showDashboard() {
+  leaveLiveJob();
+  clearInterval(state.detailPoll);
+  show($('#wizardView'), false);
+  show($('#liveView'), false);
+  show($('#detailView'), false);
+  show($('#dashView'), true);
+  renderDashboard();
+}
+$('#btnDashboard').addEventListener('click', showDashboard);
+$('#btnDashRefresh').addEventListener('click', renderDashboard);
+$('#dashRange').addEventListener('change', renderDashboard);
+$('#runFilter').addEventListener('input', (e) => { state.runFilter = e.target.value; renderSidebar(); });
 
 // ---------------------------------------------------------------------------
 // boot

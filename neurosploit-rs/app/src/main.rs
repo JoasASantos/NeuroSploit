@@ -1,5 +1,6 @@
 //! NeuroSploit v4.0.0 — interactive harness + CLI (`run` / `whitebox` / `agents` / `models`).
 
+mod rectify;
 mod repl;
 mod tui;
 

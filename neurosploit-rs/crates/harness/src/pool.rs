@@ -86,6 +86,9 @@ pub struct ModelPool {
     /// When this exceeds `AUTH_FAIL_THRESHOLD`, the pool auto-pauses instead of
     /// burning through the remaining agents on a dead token.
     consecutive_auth_fails: Arc<std::sync::atomic::AtomicUsize>,
+    /// Backends already tried as an automatic fallback, so a failing one is not
+    /// retried in a loop.
+    tried_auto: Arc<Mutex<Vec<String>>>,
 }
 
 impl ModelPool {
@@ -119,6 +122,7 @@ impl ModelPool {
             resume: Arc::new(Notify::new()),
             fallback: Arc::new(Mutex::new(Vec::new())),
             consecutive_auth_fails: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            tried_auto: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -325,14 +329,75 @@ impl ModelPool {
                     }
                 }
             }
-            // Every candidate failed. Park the run (keeping all state) so the user
-            // can fix auth or wait for quota renewal, then /continue.
+            // Every configured candidate failed. Before parking the run and
+            // waiting for a human, use whatever else this machine can actually
+            // reach — another logged-in CLI subscription, or a provider whose
+            // API key is in the environment. A run that stops because one
+            // provider ran out of quota, on a box with three other usable
+            // backends, is a run that stopped for no reason.
             if (auth_failed || exhausted) && !self.is_cancelled() {
+                if let Some(alt) = self.next_auto_fallback(&order) {
+                    if let Some(tx) = self.progress() {
+                        let _ = tx.send(format!(
+                            "notify: ⇄ {} unavailable — falling back to {}:{} and continuing.",
+                            order.first().map(|m| m.provider.clone()).unwrap_or_default(),
+                            alt.provider, alt.model
+                        )).await;
+                    }
+                    if let Ok(mut fb) = self.fallback.lock() {
+                        fb.insert(0, alt.clone());
+                    }
+                    self.reset_auth_fails();
+                    continue;
+                }
+                // Nothing else is reachable — now a human really is required.
                 self.park_exhausted(&last, auth_failed).await;
                 continue;
             }
             return Err(last);
         }
+    }
+
+    /// A backend this machine can use right now that is not already in `tried`
+    /// and not already a candidate.
+    ///
+    /// Two sources, in this order: a subscription CLI that is installed (the
+    /// operator already logged into it, and it costs no API key), then any
+    /// provider whose API key is present in the environment. Each is offered
+    /// once — a backend that also fails is recorded so the loop cannot spin.
+    pub fn next_auto_fallback(&self, current: &[ModelRef]) -> Option<ModelRef> {
+        let mut tried = self.tried_auto.lock().ok()?;
+        let known = |p: &str, m: &str, tried: &Vec<String>| {
+            current.iter().any(|c| c.provider == p && c.model == m) || tried.iter().any(|t| t == &format!("{p}:{m}"))
+        };
+        let installed = crate::models::installed_cli_backends();
+        for pr in crate::models::providers() {
+            if pr.kind != "cli" {
+                continue;
+            }
+            let Some(bin) = crate::models::cli_binary_for(pr.key) else { continue };
+            if !installed.contains(&bin) {
+                continue;
+            }
+            let Some(model) = pr.models.first() else { continue };
+            if known(pr.key, model, &tried) {
+                continue;
+            }
+            tried.push(format!("{}:{}", pr.key, model));
+            return Some(ModelRef { provider: pr.key.to_string(), model: (*model).to_string() });
+        }
+        for pr in crate::models::providers() {
+            if std::env::var(pr.env_key).ok().filter(|v| !v.trim().is_empty()).is_none() {
+                continue;
+            }
+            let Some(model) = pr.models.first() else { continue };
+            if known(pr.key, model, &tried) {
+                continue;
+            }
+            tried.push(format!("{}:{}", pr.key, model));
+            return Some(ModelRef { provider: pr.key.to_string(), model: (*model).to_string() });
+        }
+        None
     }
 
     /// Reorder candidates for a task. With a single-model panel this is a no-op.
@@ -457,6 +522,42 @@ pub fn quorum_confirmed(severity: &str, yes: usize, total: usize) -> bool {
 
 #[cfg(test)]
 mod verdict_tests {
+    /// Whatever this machine happens to have installed, the automatic fallback
+    /// must never re-offer a model already in the panel and never offer the
+    /// same one twice — either turns "keep going" into a spin.
+    #[test]
+    fn auto_fallback_never_repeats_itself_or_the_current_panel() {
+        let current = vec![ModelRef::parse("anthropic:claude-opus-4-8")];
+        let pool = ModelPool::new(current.clone(), 1);
+        let mut seen: Vec<String> = Vec::new();
+        for _ in 0..8 {
+            let Some(m) = pool.next_auto_fallback(&current) else { break };
+            let id = format!("{}:{}", m.provider, m.model);
+            assert!(
+                !(m.provider == "anthropic" && m.model == "claude-opus-4-8"),
+                "offered the model that just failed"
+            );
+            assert!(!seen.contains(&id), "offered {id} twice");
+            seen.push(id);
+        }
+    }
+
+    /// A provider whose key is in the environment is reachable, so it must be
+    /// offered before the run parks and waits for a human.
+    #[test]
+    fn a_provider_with_a_key_in_the_environment_is_offered() {
+        std::env::set_var("DEEPSEEK_API_KEY", "test-key-for-fallback");
+        let current = vec![ModelRef::parse("anthropic:claude-opus-4-8")];
+        let pool = ModelPool::new(current.clone(), 1);
+        let mut found = false;
+        for _ in 0..30 {
+            let Some(m) = pool.next_auto_fallback(&current) else { break };
+            if m.provider == "deepseek" { found = true; break; }
+        }
+        std::env::remove_var("DEEPSEEK_API_KEY");
+        assert!(found, "a provider with a usable API key must be reachable as a fallback");
+    }
+
     use super::*;
     #[test]
     fn parses_json_and_prose() {

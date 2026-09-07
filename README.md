@@ -250,6 +250,13 @@ Zero npm dependencies (Node built-ins only).
   log tab grows a prompt box (`❭`) to send `/status`, `/stop`, `/continue`, or a plain-language
   instruction mid-run — same REPL described in [§6](TUTORIAL.md#6-the-interactive-repl). `host` /
   `aitest` / `skills` stay one-shot (their onboarding menu can't be scripted over piped stdin).
+- **Dashboard** — coverage (engagements, targets, agents run), findings by severity, most
+  frequent weaknesses, and an **annualized loss exposure computed with FAIR**
+  (Loss Event Frequency × Loss Magnitude): frequency from each finding's exploitability and
+  validation confidence, magnitude from assumptions that are shown on screen and editable.
+  Reported as a min / most-likely / max range, never a single number.
+- **Run history in folders** — runs group into one folder per target with a filter box, instead
+  of one flat list that grows forever.
 - **Terminal dock** — `Ctrl+\`` (or `❭_` in the sidebar) opens a real terminal, xterm.js over an
   unstripped stdout stream, so the harness renders with its own colour and panels. Its header
   switches the terminal between a standalone REPL session and the engagement currently running,
@@ -261,6 +268,42 @@ Zero npm dependencies (Node built-ins only).
   resetting to the wizard.
 
 Full API reference: **[web/API.md](web/API.md)** · quick start: **[web/README.md](web/README.md)**.
+
+### Knowledge: memory + attack knowledge graph
+
+Every model call starts with an empty context window, so without somewhere to put what a run
+learned, the harness re-derives the same stack, the same endpoints and the same dead ends every
+time. Two stores fix that, both under `.neurosploit/` in the project directory:
+
+- **Layered memory** (`/memory`, `/forget`) — four tiers by scope, not importance: *working*
+  (one run), *engagement* (one target), *technique* (one agent/CWE), *reusable* (generalized).
+  Promotion is evidence-gated: a claim repeated within a run becomes engagement knowledge, one
+  confirmed across runs becomes technique knowledge, and one that held on **two different
+  targets** is generalized into a reusable lesson with the host-specific tokens stripped. Recall
+  is scored (term overlap × past success × recency) and injected into recon/exploit prompts as
+  leads to verify — never as assertions.
+- **Attack knowledge graph** (`/graph`, `graph.json`) — typed entities (asset, endpoint,
+  weakness, technique, finding, account, credential, impact) joined by typed, weighted,
+  provenance-carrying edges, accumulated across runs. It answers what a finding list can't:
+  ranked attack paths, which endpoint accumulated the most weaknesses, and the *frontier* —
+  entities observed but never proven, i.e. where chaining should look next. Chain edges the
+  harness derived itself are marked `inferred` and drawn dashed in the web console. Secrets
+  never enter the graph; they stay in the vault.
+
+### Keeping a run going
+
+- **Command rectification** — a mistyped command is corrected (`/staus` → `/status`), completed
+  (`/onb` → `/onboard`), or reported as ambiguous, never guessed at. Arguments too: a bare host
+  gets its scheme, an out-of-range count is clamped *with a note*, a near-miss model id is
+  matched against the live catalog.
+- **Automatic backend fallback** — when every configured model is quota-exhausted or its token
+  is dead, the pool switches to whatever else this machine can reach (an installed CLI
+  subscription, or a provider whose API key is in the environment) and keeps going. It only
+  parks the run when nothing at all is available.
+- **Resume where it stopped** — findings are checkpointed live, so an interrupted run is
+  recovered on the next start and `/continue` carries them forward. Non-interactive sessions
+  (the web console drives the REPL over a pipe) resume automatically, since no one is there to
+  type it; set `NEUROSPLOIT_AUTO_RESUME=1` to get the same at a terminal.
 
 ---
 

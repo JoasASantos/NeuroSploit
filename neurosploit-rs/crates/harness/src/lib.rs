@@ -13,6 +13,8 @@ pub mod creds;
 pub mod grounding;
 pub mod hygiene;
 pub mod integrations;
+pub mod knowledge_graph;
+pub mod memory;
 pub mod pomdp;
 pub mod models;
 pub mod pipeline;
@@ -29,5 +31,7 @@ pub use models::{
 };
 pub use pipeline::{run_greybox, run_host, run_whitebox, RunOutput};
 pub use pipeline::run;
+pub use knowledge_graph::{EdgeKind, KnowledgeGraph, NodeKind};
+pub use memory::{Memory, Query as MemoryQuery, Tier as MemoryTier};
 pub use pool::{ModelPool, Task};
 pub use types::{Finding, RunConfig};

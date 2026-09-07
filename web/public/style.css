@@ -156,6 +156,97 @@ a { color: var(--accent); text-decoration: none; }
 .sb-version { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
 .sb-bottom-actions { display: flex; gap: var(--sp-1); }
 
+.sb-link {
+  margin: 0 var(--sp-4) var(--sp-3); padding: var(--sp-2) var(--sp-3);
+  border: 1px solid transparent; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-dim); font-size: 12.5px; text-align: left;
+}
+.sb-link:hover { background: var(--surface-3); color: var(--text); }
+
+.sb-search { position: relative; margin: 0 var(--sp-4) var(--sp-3); }
+.sb-search input { padding-left: 26px; font-size: 12px; }
+.sb-search .search-icon { left: 8px; }
+
+/* Runs are grouped into one folder per target: twelve rows of near-identical
+   URLs was a wall to scroll past, and the host is what an operator scans for. */
+.sb-folder { margin-bottom: 2px; }
+.sb-folder-head {
+  display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2);
+  border-radius: var(--radius-sm); cursor: pointer; user-select: none; font-size: 12px;
+}
+.sb-folder-head:hover { background: var(--surface-3); }
+.sb-folder-head .caret { font-size: 11px; line-height: 1; color: var(--text-faint); transition: transform .15s; }
+.sb-folder-head .fname { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sb-folder-head .fmeta { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.sb-folder.collapsed .caret { transform: rotate(-90deg); }
+.sb-folder.collapsed .sb-items { display: none; }
+.sb-folder .sb-items { padding-left: var(--sp-3); border-left: 1px solid var(--border); margin-left: 9px; }
+.sb-empty { padding: var(--sp-4) var(--sp-2); font-size: 12px; color: var(--text-faint); }
+
+/* ============================================================ Dashboard */
+
+.dashboard { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.dashboard[hidden] { display: none; }
+.dash-range { width: auto; padding: 6px 8px; font-size: 12.5px; }
+.dash-body { flex: 1; overflow-y: auto; padding: var(--sp-5); }
+
+.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--sp-3); margin-bottom: var(--sp-4); }
+.stat-tile { border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--sp-4); background: var(--surface); }
+.stat-k { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-faint); font-weight: 600; }
+.stat-v { font-size: 30px; font-weight: 650; line-height: 1.15; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.stat-unit { font-size: 14px; color: var(--text-faint); font-weight: 500; }
+.stat-sub { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; }
+/* The score tile carries a status color, so it also carries a word — the band
+   label — because color alone is not an encoding. */
+.stat-score.sev-critical { border-color: var(--sev-critical-fg); }
+.stat-score.sev-critical .stat-v { color: var(--sev-critical-fg); }
+.stat-score.sev-high { border-color: var(--sev-high-fg); }
+.stat-score.sev-high .stat-v { color: var(--sev-high-fg); }
+.stat-score.sev-medium { border-color: var(--sev-medium-fg); }
+.stat-score.sev-medium .stat-v { color: var(--sev-medium-fg); }
+.stat-score.sev-low { border-color: var(--sev-low-fg); }
+.stat-score.sev-low .stat-v { color: var(--sev-low-fg); }
+
+.dash-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--sp-3); }
+.dash-card { border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--sp-4); background: var(--surface); }
+.dash-card h3 { margin: 0 0 var(--sp-3); font-size: 12.5px; font-weight: 600; }
+.dash-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); margin-bottom: var(--sp-3); }
+.dash-card-head h3 { margin: 0; }
+.dash-wide { grid-column: 1 / -1; }
+.dash-sub { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-faint); font-weight: 600; margin: var(--sp-4) 0 var(--sp-2); }
+.dash-foot { margin-top: var(--sp-4); font-size: 11px; color: var(--text-faint); }
+.dash-table td.mono { font-family: var(--mono); font-size: 11.5px; }
+.dash-table { min-width: 480px; }
+
+/* Bars: thin marks, value labeled on every row, recessive track. */
+.bar-row { display: grid; grid-template-columns: 90px 1fr 42px; align-items: center; gap: var(--sp-3); padding: 3px 0; font-size: 12px; }
+.bar-label { color: var(--text-dim); text-transform: capitalize; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bar-track { height: 10px; background: var(--surface-3); border-radius: 3px; overflow: hidden; }
+.bar-fill { display: block; height: 100%; border-radius: 3px; background: var(--text-faint); }
+.bar-critical { background: var(--sev-critical-fg); }
+.bar-high { background: var(--sev-high-fg); }
+.bar-medium { background: var(--sev-medium-fg); }
+.bar-low { background: var(--sev-low-fg); }
+.bar-info { background: var(--sev-info-fg); }
+.bar-neutral { background: var(--accent); }
+.bar-value { font-family: var(--mono); font-size: 11.5px; text-align: right; color: var(--text); }
+
+.fair-hero { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--sp-4); background: var(--surface-2); }
+.fair-range { display: flex; gap: var(--sp-5); flex-wrap: wrap; align-items: baseline; }
+.fair-point { display: flex; flex-direction: column; }
+.fair-point .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-faint); }
+.fair-point .v { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.fair-likely .v { font-size: 30px; color: var(--accent); }
+.fair-note { font-size: 11.5px; color: var(--text-dim); margin-top: var(--sp-3); }
+.contrib-row { display: flex; align-items: center; gap: var(--sp-3); padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.contrib-row:last-child { border-bottom: none; }
+.contrib-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.contrib-v { font-family: var(--mono); font-size: 12px; }
+.fair-params { display: flex; flex-direction: column; gap: var(--sp-2); }
+.fair-param { display: flex; align-items: center; gap: var(--sp-2); font-size: 12px; }
+.fair-param > span:first-child { width: 92px; flex: none; text-transform: capitalize; }
+.fair-param input { flex: 1; font-family: var(--mono); font-size: 12px; }
+
 /* ============================================================ Main / Topbar */
 
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
@@ -341,10 +432,51 @@ textarea { resize: vertical; min-height: 72px; }
 
 /* Generative Attack Path Chaining */
 .attackpath-empty { font-size: 12.5px; color: var(--text-faint); padding: var(--sp-5); text-align: center; border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); }
-.ap-canvas-wrap { border-radius: var(--radius-md); overflow: auto; background: var(--surface-2); border: 1px solid var(--border); }
-.ap-canvas { display: block; min-width: 100%; }
+
+.ap-toolbar { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-2); }
+.ap-stats { font-size: 12px; color: var(--text-dim); }
+.ap-stats b { color: var(--text); font-family: var(--mono); }
+.ap-inferred-note { color: var(--text-faint); }
+.ap-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); }
+.ap-sev { width: auto; padding: 5px 8px; font-size: 12px; }
+.ap-zoom { display: flex; gap: 4px; }
+.ap-zoom .btn { min-width: 32px; justify-content: center; }
+.ap-provenance { font-size: 11.5px; color: var(--text-faint); margin-bottom: var(--sp-2); }
+
+/* The canvas is a fixed viewport that the graph pans inside — letting the box
+   grow to the graph's height (1187px on a 27-finding run) meant scrolling the
+   page blind, with no way to see the shape of the path. */
+.ap-canvas-wrap { position: relative; height: min(60vh, 560px); border-radius: var(--radius-md); overflow: hidden; background: var(--surface-2); border: 1px solid var(--border); cursor: grab; touch-action: none; }
+.ap-canvas-wrap.dragging { cursor: grabbing; }
+.ap-canvas { display: block; width: 100%; height: 100%; }
 .ap-canvas text { font-family: var(--sans); }
-.ap-node-g:hover rect:first-child { filter: brightness(0.97); }
+.ap-hint { position: absolute; right: 8px; bottom: 6px; font-size: 10.5px; color: var(--text-faint); pointer-events: none; }
+
+.ap-col-line { stroke: var(--border); stroke-width: 1; }
+.ap-col-name { font-size: 10.5px; fill: var(--text-faint); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+.ap-col-count { font-size: 10.5px; fill: var(--text-faint); font-family: var(--mono); }
+
+.ap-node { fill: var(--surface); stroke-width: 1.6; }
+.ap-root .ap-node { stroke: var(--accent); }
+.ap-icon { font-size: 13px; }
+.ap-title { font-size: 11.5px; fill: var(--text); font-weight: 600; }
+.ap-meta, .ap-conf { font-size: 10px; fill: var(--text-faint); font-family: var(--mono); }
+.ap-node-g { cursor: pointer; }
+.ap-node-g:hover .ap-node, .ap-node-g:focus-visible .ap-node { filter: brightness(1.04); stroke-width: 2.4; }
+.ap-node-g:focus { outline: none; }
+
+.ap-edge { stroke: var(--border-strong); stroke-width: 1.6; fill: none; }
+.ap-edge marker, #apArrow path { fill: var(--border-strong); }
+/* An inferred edge is a hypothesis about the path, not evidence of it. */
+.ap-edge.inferred { stroke-dasharray: 5 4; opacity: .55; }
+.ap-edge.root-edge { opacity: .35; }
+.has-focus .ap-node-g:not(.focus) { opacity: .22; }
+.has-focus .ap-edge:not(.focus) { opacity: .1; }
+.ap-edge.focus { stroke: var(--accent); stroke-width: 2.2; opacity: 1; }
+
+.ap-legend { display: flex; gap: var(--sp-4); flex-wrap: wrap; align-items: center; margin-top: var(--sp-2); font-size: 11px; color: var(--text-faint); }
+.ap-key { display: flex; align-items: center; gap: 5px; }
+.ap-key i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
 
 /* findings table */
 /* Wide tables scroll inside their own box; without this the whole page

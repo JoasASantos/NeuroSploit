@@ -139,12 +139,32 @@ struct LiveCheckpoint {
     commands: Vec<String>,
 }
 
+/// Every literal the dispatch below accepts, aliases included.
+///
+/// [`COMMANDS`] is the *discoverable* subset offered by Tab completion; this is
+/// the full set, and command rectification needs the full set: correcting input
+/// the dispatch would have accepted (`/url`, `/q`, `/log`) into some
+/// near-neighbour would break working commands. A test keeps the two in sync.
+pub(crate) const ACCEPTED: &[&str] = &[
+    "/?", "/agents", "/attach", "/auth", "/burp", "/chain", "/changed", "/clear", "/config",
+    "/context", "/continue", "/creds", "/diff", "/exclude", "/exit", "/expand", "/feed",
+    "/finding", "/findings", "/focus", "/forget", "/full", "/go", "/goal", "/graph", "/help",
+    "/history", "/idle", "/instructions", "/integration", "/integrations", "/key", "/log",
+    "/logs", "/mcp", "/memory", "/model", "/models", "/objective", "/objectives", "/offline",
+    "/onboard", "/only", "/oos", "/outofscope", "/providers", "/proxy", "/q", "/quit", "/recon",
+    "/repo", "/report", "/results", "/resume", "/retest", "/revalidate", "/run", "/runs",
+    "/scope", "/scope-out", "/show", "/status", "/stop", "/sub", "/subscription", "/target",
+    "/temp-email", "/tempmail", "/theme", "/timeout", "/ua", "/url", "/useragent", "/validate",
+    "/votes",
+];
+
 /// All slash-commands, for Tab completion.
 const COMMANDS: &[&str] = &[
     "/help", "/onboard", "/show", "/config", "/providers", "/model", "/key", "/sub", "/target",
     "/repo", "/auth", "/creds", "/focus", "/objective", "/scope-out", "/attach", "/context", "/mcp", "/offline",
     "/votes", "/chain", "/recon", "/tempmail", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/only", "/theme", "/clear", "/run", "/stop", "/continue", "/runs", "/results", "/report",
-    "/status", "/logs", "/diff", "/retest", "/validate", "/finding", "/expand", "/integrations", "/quit",
+    "/status", "/logs", "/diff", "/retest", "/validate", "/finding", "/expand", "/integrations",
+    "/memory", "/forget", "/graph", "/quit",
 ];
 
 /// rustyline helper: Tab-completes `/commands` and `@filesystem-paths`,
@@ -397,6 +417,8 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
     // A recovered interrupted run, carried in memory so `/continue` can relaunch
     // the engagement on the same target with these findings folded forward.
     let mut resumable: Option<(String, Vec<Finding>)> = None;
+    // Set when a recovered run should continue without waiting for a human.
+    let mut auto_resume = false;
     // Recover an interrupted run (REPL was quit/crashed mid-engagement): its
     // live findings were checkpointed to disk — fold them into /runs so
     // /results, /finding and /report still work.
@@ -411,8 +433,19 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
             save_runs(base, &h);
             println!("  \x1b[1;33m↻ recovered interrupted run on {} — {} finding(s) saved as run #{}\x1b[0m (/results {id} · /report {id})",
                 cp.target, cp.findings.len(), id);
-            println!("  \x1b[36m  ↳ /continue to keep testing this target — the {} finding(s) carry forward\x1b[0m", cp.findings.len());
             resumable = Some((cp.target.clone(), cp.findings.clone()));
+            // Resume by itself where nobody is watching: the web console drives
+            // this REPL over a pipe, and a run that stops there waits forever
+            // for a `/continue` no one will type. An interactive operator keeps
+            // the choice — relaunching an engagement spends tokens, and at a
+            // real terminal there is someone to decide.
+            auto_resume = !std::io::stdin().is_terminal()
+                || std::env::var("NEUROSPLOIT_AUTO_RESUME").map(|v| v == "1" || v == "true").unwrap_or(false);
+            if auto_resume {
+                println!("  \x1b[36m  ↳ resuming automatically — the {} finding(s) carry forward\x1b[0m", cp.findings.len());
+            } else {
+                println!("  \x1b[36m  ↳ /continue to keep testing this target — the {} finding(s) carry forward\x1b[0m", cp.findings.len());
+            }
         }
         clear_checkpoint();
     }
@@ -420,6 +453,12 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
     let mut reader = Reader::new(base);
     let mut active: Option<ActiveRun> = None;
     let mut queue: Vec<String> = Vec::new(); // remaining targets for a multi-target /run
+    // Commands to run before reading from the user — how an auto-resumed run
+    // re-enters the normal dispatch instead of duplicating /continue's logic.
+    let mut pending: Vec<String> = Vec::new();
+    if auto_resume && resumable.is_some() {
+        pending.push("/continue".into());
+    }
     // First-launch onboarding: pick scope (web/infra/cloud/ai/skills) → box → setup.
     if s.target.is_none() && s.repo.is_none() && std::io::stdin().is_terminal() {
         onboarding(&mut s);
@@ -434,7 +473,14 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
             active = start_background(base, &s, &mut reader, history.clone(), Some(&next), vec![]).await;
         }
         println!("{}", context_prompt(&s)); // dim context line above the prompt
-        let Some(line) = reader.read(PROMPT) else { println!("\n  bye."); break };
+        let line = if pending.is_empty() {
+            let Some(l) = reader.read(PROMPT) else { println!("\n  bye."); break };
+            l
+        } else {
+            let l = pending.remove(0);
+            println!("{PROMPT}{l}");
+            l
+        };
         // Ctrl-C → confirm before doing anything drastic (don't lose a live run).
         if line == CTRL_C {
             let run_active = active.as_ref().map(|a| !a.done.load(Ordering::Relaxed)).unwrap_or(false);
@@ -481,7 +527,30 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
                 None => continue,
             }
         };
-        let (cmd, arg) = (cmd.as_str(), arg.as_str());
+        // Rectify before dispatch, so the match below only ever sees a command
+        // it handles. A typo mid-run costs an operator their place in the
+        // output; correcting the obvious ones — and asking about the rest —
+        // keeps a slip from becoming a round trip through /help.
+        let cmd_owned = match crate::rectify::rectify_command(&cmd, ACCEPTED) {
+            crate::rectify::Fix::Accepted => cmd.clone(),
+            crate::rectify::Fix::Corrected { to, note } => {
+                println!("  \x1b[2m↻ {note}\x1b[0m");
+                to
+            }
+            crate::rectify::Fix::Ambiguous(v) => {
+                println!("  '{cmd}' matches {} commands: {}", v.len(), v.join("  "));
+                continue;
+            }
+            crate::rectify::Fix::Unknown(hints) => {
+                if hints.is_empty() {
+                    println!("  unknown command '{cmd}' — /help lists them all");
+                } else {
+                    println!("  unknown command '{cmd}' — did you mean {}?", hints.join(", "));
+                }
+                continue;
+            }
+        };
+        let (cmd, arg) = (cmd_owned.as_str(), arg.as_str());
         match cmd {
             "/help" | "/?" => help(),
             "/show" | "/config" => show(&s),
@@ -496,7 +565,17 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
                 if arg.is_empty() {
                     pick_models(&mut s);
                 } else {
-                    s.models = arg.split([',', ' ']).filter(|x| !x.is_empty()).map(String::from).collect();
+                    // A model id is long and easy to fumble; an unrecognized one
+                    // otherwise fails much later, inside the run.
+                    let catalog: Vec<String> = harness::providers().iter()
+                        .flat_map(|p| p.models.iter().map(move |m| format!("{}:{}", p.key, m)))
+                        .collect();
+                    s.models = arg.split([',', ' ']).filter(|x| !x.is_empty()).map(|x| {
+                        match crate::rectify::nearest_model(x, &catalog) {
+                            Some(fixed) => { println!("  \x1b[2m↻ corrected '{x}' → '{fixed}'\x1b[0m"); fixed }
+                            None => x.to_string(),
+                        }
+                    }).collect();
                     println!("  models: {}", s.models.join(", "));
                 }
                 // If a run is paused on exhaustion, queue the newly-chosen models
@@ -518,9 +597,11 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
                 if arg.is_empty() { println!("  target: {}", s.target.clone().unwrap_or_else(|| "(none) — set with /target <url[,url2,...]>, clear with /target clear".into())); }
                 else if arg == "clear" { s.target = None; println!("  target cleared"); }
                 else {
-                    // Accept one URL or a comma-separated list; normalize each.
+                    // Accept one URL or a comma-separated list; normalize each —
+                    // a missing scheme, a mistyped one (`htp://`, `https:/`) or
+                    // a trailing comma from a paste all resolve to one reading.
                     let ts: Vec<String> = arg.split(',').map(|x| x.trim()).filter(|x| !x.is_empty())
-                        .map(|x| if x.starts_with("http") { x.to_string() } else { format!("https://{x}") })
+                        .map(|x| crate::rectify::rectify_url(x).unwrap_or_else(|| x.to_string()))
                         .collect();
                     s.target = Some(ts.join(","));
                     if ts.len() > 1 { println!("  targets ({}): {}", ts.len(), ts.join(", ")); println!("  \x1b[2m/run tests them sequentially, one report each\x1b[0m"); }
@@ -640,7 +721,14 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
             "/mcp" => { s.mcp = !matches!(arg, "off" | "false" | "0" | "no"); println!("  Playwright MCP: {}", onoff(s.mcp)); }
             "/offline" => { s.offline = !matches!(arg, "off" | "false" | "0" | "no"); println!("  offline: {}", onoff(s.offline)); }
             "/integrations" | "/integration" => integrations_cmd(arg),
-            "/votes" => { s.vote_n = arg.parse().unwrap_or(s.vote_n); println!("  votes: {}", s.vote_n); }
+            "/votes" => {
+                // Out of range used to fall back to the current value in
+                // silence, so `/votes 30` looked applied and wasn't.
+                let (n, note) = crate::rectify::rectify_count(arg, 1, 9, s.vote_n);
+                if let Some(note) = note { println!("  \x1b[2m↻ {note}\x1b[0m"); }
+                s.vote_n = n;
+                println!("  votes: {}", s.vote_n);
+            }
             "/chain" => {
                 if arg.is_empty() { println!("  attack-chain depth: {} (0 disables) — set with /chain <n>", s.chain_depth); }
                 else { s.chain_depth = arg.parse().unwrap_or(s.chain_depth); println!("  attack-chain depth: {}", s.chain_depth); }
@@ -925,7 +1013,23 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
                 }
                 save_session(&s); println!("  session saved → {} · bye.", proj_dir().display()); break;
             }
-            other => println!("  unknown command '{other}' — try /help"),
+            "/memory" => memory_cmd(&s, arg),
+            "/forget" => {
+                if arg.trim().is_empty() {
+                    println!("  usage: /forget <text> — drops every memory whose text contains it");
+                } else {
+                    let mut mem = harness::memory::Memory::open(proj_dir().join("memory"));
+                    let n = mem.forget(arg.trim());
+                    println!("  forgot {n} memo(s) matching '{}'", arg.trim());
+                }
+            }
+            "/graph" => {
+                let g = harness::knowledge_graph::KnowledgeGraph::load(proj_dir().join("graph.json"));
+                print!("{}", g.summary());
+            }
+            // Rectification only forwards commands listed in ACCEPTED, so
+            // reaching here means ACCEPTED lists something this match forgot.
+            other => println!("  '{other}' is listed but not implemented — please report this."),
         }
     }
     Ok(())
@@ -1348,6 +1452,47 @@ fn merge_findings(prior: Vec<Finding>, mut fresh: Vec<Finding>) -> Vec<Finding> 
     fresh
 }
 
+/// `/memory` — inspect what the harness has learned, or search it.
+///
+/// The four tiers are shown separately because they mean different things: an
+/// engagement memo is about *this* target, a reusable one is a lesson that
+/// already held on two of them. Collapsing them into one list would hide the
+/// distinction that makes the promotion ladder worth having.
+fn memory_cmd(s: &Session, arg: &str) {
+    let mem = harness::memory::Memory::open(proj_dir().join("memory"));
+    let (w, e, t, r) = mem.counts();
+    let q = arg.trim();
+    if q.is_empty() {
+        println!("  ┌ memory · working {w} · engagement {e} · technique {t} · reusable {r}");
+        let recent = mem.dump();
+        if recent.is_empty() {
+            println!("  │ (nothing learned yet — memory fills in as runs finish)");
+        }
+        for m in recent.iter().take(12) {
+            println!("  │ [{:<10} {:>3}%] {}", m.tier.as_str(), (m.confidence * 100.0) as u32, trunc(&m.text, 92));
+        }
+        if recent.len() > 12 {
+            println!("  │ … {} more · /memory <text> to search", recent.len() - 12);
+        }
+        println!("  └ /forget <text> removes matching memos");
+        return;
+    }
+    let hits = mem.recall(&harness::memory::Query {
+        text: q.to_string(),
+        target: s.target.clone().unwrap_or_default(),
+        limit: 15,
+        ..Default::default()
+    });
+    if hits.is_empty() {
+        println!("  no memory matches '{q}'");
+        return;
+    }
+    println!("  ── {} match(es) for '{q}' ──", hits.len());
+    for h in hits {
+        println!("  [{:.2}] \x1b[2m{:<10}\x1b[0m {}", h.score, h.memo.tier.as_str(), trunc(&h.memo.text, 96));
+    }
+}
+
 /// Project-local store: `<cwd>/.neurosploit/` so each project keeps its own
 /// session, run history and command history (resume on reopen). No DB needed —
 /// it's structured state, not semantic search.
@@ -1759,6 +1904,11 @@ fn help() {
     h("/diff",              "what changed vs the last run");
     h("/retest [n]",        "re-verify a past run's findings (re-runs the test)");
     h("/validate [n]",      "false-positive validate a recovered/past run (no re-test)");
+
+    println!("\n  \x1b[2mKNOWLEDGE\x1b[0m");
+    h("/memory [text]",     "what the harness learned (working·engagement·technique·reusable); search with text");
+    h("/forget <text>",     "drop every memory whose text matches");
+    h("/graph",             "attack knowledge graph: entities, top attack paths, unproven frontier");
 
     println!("\n  \x1b[2mINTEGRATIONS\x1b[0m");
     h("/integrations",      "show · enable/disable github|gitlab|jira · setup <name>");
@@ -2287,4 +2437,23 @@ mod nl_tests {
         assert_eq!(parse_intent_fast("recon 4 em example.com").0.recon, Some(4));
     }
 
+    /// Rectification forwards only what ACCEPTED lists, so anything offered by
+    /// Tab completion but missing from ACCEPTED would become unreachable — the
+    /// user would type a real command and be told it doesn't exist.
+    #[test]
+    fn every_completable_command_is_accepted_by_the_dispatch() {
+        let missing: Vec<&&str> = COMMANDS.iter().filter(|c| !ACCEPTED.contains(c)).collect();
+        assert!(missing.is_empty(), "completed but not dispatchable: {missing:?}");
+    }
+
+    #[test]
+    fn accepted_commands_survive_rectification_untouched() {
+        for c in ACCEPTED {
+            assert_eq!(
+                crate::rectify::rectify_command(c, ACCEPTED),
+                crate::rectify::Fix::Accepted,
+                "{c} must reach the dispatch as typed"
+            );
+        }
+    }
 }

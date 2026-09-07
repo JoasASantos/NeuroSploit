@@ -391,6 +391,61 @@ async function listRuns() {
   return runs;
 }
 
+/// Flat aggregate over every run for the dashboard.
+///
+/// Returns per-finding tuples rather than a computed risk number: the FAIR
+/// estimate depends on assumptions (contact frequency, loss magnitude per
+/// severity) that belong to the operator, not to this server, so the browser
+/// computes it from parameters the operator can see and change.
+async function stats() {
+  let ids = [];
+  try {
+    ids = (await fsp.readdir(RUNS_DIR)).filter((d) => d.startsWith('ns-'));
+  } catch {
+    return { runs: [], findings: [], generated: Date.now() };
+  }
+  const runs = [];
+  const findings = [];
+  await Promise.all(ids.map(async (id) => {
+    const dir = path.join(RUNS_DIR, id);
+    const [status, fs_] = await Promise.all([
+      readJsonSafe(path.join(dir, 'status.json'), {}),
+      readJsonSafe(path.join(dir, 'findings.json'), []),
+    ]);
+    const meta = await readJsonSafe(path.join(dir, 'meta.json'), {});
+    const tsMatch = id.match(/^ns-(\d+)-/);
+    const ts = status.ts || (tsMatch ? Number(tsMatch[1]) : 0);
+    const target = status.target || meta.target || id.replace(/^ns-\d+-/, '');
+    runs.push({
+      id,
+      ts,
+      name: engagementNames.get(id) || '',
+      target,
+      state: status.state || 'unknown',
+      agentsRan: status.agents_ran || 0,
+      findings: fs_.length,
+    });
+    for (const f of fs_) {
+      findings.push({
+        runId: id,
+        target,
+        ts,
+        severity: f.severity || 'Info',
+        cwe: f.cwe || '',
+        owasp: f.owasp || '',
+        stage: f.stage || '',
+        agent: f.agent || '',
+        title: f.title || '',
+        exploitability: f.exploitability || '',
+        confidence: typeof f.confidence === 'number' ? f.confidence : 0,
+        reviewStatus: f.review_status || '',
+      });
+    }
+  }));
+  runs.sort((a, b) => b.ts - a.ts);
+  return { runs, findings, generated: Date.now() };
+}
+
 async function runDetail(id) {
   const dir = safeRunDir(id);
   if (!dir) return null;
@@ -960,6 +1015,11 @@ const server = http.createServer(async (req, res) => {
       const ping = setInterval(() => res.write(':ping\n\n'), 20000);
       req.on('close', () => { session.off('data', onData); session.off('close', onClose); clearInterval(ping); });
       return;
+    }
+
+    // ---- aggregate stats for the dashboard ----
+    if (req.method === 'GET' && p === '/api/stats') {
+      return sendJson(res, 200, await stats());
     }
 
     if (req.method === 'GET' && p === '/api/meta') {
