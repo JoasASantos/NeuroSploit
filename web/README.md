@@ -2,8 +2,8 @@
 
 A browser UI for the `neurosploit` CLI harness: a 5-step engagement wizard (Asset → Scope & Auth
 → Leads → Model & Run → Review), a live structured findings view with a generative attack-path
-graph, run history, an Auth & Keys menu, and a real REPL — all driven by spawning the actual CLI
-binary, never a reimplementation of harness logic.
+graph, run history, an Auth & Keys menu, and a real terminal — all driven by spawning the actual
+CLI binary, never a reimplementation of harness logic.
 
 - **Asset** — pick black/white/grey-box, host/infra, or AI/LLM, set the target or repo.
 - **Scope & Auth** — objective, focus, out-of-scope, and a link into the Auth & Keys menu.
@@ -17,6 +17,13 @@ binary, never a reimplementation of harness logic.
 - **Generative Attack Path Chaining** — findings are grouped into kill-chain columns
   (recon → initial-access → execution → privesc → lateral → exfil → impact) with chained findings
   linked back to their parent, built live as findings stream in.
+- **Terminal dock (xterm.js)** — `❭_` in the sidebar, the topbar button, or `Ctrl+\`` opens a
+  docked terminal running a real `neurosploit` REPL session. Its stdout is streamed **unstripped**,
+  so the harness's own colour and box-drawn panels render as they do in a local shell. Line
+  editing (echo, ←/→, history, `Tab` slash-command completion, `Ctrl+C`/`L`/`U`/`A`/`E`) is local
+  because the child is spawned over a pipe, not a PTY, and therefore never echoes. The target
+  picker in its header switches between a standalone session and the **running engagement**, so
+  mid-run instructions go to the same process that is doing the testing.
 - **Real REPL underneath run/whitebox/greybox** — the wizard scripts an actual interactive
   `neurosploit` session instead of a one-shot CLI call, so it keeps reading stdin while the
   engagement streams. The Activity log tab grows a `❭` prompt box to send `/status`, `/stop`,
@@ -39,8 +46,9 @@ web/
 ├── server.js         backend: static server + agents_md/runs reader + CLI process manager
 ├── public/
 │   ├── index.html     SPA shell
-│   ├── style.css       lead-board / live-run / REPL drawer styling
-│   └── app.js          client logic (fetch + EventSource, no framework)
+│   ├── style.css       lead-board / live-run / terminal-dock styling
+│   ├── app.js          client logic (fetch + EventSource + terminal, no framework)
+│   └── vendor/         xterm.js + fit addon (vendored; nothing is fetched at runtime)
 ├── API.md
 └── package.json
 ```

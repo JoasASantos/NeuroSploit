@@ -250,6 +250,10 @@ Zero npm dependencies (Node built-ins only).
   log tab grows a prompt box (`❭`) to send `/status`, `/stop`, `/continue`, or a plain-language
   instruction mid-run — same REPL described in [§6](TUTORIAL.md#6-the-interactive-repl). `host` /
   `aitest` / `skills` stay one-shot (their onboarding menu can't be scripted over piped stdin).
+- **Terminal dock** — `Ctrl+\`` (or `❭_` in the sidebar) opens a real terminal, xterm.js over an
+  unstripped stdout stream, so the harness renders with its own colour and panels. Its header
+  switches the terminal between a standalone REPL session and the engagement currently running,
+  with local line editing: history, `Tab` completion over the slash commands, `Ctrl+C`/`L`/`U`.
 - **Auth & Keys** (one menu) — target auth header + named roles for IDOR/BOLA/BFLA testing
   (materializes an ephemeral `creds.yaml` for the run), and per-provider API keys held in the
   server process's memory only — never written to disk.

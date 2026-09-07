@@ -233,7 +233,11 @@ Starts a session. Response: `{ "id": "<session-uuid>" }`.
 
 ### `POST /api/repl/:id/input`
 
-Body: `{ "line": "/status" }`. Writes `line + "\n"` to the child's stdin.
+Body: `{ "line": "/status" }` — writes `line + "\n"` to the child's stdin — or `{ "data": "..." }`
+to write bytes verbatim (what the browser terminal sends, newline included). A `data` payload
+containing `\u0003` (Ctrl-C) is delivered as `SIGINT` to the child instead of being written:
+without a tty in between, nothing else turns that byte into an interrupt. Responds `409` once the
+session's stdin has closed.
 
 ### `POST /api/repl/:id/stop`
 
@@ -243,11 +247,12 @@ Sends `SIGTERM` to the session's child process.
 
 | event   | data                    | meaning |
 |---------|-------------------------|---------|
-| `data`  | `{ "chunk": "..." }`   | raw stdout/stderr chunk (ANSI stripped), not line-buffered |
+| `data`  | `{ "chunk": "..." }`   | raw stdout/stderr chunk, ANSI **preserved**, not line-buffered |
 | `close` | `{}`                    | child process exited |
 
-Replays the session's buffered output (capped at the last 5000 chunks) on connect, same as the
-exploit stream.
+Replays the session's buffered output (capped at the last ~512 KB) on connect, same as the exploit
+stream. Chunks are decoded with a streaming UTF-8 decoder, so a multi-byte character split across
+two reads still arrives intact — the browser feeds them straight into xterm.js.
 
 ---
 

@@ -22,6 +22,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
+const { StringDecoder } = require('node:string_decoder');
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -652,6 +653,11 @@ async function startJobViaRepl(body) {
 // ---------------------------------------------------------------------------
 // REPL sessions — spawn `neurosploit` with no subcommand (Reader::Plain kicks
 // in over a piped stdin) and forward stdin/stdout verbatim: a real REPL.
+//
+// The stream is NOT ANSI-stripped: the browser renders it in xterm.js, which
+// is the same terminal emulator a local shell would drive, so colour, cursor
+// moves and the harness's own spinners arrive intact. Stripping here would
+// hand the emulator a degraded copy of what the CLI actually printed.
 // ---------------------------------------------------------------------------
 
 const replSessions = new Map();
@@ -663,10 +669,17 @@ class ReplSession extends EventEmitter {
     this.child = child;
     this.done = false;
     this.buffer = [];
+    this.bytes = 0;
   }
   push(chunk) {
     this.buffer.push(chunk);
-    if (this.buffer.length > 5000) this.buffer.shift();
+    this.bytes += chunk.length;
+    // Bound the replay buffer by size, not chunk count: one chunk can be a
+    // single keystroke echo or a whole recon dump, so counting chunks caps
+    // memory nowhere near where it's meant to.
+    while (this.bytes > 512_000 && this.buffer.length > 1) {
+      this.bytes -= this.buffer.shift().length;
+    }
     this.emit('data', chunk);
   }
 }
@@ -674,20 +687,28 @@ class ReplSession extends EventEmitter {
 function startRepl() {
   if (!BIN) throw new Error('neurosploit binary not found — run `cargo build --release` in neurosploit-rs/');
   const id = crypto.randomUUID();
-  const child = spawn(BIN, [], { cwd: ROOT, env: { ...process.env, ...envOverrides() } });
+  const child = spawn(BIN, [], {
+    cwd: ROOT,
+    // Without TERM the harness assumes a dumb terminal and drops colour; the
+    // browser side is a full xterm, so say so.
+    env: { ...process.env, ...envOverrides(), TERM: 'xterm-256color' },
+  });
   const session = new ReplSession(id, child);
   replSessions.set(id, session);
-  const onData = (chunk) => session.push(stripAnsi(chunk.toString('utf8')));
-  child.stdout.on('data', onData);
-  child.stderr.on('data', onData);
+  // One decoder per stream: a chunk boundary can land mid-UTF-8-sequence, and
+  // decoding each chunk independently would emit replacement characters.
+  const decOut = new StringDecoder('utf8');
+  const decErr = new StringDecoder('utf8');
+  child.stdout.on('data', (c) => session.push(decOut.write(c)));
+  child.stderr.on('data', (c) => session.push(decErr.write(c)));
   child.on('close', (code) => {
     session.done = true;
-    session.push(`\n[repl session ended, exit code ${code}]\n`);
+    session.push(`\r\n\x1b[2m[repl session ended, exit code ${code}]\x1b[0m\r\n`);
     session.emit('close');
   });
   child.on('error', (err) => {
     session.done = true;
-    session.push(`\n[failed to start neurosploit: ${err.message}]\n`);
+    session.push(`\r\n\x1b[31m[failed to start neurosploit: ${err.message}]\x1b[0m\r\n`);
     session.emit('close');
   });
   return session;
@@ -904,7 +925,18 @@ const server = http.createServer(async (req, res) => {
       const session = replSessions.get(m[1]);
       if (!session) return sendJson(res, 404, { error: 'session not found' });
       const body = await readBody(req);
-      session.child.stdin.write(String(body.line ?? '') + '\n');
+      // `data` is raw (whatever the terminal captured); `line` is the older
+      // line-oriented form and still gets its newline appended here.
+      const raw = body.data != null ? String(body.data) : String(body.line ?? '') + '\n';
+      // Ctrl-C over a pipe is not a signal — nothing turns byte 0x03 into
+      // SIGINT when there is no tty in between, so the interrupt has to be
+      // delivered explicitly or it would silently do nothing.
+      if (raw.includes('\x03')) {
+        session.child.kill('SIGINT');
+        return sendJson(res, 200, { ok: true, signalled: 'SIGINT' });
+      }
+      if (!session.child.stdin.writable) return sendJson(res, 409, { error: 'session has ended' });
+      session.child.stdin.write(raw);
       return sendJson(res, 200, { ok: true });
     }
     m = p.match(/^\/api\/repl\/([^/]+)\/stop$/);

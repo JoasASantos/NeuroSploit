@@ -23,6 +23,7 @@ const state = {
   customLeads: [],
   filter: 'all',
   search: '',
+  expandedCats: new Set(),
   providers: [],
   auth: { header: '', roles: [] },
   credsPath: '',
@@ -31,7 +32,12 @@ const state = {
   currentJob: null,
   currentDetailId: null,
   detailPoll: null,
-  replId: null, replEs: null,
+  // Findings tables (live + past run) share one sort/filter model so the two
+  // views can't drift into behaving differently.
+  tables: {
+    live: { sort: 'severity', dir: 1, query: '', sev: null },
+    detail: { sort: 'severity', dir: 1, query: '', sev: null },
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -61,7 +67,42 @@ function sevClass(sev) {
   return ['sev-critical', 'sev-high', 'sev-medium', 'sev-low', 'sev-info'][sevRank(sev)];
 }
 function show(el, on) { if (el) el.hidden = !on; }
-function toast(msg) { console.log('[ns]', msg); }
+
+// Failures used to surface through `alert()`, which blocks the page and hides
+// the very screen the operator needs to fix. Toasts stay out of the way and
+// let several messages stack during a run.
+function toast(msg, kind = 'info', ms = 5000) {
+  const root = $('#toasts');
+  if (!root) return;
+  const el = document.createElement('div');
+  el.className = `toast toast-${kind}`;
+  el.textContent = msg;
+  el.addEventListener('click', () => el.remove());
+  root.appendChild(el);
+  if (ms) setTimeout(() => el.remove(), ms);
+  return el;
+}
+
+function fieldError(id, msg) {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = msg || '';
+  show(el, !!msg);
+}
+function clearFieldErrors() { $$('.field-error').forEach((el) => { el.textContent = ''; el.hidden = true; }); }
+
+function timeAgo(ts) {
+  if (!ts) return '';
+  const secs = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+  if (secs < 60) return 'just now';
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(ts * 1000).toLocaleDateString();
+}
 
 // ---------------------------------------------------------------------------
 // theme
@@ -71,6 +112,9 @@ function applyTheme() {
   document.documentElement.setAttribute('data-theme', state.theme);
   $('#btnThemeToggle').textContent = state.theme === 'dark' ? '☀' : '☾';
   $('#btnThemeToggle').title = state.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
+  // xterm paints into a canvas and doesn't inherit CSS variables — it has to
+  // be told the palette changed.
+  if (term.xterm) term.xterm.options.theme = termColors();
 }
 $('#btnThemeToggle').addEventListener('click', () => {
   state.theme = state.theme === 'dark' ? 'light' : 'dark';
@@ -96,13 +140,26 @@ function goToStep(n) {
   updateWizardSummary();
 }
 
+// Errors land next to the field they belong to. A modal alert forced the
+// operator to dismiss the message before they could see (or fix) the input it
+// was about — and lost it entirely once dismissed.
 function validateStep(n) {
-  if (n === 0) {
-    if (!$('#fieldName').value.trim()) { alert('Name the engagement first — it identifies this run in the sidebar and history.'); $('#fieldName').focus(); return false; }
-    const target = $('#fieldTarget').value.trim();
-    if (!target) { alert(`${MODE_LABELS[state.mode].target} is required.`); return false; }
-    if (state.mode === 'greybox' && !$('#fieldRepo').value.trim()) { alert('Source repo is required for grey-box.'); return false; }
+  if (n !== 0) return true;
+  clearFieldErrors();
+  let firstBad = null;
+  if (!$('#fieldName').value.trim()) {
+    fieldError('#errName', 'Name the engagement — this is how it is labelled in the sidebar and run history.');
+    firstBad = firstBad || '#fieldName';
   }
+  if (!$('#fieldTarget').value.trim()) {
+    fieldError('#errTarget', `${MODE_LABELS[state.mode].target} is required.`);
+    firstBad = firstBad || '#fieldTarget';
+  }
+  if (state.mode === 'greybox' && !$('#fieldRepo').value.trim()) {
+    fieldError('#errRepo', 'Grey-box tests the running app against its source — the repo is required.');
+    firstBad = firstBad || '#fieldRepo';
+  }
+  if (firstBad) { $(firstBad).focus(); return false; }
   return true;
 }
 
@@ -118,7 +175,9 @@ function updateWizardSummary() {
   const target = $('#fieldTarget').value.trim() || '(not set)';
   $('#wizardSummary').innerHTML = `Step ${state.step + 1} of ${STEP_COUNT} · <b>${esc(name)}</b> · ${esc(state.mode)} · ${esc(target)}`;
 }
-$('#fieldName').addEventListener('input', updateWizardSummary);
+$('#fieldName').addEventListener('input', () => { updateWizardSummary(); fieldError('#errName', ''); });
+$('#fieldTarget').addEventListener('input', () => fieldError('#errTarget', ''));
+$('#fieldRepo').addEventListener('input', () => fieldError('#errRepo', ''));
 
 // mode tiles
 function selectMode(mode) {
@@ -150,7 +209,12 @@ function renderBoard() {
   for (const group of state.categories) {
     const selCount = group.agents.filter((a) => state.selected.has(a.id)).length;
     const card = document.createElement('div');
-    card.className = 'cat-card';
+    // 412 leads across ~30 categories: expanded by default that is a wall of
+    // switches you have to scroll past to reach anything. Collapsed keeps the
+    // whole taxonomy on one screen; a search auto-expands what it matches.
+    const open = state.expandedCats.has(group.category);
+    card.className = 'cat-card' + (open ? '' : ' collapsed');
+    card.dataset.category = group.category;
     card.innerHTML = `
       <div class="cat-head">
         <label class="switch">
@@ -158,6 +222,7 @@ function renderBoard() {
           <span class="track"></span><span class="thumb"></span>
         </label>
         <span class="cat-name">${esc(group.category)}</span>
+        <span class="cat-match" hidden></span>
         <span class="cat-count">${selCount} / ${group.agents.length}</span>
         <span class="caret">▾</span>
       </div>
@@ -181,7 +246,9 @@ function renderBoard() {
     }
     card.querySelector('.cat-head').addEventListener('click', (e) => {
       if (e.target.closest('.switch')) return;
-      card.classList.toggle('collapsed');
+      const nowCollapsed = card.classList.toggle('collapsed');
+      if (nowCollapsed) state.expandedCats.delete(group.category);
+      else state.expandedCats.add(group.category);
     });
     const catToggle = card.querySelector('.cat-toggle');
     // A partial selection (some but not all agents on) must look "partial",
@@ -218,6 +285,7 @@ function updateChips() {
 
 function applyFilters() {
   const q = state.search.trim().toLowerCase();
+  const narrowing = !!q || state.filter !== 'all';
   $$('.agent-row').forEach((row) => {
     const isSel = state.selected.has(row.dataset.id);
     let visible = true;
@@ -226,10 +294,22 @@ function applyFilters() {
     if (visible && q) visible = row.dataset.title.includes(q);
     row.classList.toggle('hidden-by-search', !visible);
   });
+  let anyCardVisible = false;
   $$('.cat-card').forEach((card) => {
-    const anyVisible = $$('.agent-row', card).some((r) => !r.classList.contains('hidden-by-search'));
-    card.style.display = anyVisible ? '' : 'none';
+    const shown = $$('.agent-row', card).filter((r) => !r.classList.contains('hidden-by-search'));
+    card.style.display = shown.length ? '' : 'none';
+    if (shown.length) anyCardVisible = true;
+    // A search that matches leads inside a collapsed category has to open it —
+    // otherwise the hit count changes and nothing visibly happens.
+    if (narrowing && shown.length) card.classList.remove('collapsed');
+    else if (!narrowing && !state.expandedCats.has(card.dataset.category)) card.classList.add('collapsed');
+    const count = card.querySelector('.cat-match');
+    if (count) {
+      count.textContent = narrowing ? `${shown.length} match${shown.length === 1 ? '' : 'es'}` : '';
+      count.hidden = !narrowing;
+    }
   });
+  show($('#leadsEmpty'), !anyCardVisible);
 }
 
 $$('.chip').forEach((chip) => chip.addEventListener('click', () => {
@@ -243,38 +323,65 @@ $('#leadSearch').addEventListener('input', (e) => { state.search = e.target.valu
 function renderCustomLeads() {
   const root = $('#customLeadsList');
   root.innerHTML = state.customLeads.map((text, i) => `
-    <div class="custom-lead-chip"><span>${esc(text)}</span><span class="x" data-i="${i}">✕</span></div>
+    <div class="custom-lead-chip"><span>${esc(text)}</span><span class="x" data-i="${i}" title="Remove">✕</span></div>
   `).join('');
+  // An empty list still occupied a gap the size of a card; hide it outright.
+  show(root, state.customLeads.length > 0);
   $$('.custom-lead-chip .x', root).forEach((x) => x.addEventListener('click', () => {
     state.customLeads.splice(Number(x.dataset.i), 1);
     renderCustomLeads();
   }));
 }
-$('#btnCustomLead').addEventListener('click', async () => {
-  const text = prompt('Describe the custom lead — Claude (Opus, subscription) generates a real specialist agent for it, ready to pin:');
-  if (!text || !text.trim()) return;
-  const btn = $('#btnCustomLead');
+
+// `prompt()` gave a one-line box with no room to describe a lead, no way to
+// see the wizard behind it, and no place to report a generation failure.
+function openLeadModal() {
+  $('#leadDesc').value = '';
+  fieldError('#errLead', '');
+  show($('#leadModal'), true);
+  $('#leadDesc').focus();
+}
+function closeLeadModal() { show($('#leadModal'), false); }
+$('#btnCustomLead').addEventListener('click', openLeadModal);
+$('#btnCloseLead').addEventListener('click', closeLeadModal);
+$('#btnLeadCancel').addEventListener('click', closeLeadModal);
+$('#leadModal').addEventListener('click', (e) => { if (e.target.id === 'leadModal') closeLeadModal(); });
+$('#leadDesc').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) $('#btnLeadGenerate').click();
+});
+$('#btnLeadGenerate').addEventListener('click', async () => {
+  const text = $('#leadDesc').value.trim();
+  if (!text) { fieldError('#errLead', 'Describe what the lead should test.'); return; }
+  const btn = $('#btnLeadGenerate');
   const original = btn.textContent;
   btn.disabled = true;
   btn.textContent = 'Generating…';
   try {
     const { agent } = await api('/api/leads/generate', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: text.trim() }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: text }),
     });
     await loadAgents(); // re-read agents_md/ so the new file appears in its category
     state.selected.add(agent.id);
     renderBoard();
-    alert(`Generated and pinned: ${agent.title}`);
+    closeLeadModal();
+    toast(`Generated and pinned: ${agent.title}`, 'ok');
   } catch (e) {
     // Fall back to the old behavior — fold the raw text into --focus context
     // — so a missing/logged-out Claude CLI doesn't lose the operator's intent.
-    state.customLeads.push(text.trim());
+    state.customLeads.push(text);
     renderCustomLeads();
-    alert(`Couldn't generate a skill (${e.message}) — added as a focus hint instead.`);
+    closeLeadModal();
+    toast(`Couldn't generate a skill (${e.message}) — kept as a focus hint instead.`, 'warn', 8000);
   } finally {
     btn.disabled = false;
     btn.textContent = original;
   }
+});
+$('#btnExpandAll').addEventListener('click', () => {
+  const anyCollapsed = $$('.cat-card').some((c) => c.classList.contains('collapsed'));
+  state.expandedCats = anyCollapsed ? new Set(state.categories.map((g) => g.category)) : new Set();
+  $$('.cat-card').forEach((c) => c.classList.toggle('collapsed', !anyCollapsed));
+  $('#btnExpandAll').textContent = anyCollapsed ? 'Collapse all' : 'Expand all';
 });
 $('#btnSelectAll').addEventListener('click', () => {
   // Respects the current search/filter — selects only what's visible, so a
@@ -393,7 +500,7 @@ async function startExploitation() {
     const { id } = await api('/api/exploit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     attachLiveJob(id, body.target || body.repo, name, body.agents);
   } catch (e) {
-    alert('Failed to start: ' + e.message);
+    toast(`Failed to start: ${e.message}`, 'error', 9000);
   } finally {
     $('#btnLaunch').disabled = false;
     $('#btnLaunch').textContent = 'Start Exploitation →';
@@ -433,11 +540,12 @@ function attachLiveJob(id, target, name, pinnedAgents) {
   $('#livePhase').textContent = 'starting';
   $('#phaseDot').style.background = '';
   $('#phaseDot').classList.remove('static');
-  $('#liveFindingsTable tbody').innerHTML = '';
   $('#liveAttackPath').innerHTML = '';
   $('#logList').innerHTML = '';
-  $('#liveFindingsCount').textContent = '0';
-  show($('#liveFindingsEmpty'), true);
+  state.tables.live.sev = null;
+  state.tables.live.query = '';
+  $('#liveFindingSearch').value = '';
+  renderFindings('live');
   $('#progressBar').classList.add('indeterminate');
   $('#progressFill').style.width = '0%';
   $('#progressLabel').textContent = '0 / ? agents';
@@ -445,6 +553,7 @@ function attachLiveJob(id, target, name, pinnedAgents) {
   show($('#btnOpenReport'), false);
   show($('#sendPromptRow'), false);
   show($('#sendPromptHelp'), false);
+  termSyncTargets();
 
   const es = new EventSource(`/api/exploit/${id}/events`);
   state.currentJob.es = es;
@@ -502,6 +611,9 @@ function appendLog(line) {
   const list = $('#logList');
   list.appendChild(div);
   list.scrollTop = list.scrollHeight;
+  // When the terminal is attached to this engagement it is the same stream —
+  // mirror it there so the operator types and reads in one place.
+  if (term.mode === 'job' && term.xterm) termWrite(line + '\r\n');
 }
 
 // Only run/whitebox/greybox jobs are REPL-backed (interactive: true) — the
@@ -532,10 +644,82 @@ function findingRow(f, idx) {
     <td><span class="sev ${sevClass(f.severity)}">${esc(f.severity)}</span></td>
     <td>${esc(f.title)}</td>
     <td class="col-endpoint" title="${esc(f.endpoint)}">${esc(f.endpoint)}</td>
-    <td>${esc(f.cwe)}</td>
-    <td>${esc(f.agent)}</td>
+    <td class="col-cwe">${esc(f.cwe)}</td>
+    <td class="col-agent">${esc(f.agent)}</td>
     <td class="col-conf">${f.confidence ? f.confidence.toFixed(2) : '—'}</td>
   </tr>`;
+}
+
+// ---------------------------------------------------------------------------
+// findings table — sort / filter / severity summary
+//
+// The table used to render in whatever order the harness emitted findings,
+// which puts a LOW above a CRITICAL and makes a 27-row result unreadable.
+// Sorting defaults to severity so the worst finding is the first thing on
+// screen, and the summary doubles as a one-click severity filter.
+// ---------------------------------------------------------------------------
+
+const TABLES = {
+  live: { tbody: '#liveFindingsTable tbody', table: '#liveFindingsTable', empty: '#liveFindingsEmpty', count: '#liveFindingsCount', summary: '#liveSevSummary', search: '#liveFindingSearch' },
+  detail: { tbody: '#detailFindingsTable tbody', table: '#detailFindingsTable', empty: '#detailFindingsEmpty', count: '#detailFindingsCount', summary: '#detailSevSummary', search: '#detailFindingSearch' },
+};
+const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
+
+function tableFindings(which) {
+  return which === 'live' ? (state.currentJob?.findings || []) : (state.detailFindings || []);
+}
+
+function renderFindings(which) {
+  const cfg = TABLES[which];
+  const t = state.tables[which];
+  const all = tableFindings(which);
+  const q = t.query.trim().toLowerCase();
+
+  // Carry the original index: the row click handler looks the finding up by
+  // position in the unsorted array.
+  let rows = all.map((f, idx) => ({ f, idx }));
+  if (t.sev) rows = rows.filter(({ f }) => SEV_ORDER[sevRank(f.severity)] === t.sev);
+  if (q) rows = rows.filter(({ f }) => `${f.title} ${f.endpoint} ${f.cwe} ${f.agent} ${f.severity}`.toLowerCase().includes(q));
+
+  const key = t.sort;
+  rows.sort((a, b) => {
+    let cmp;
+    if (key === 'severity') cmp = sevRank(a.f.severity) - sevRank(b.f.severity) || (b.f.confidence || 0) - (a.f.confidence || 0);
+    else if (key === 'confidence') cmp = (b.f.confidence || 0) - (a.f.confidence || 0);
+    else cmp = String(a.f[key] || '').localeCompare(String(b.f[key] || ''));
+    return cmp * t.dir;
+  });
+
+  $(cfg.tbody).innerHTML = rows.map(({ f, idx }) => findingRow(f, idx)).join('');
+  $(cfg.count).textContent = all.length;
+  show($(cfg.empty), rows.length === 0);
+  $(cfg.empty).textContent = all.length && !rows.length
+    ? 'No finding matches this filter.'
+    : (which === 'live' ? 'No validated findings yet.' : 'No validated findings.');
+
+  const counts = {};
+  for (const f of all) { const s = SEV_ORDER[sevRank(f.severity)]; counts[s] = (counts[s] || 0) + 1; }
+  $(cfg.summary).innerHTML = SEV_ORDER.filter((s) => counts[s]).map((s) => `
+    <button class="sev-pill sev-${s}${t.sev === s ? ' picked' : ''}" data-sev="${s}" title="${t.sev === s ? 'Show all severities' : `Show only ${s}`}">${s} <b>${counts[s]}</b></button>
+  `).join('') || '<span class="field-help">No findings yet.</span>';
+  $$(`${cfg.summary} .sev-pill`).forEach((btn) => btn.addEventListener('click', () => {
+    t.sev = t.sev === btn.dataset.sev ? null : btn.dataset.sev;
+    renderFindings(which);
+  }));
+
+  $$(`${cfg.table} thead th`).forEach((th) => th.classList.toggle('sorted', th.dataset.sort === key));
+  $$(`${cfg.table} thead th`).forEach((th) => th.dataset.dir = th.dataset.sort === key ? (t.dir > 0 ? 'asc' : 'desc') : '');
+}
+
+for (const [which, cfg] of Object.entries(TABLES)) {
+  $(cfg.search).addEventListener('input', (e) => { state.tables[which].query = e.target.value; renderFindings(which); });
+  $$(`${cfg.table} thead th[data-sort]`).forEach((th) => {
+    th.addEventListener('click', () => {
+      const t = state.tables[which];
+      if (t.sort === th.dataset.sort) t.dir *= -1; else { t.sort = th.dataset.sort; t.dir = 1; }
+      renderFindings(which);
+    });
+  });
 }
 
 // Click any finding row (live or past-run) to open the full detail modal —
@@ -552,11 +736,8 @@ bindFindingTableClicks('#liveFindingsTable tbody', () => state.currentJob?.findi
 bindFindingTableClicks('#detailFindingsTable tbody', () => state.detailFindings || [], () => state.currentDetailId, () => state.detailPocs || []);
 
 function addFinding(f) {
-  const idx = state.currentJob.findings.length;
   state.currentJob.findings.push(f);
-  $('#liveFindingsTable tbody').insertAdjacentHTML('beforeend', findingRow(f, idx));
-  $('#liveFindingsCount').textContent = state.currentJob.findings.length;
-  show($('#liveFindingsEmpty'), false);
+  renderFindings('live');
   renderAttackPath($('#liveAttackPath'), state.currentJob.findings, state.currentJob.target);
 }
 
@@ -588,6 +769,8 @@ function leaveLiveJob() {
   localStorage.removeItem(ACTIVE_JOB_KEY);
   clearInterval(state.currentJob?.pocPoll);
   state.currentJob?.es?.close();
+  state.currentJob = null;
+  termSyncTargets();
 }
 $('#btnBackToBoard').addEventListener('click', () => { leaveLiveJob(); show($('#liveView'), false); show($('#wizardView'), true); });
 $('#btnDetailBack').addEventListener('click', () => { clearInterval(state.detailPoll); show($('#detailView'), false); show($('#wizardView'), true); });
@@ -830,7 +1013,14 @@ function renderSidebar() {
     for (const r of g.items) {
       const btn = document.createElement('button');
       btn.className = 'sb-run' + (state.currentDetailId === r.id ? ' active' : '');
-      btn.innerHTML = `<span class="name">${esc(r.name || r.target)}</span><span class="sub">${r.name ? esc(r.target) + ' · ' : ''}${r.findings} finding(s)</span>`;
+      // Every line here truncates: a long target URL used to run past the
+      // sidebar's edge and collide with the main pane.
+      const worst = SEV_ORDER.find((s) => Object.entries(r.severities || {}).some(([k, n]) => n && SEV_ORDER[sevRank(k)] === s));
+      btn.innerHTML = `
+        <span class="name">${worst ? `<span class="run-dot sev-dot-${worst}" title="worst severity: ${worst}"></span>` : ''}<span class="label">${esc(r.name || r.target)}</span></span>
+        <span class="sub">${r.name ? esc(r.target) : esc(r.id)}</span>
+        <span class="sub sub-facts"><span>${r.findings} finding${r.findings === 1 ? '' : 's'}</span><span>${esc(timeAgo(r.ts))}</span></span>`;
+      btn.title = `${r.name ? r.name + '\n' : ''}${r.target}\n${r.id}${r.ts ? '\n' + new Date(r.ts * 1000).toLocaleString() : ''}`;
       btn.addEventListener('click', () => openRun(r));
       items.appendChild(btn);
       const isThisJob = r.state === 'running' && state.currentJob && r.id === state.currentJob.runId;
@@ -860,17 +1050,33 @@ function openRun(run) {
 
 async function loadDetail(id) {
   clearInterval(state.detailPoll);
+  if (state.detailLoadedId !== id) {
+    // A filter left over from the previous run would silently hide findings
+    // in the one just opened.
+    state.tables.detail.sev = null;
+    state.tables.detail.query = '';
+    $('#detailFindingSearch').value = '';
+    state.detailLoadedId = id;
+  }
   const detail = await api(`/api/runs/${encodeURIComponent(id)}`);
   const target = detail.status?.target || detail.meta?.target || id;
   $('#detailTarget').textContent = detail.name || target;
   $('#detailTargetSub').textContent = detail.name ? target : '';
   $('#detailState').textContent = detail.status?.state || 'unknown';
-  $('#detailFindingsCount').textContent = detail.findings.length;
   state.detailFindings = detail.findings;
   state.detailPocs = detail.pocs || [];
-  const tbody = $('#detailFindingsTable tbody');
-  tbody.innerHTML = detail.findings.map((f, i) => findingRow(f, i)).join('');
-  show($('#detailFindingsEmpty'), detail.findings.length === 0);
+  renderFindings('detail');
+  // A past run's identity: when it ran, how many agents, what asset the recon
+  // decided it was. Previously the page showed only target + state, so two
+  // runs of the same target were indistinguishable.
+  const facts = [
+    detail.status?.ts ? `${new Date(detail.status.ts * 1000).toLocaleString()} · ${timeAgo(detail.status.ts)}` : '',
+    detail.status?.agents_ran ? `${detail.status.agents_ran} agents ran` : '',
+    detail.meta?.asset || '',
+    detail.pocs?.length ? `${detail.pocs.length} PoC script(s)` : '',
+    id,
+  ].filter(Boolean);
+  $('#detailFacts').innerHTML = facts.map((f) => `<span>${esc(f)}</span>`).join('');
   renderAttackPath($('#detailAttackPath'), detail.findings, target);
   const reportLink = $('#detailOpenReport');
   if (detail.assets.includes('report.html')) {
@@ -950,58 +1156,406 @@ async function refreshKeyStatus() {
 }
 
 // ---------------------------------------------------------------------------
-// REPL drawer — real CLI harness session
+// Terminal dock — the real CLI harness, rendered by xterm.js
+//
+// The old drawer was a <div> holding text: the harness's ANSI (colour, the
+// box-drawn /status panel, its spinners) arrived stripped, long lines rewrapped
+// mid-glyph, and it floated over the wizard's primary button. This is the same
+// arrangement the Unistrike console uses — a terminal emulator fed the child
+// process's raw stdout — docked so it takes vertical space instead of covering
+// the page.
+//
+// One difference matters and shapes the code below: there is no PTY here (the
+// server has no native deps), so the child sees a pipe and never echoes what
+// is typed. The line editor — echo, cursor, history, Tab completion — is
+// therefore local, and only completed lines cross the wire.
 // ---------------------------------------------------------------------------
 
-function openReplDrawer() { show($('#replDrawer'), true); if (!state.replId) startRepl(); }
+const SLASH_COMMANDS = [
+  '/agents', '/attach', '/auth', '/burp', '/chain', '/clear', '/config', '/context', '/continue',
+  '/creds', '/exclude', '/exit', '/expand', '/feed', '/finding', '/findings', '/focus', '/full',
+  '/go', '/goal', '/help', '/history', '/idle', '/instructions', '/integrations', '/key', '/log',
+  '/mcp', '/model', '/models', '/objective', '/offline', '/onboard', '/only', '/proxy', '/providers',
+  '/quit', '/recon', '/repo', '/report', '/results', '/resume', '/retest', '/revalidate', '/run',
+  '/runs', '/scope-out', '/show', '/status', '/stop', '/subscription', '/target', '/temp-email',
+  '/theme', '/timeout', '/useragent', '/validate', '/votes',
+];
 
-async function startRepl() {
-  $('#replOutput').textContent = '';
-  const { id } = await api('/api/repl', { method: 'POST' });
-  state.replId = id;
-  const es = new EventSource(`/api/repl/${id}/events`);
-  state.replEs = es;
-  es.addEventListener('data', (e) => {
-    const { chunk } = JSON.parse(e.data);
-    const out = $('#replOutput');
-    out.appendChild(document.createTextNode(chunk));
-    out.scrollTop = out.scrollHeight;
-  });
-  es.addEventListener('close', () => es.close());
+const term = {
+  xterm: null, fit: null, ro: null,
+  mode: 'session',        // 'session' = standalone REPL · 'job' = the live engagement
+  replId: null, es: null,
+  line: '', cursor: 0,
+  history: [], hIdx: null, stash: '',
+  booted: false,
+};
+
+function termColors() {
+  // Read the theme tokens rather than hardcoding: the console has a light mode,
+  // and a terminal with its own fixed palette looks pasted in.
+  const css = getComputedStyle(document.documentElement);
+  const v = (n, fb) => (css.getPropertyValue(n) || '').trim() || fb;
+  return {
+    background: v('--term-bg', '#0f0e10'),
+    foreground: v('--term-fg', '#d8d5cf'),
+    cursor: v('--accent', '#e08a3e'),
+    selectionBackground: v('--accent-soft', '#3a2a16'),
+  };
 }
 
-$('#fabRepl').addEventListener('click', openReplDrawer);
-$('#btnOpenRepl').addEventListener('click', openReplDrawer);
-$('#btnReplClose').addEventListener('click', () => show($('#replDrawer'), false));
-$('#btnReplRestart').addEventListener('click', async () => {
-  if (state.replId) await api(`/api/repl/${state.replId}/stop`, { method: 'POST' }).catch(() => {});
-  state.replEs?.close();
-  state.replId = null;
-  startRepl();
+function termStatus(stateName, text) {
+  $('#termDot').dataset.state = stateName;
+  $('#termStatus').textContent = text;
+}
+function termAlert(msg, kind = 'warn') {
+  const el = $('#termAlert');
+  el.textContent = msg || '';
+  el.dataset.kind = kind;
+  show(el, !!msg);
+}
+
+function termFit() {
+  if (!term.fit || !term.xterm || $('#termDock').hidden) return;
+  try { term.fit.fit(); } catch { /* container measured 0 — nothing to fit to */ }
+}
+
+function termEnsure() {
+  if (term.xterm) return true;
+  if (typeof Terminal === 'undefined') {
+    termAlert("xterm.js didn't load — the terminal can't run. Check /vendor/xterm.js is being served.", 'error');
+    termStatus('error', 'unavailable');
+    return false;
+  }
+  term.xterm = new Terminal({
+    fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--mono').trim() || 'monospace',
+    fontSize: 12,
+    cursorBlink: true,
+    convertEol: true,   // the harness writes bare \n; without this every line stair-steps
+    scrollback: 8000,
+    theme: termColors(),
+  });
+  if (window.FitAddon?.FitAddon) {
+    term.fit = new window.FitAddon.FitAddon();
+    term.xterm.loadAddon(term.fit);
+  }
+  term.xterm.open($('#termHost'));
+  term.xterm.onData(termOnData);
+  if (window.ResizeObserver) {
+    // The dock is user-resizable and the sidebar collapses — both change the
+    // terminal's box without firing a window resize.
+    term.ro = new ResizeObserver(() => termFit());
+    term.ro.observe($('#termHost'));
+  }
+  window.addEventListener('resize', termFit);
+  return true;
+}
+
+function termWrite(s) { term.xterm?.write(s); }
+function termNote(s) { termWrite(`\x1b[2m${s}\x1b[0m\r\n`); }
+
+/* ---- local line editing ---- */
+
+function termSetLine(s) {
+  if (!term.xterm) return;
+  if (term.cursor > 0) termWrite(`\x1b[${term.cursor}D`);
+  termWrite('\x1b[K' + s);
+  term.line = s;
+  term.cursor = s.length;
+}
+
+function termInsert(s) {
+  const rest = term.line.slice(term.cursor);
+  term.line = term.line.slice(0, term.cursor) + s + rest;
+  term.cursor += s.length;
+  termWrite(s + rest);
+  if (rest.length) termWrite(`\x1b[${rest.length}D`);
+}
+
+function termBackspace() {
+  if (term.cursor === 0) return;
+  term.line = term.line.slice(0, term.cursor - 1) + term.line.slice(term.cursor);
+  term.cursor--;
+  const rest = term.line.slice(term.cursor);
+  termWrite('\b' + rest + ' ' + `\x1b[${rest.length + 1}D`);
+}
+
+function termComplete() {
+  const word = term.line.slice(0, term.cursor);
+  if (!word.startsWith('/') || word.includes(' ')) return;
+  const hits = SLASH_COMMANDS.filter((c) => c.startsWith(word));
+  if (!hits.length) return;
+  if (hits.length === 1) { termInsert(hits[0].slice(word.length) + ' '); return; }
+  // Complete as far as the candidates agree, then show what's left to choose.
+  let common = hits[0];
+  for (const h of hits) { while (!h.startsWith(common)) common = common.slice(0, -1); }
+  const line = term.line;
+  termWrite('\r\n' + hits.join('  ') + '\r\n');
+  term.line = ''; term.cursor = 0;
+  termInsert(common.length > word.length ? common + line.slice(word.length) : line);
+}
+
+async function termSubmit() {
+  const line = term.line;
+  termWrite('\r\n');
+  term.line = ''; term.cursor = 0; term.hIdx = null;
+  if (line.trim()) {
+    term.history.push(line);
+    if (term.history.length > 200) term.history.shift();
+  }
+  try {
+    if (term.mode === 'job') {
+      const job = state.currentJob;
+      if (!job) { termNote('no live engagement attached — switch the target back to the standalone session.'); return; }
+      await api(`/api/exploit/${job.id}/input`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ line }),
+      });
+    } else {
+      if (!term.replId) await termConnect();
+      await api(`/api/repl/${term.replId}/input`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: line + '\n' }),
+      });
+    }
+  } catch (e) {
+    termWrite(`\x1b[31m[web] couldn't send: ${e.message}\x1b[0m\r\n`);
+  }
+}
+
+async function termInterrupt() {
+  termWrite('^C\r\n');
+  term.line = ''; term.cursor = 0;
+  try {
+    if (term.mode === 'job' && state.currentJob) {
+      // The engagement's own graceful stop — a raw SIGINT would kill the run
+      // before it validates and reports what it already found.
+      await api(`/api/exploit/${state.currentJob.id}/stop`, { method: 'POST' });
+      termNote('sent /stop to the engagement (validate what is found so far, then report).');
+    } else if (term.replId) {
+      await api(`/api/repl/${term.replId}/input`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: '\x03' }),
+      });
+    }
+  } catch (e) { termNote(`interrupt failed: ${e.message}`); }
+}
+
+function termOnData(data) {
+  // A paste arrives as one chunk and may carry newlines: split it so each line
+  // is submitted, instead of shipping embedded \n the REPL would mis-read.
+  if (data.length > 1 && !data.startsWith('\x1b') && /[\r\n]/.test(data)) {
+    const parts = data.split(/\r?\n/);
+    parts.forEach((part, i) => {
+      if (part) termInsert(part);
+      if (i < parts.length - 1) termSubmit();
+    });
+    return;
+  }
+  switch (data) {
+    case '\r': case '\n': return void termSubmit();
+    case '\x7f': case '\b': return termBackspace();
+    case '\x03': return void termInterrupt();
+    case '\x0c': return termClear();                       // Ctrl-L
+    case '\x15': return termSetLine('');                   // Ctrl-U
+    case '\x0b': {                                         // Ctrl-K — kill to end
+      const keep = term.line.slice(0, term.cursor);
+      const killed = term.line.length - keep.length;
+      term.line = keep;
+      if (killed) termWrite('\x1b[K');
+      return;
+    }
+    case '\x01': case '\x1b[H':                            // Ctrl-A / Home
+      if (term.cursor) { termWrite(`\x1b[${term.cursor}D`); term.cursor = 0; }
+      return;
+    case '\x05': case '\x1b[F': {                          // Ctrl-E / End
+      const move = term.line.length - term.cursor;
+      if (move) { termWrite(`\x1b[${move}C`); term.cursor = term.line.length; }
+      return;
+    }
+    case '\t': return termComplete();
+    case '\x1b[D': if (term.cursor > 0) { term.cursor--; termWrite('\x1b[D'); } return;
+    case '\x1b[C': if (term.cursor < term.line.length) { term.cursor++; termWrite('\x1b[C'); } return;
+    case '\x1b[A': {                                       // history back
+      if (!term.history.length) return;
+      if (term.hIdx === null) { term.stash = term.line; term.hIdx = term.history.length; }
+      if (term.hIdx > 0) term.hIdx--;
+      termSetLine(term.history[term.hIdx]);
+      return;
+    }
+    case '\x1b[B': {                                       // history forward
+      if (term.hIdx === null) return;
+      term.hIdx++;
+      if (term.hIdx >= term.history.length) { term.hIdx = null; termSetLine(term.stash); }
+      else termSetLine(term.history[term.hIdx]);
+      return;
+    }
+    case '\x1b[3~': {                                      // Delete
+      if (term.cursor >= term.line.length) return;
+      term.line = term.line.slice(0, term.cursor) + term.line.slice(term.cursor + 1);
+      const rest = term.line.slice(term.cursor);
+      termWrite(rest + ' ' + `\x1b[${rest.length + 1}D`);
+      return;
+    }
+    default:
+      if (data >= ' ' || data.length > 1) termInsert(data.replace(/[\x00-\x1f]/g, ''));
+  }
+}
+
+function termClear() {
+  term.xterm?.clear();
+  // `clear` keeps the current row: redraw what was being typed so the cursor
+  // and the buffer don't disagree.
+  if (term.line) { const l = term.line, c = term.cursor; term.line = ''; term.cursor = 0; termInsert(l); term.cursor = c; }
+}
+
+/* ---- session wiring ---- */
+
+async function termConnect() {
+  termStatus('pending', 'starting…');
+  termAlert('');
+  try {
+    const { id } = await api('/api/repl', { method: 'POST' });
+    term.replId = id;
+  } catch (e) {
+    termStatus('error', 'failed');
+    termAlert(`couldn't start the harness: ${e.message}`, 'error');
+    return;
+  }
+  const es = new EventSource(`/api/repl/${term.replId}/events`);
+  term.es = es;
+  es.addEventListener('data', (e) => termWrite(JSON.parse(e.data).chunk));
+  es.addEventListener('close', () => { es.close(); termStatus('off', 'session ended'); });
+  es.onopen = () => termStatus('on', 'connected');
+  es.onerror = () => { if (es.readyState === EventSource.CLOSED) termStatus('off', 'disconnected'); };
+}
+
+async function termRestart() {
+  if (term.replId) await api(`/api/repl/${term.replId}/stop`, { method: 'POST' }).catch(() => {});
+  term.es?.close();
+  term.es = null; term.replId = null;
+  term.xterm?.reset();
+  term.line = ''; term.cursor = 0;
+  await termConnect();
+}
+
+function termSetMode(mode) {
+  term.mode = mode;
+  if (mode === 'job') {
+    const job = state.currentJob;
+    termStatus(job && !job.done ? 'on' : 'off', job ? `engagement ${esc(job.name || job.target)}` : 'no live engagement');
+    termNote(job
+      ? `attached to the running engagement — what you type goes to the same harness process that is testing ${job.name || job.target}.`
+      : 'no engagement is running; start one first.');
+  } else {
+    termStatus(term.replId ? 'on' : 'off', term.replId ? 'connected' : 'disconnected');
+    if (!term.replId) termConnect();
+  }
+}
+
+function termSyncTargets() {
+  const sel = $('#termTarget');
+  const job = state.currentJob;
+  const want = ['session'].concat(job ? ['job'] : []);
+  const have = $$('option', sel).map((o) => o.value);
+  if (want.join() === have.join()) {
+    if (job) sel.querySelector('option[value="job"]').textContent = `live: ${job.name || job.target}`;
+    return;
+  }
+  sel.innerHTML = `<option value="session">standalone REPL session</option>` +
+    (job ? `<option value="job">live: ${esc(job.name || job.target)}</option>` : '');
+  sel.value = term.mode === 'job' && job ? 'job' : 'session';
+  if (term.mode === 'job' && !job) termSetMode('session');
+}
+
+function termOpen(mode) {
+  show($('#termDock'), true);
+  if (!termEnsure()) return;
+  termSyncTargets();
+  // Only switch to a target the select actually offers — asking for 'job' with
+  // no engagement running would leave the picker blank and the terminal
+  // pointing at nothing.
+  const wanted = mode && $(`#termTarget option[value="${mode}"]`) ? mode : null;
+  if (wanted && wanted !== term.mode) { $('#termTarget').value = wanted; termSetMode(wanted); }
+  else if (mode && !wanted) termNote('no engagement is running — this is the standalone REPL session.');
+  if (!term.booted) {
+    term.booted = true;
+    termNote('NeuroSploit harness — type /help for commands, or describe what you want tested in plain language.');
+    if (term.mode === 'session') termConnect();
+  }
+  termFit();
+  term.xterm.focus();
+}
+function termClose() { show($('#termDock'), false); }
+function termToggle() { $('#termDock').hidden ? termOpen() : termClose(); }
+
+$('#btnOpenRepl').addEventListener('click', () => termOpen());
+$('#btnOpenTerm2').addEventListener('click', () => termOpen());
+$('#btnOpenTerm3').addEventListener('click', () => termOpen());
+$('#btnSendPromptTerm').addEventListener('click', () => termOpen('job'));
+$('#btnTermClose').addEventListener('click', termClose);
+$('#btnTermClear').addEventListener('click', termClear);
+$('#btnTermRestart').addEventListener('click', () => { if (term.mode === 'job') termNote('the engagement owns this session — restart applies to the standalone REPL.'); else termRestart(); });
+$('#btnTermExpand').addEventListener('click', () => {
+  const expanded = $('#termDock').classList.toggle('expanded');
+  $('#btnTermExpand').textContent = expanded ? 'collapse' : 'expand';
+  termFit();
 });
-$('#replInput').addEventListener('keydown', async (e) => {
-  if (e.key !== 'Enter') return;
-  const line = e.target.value;
-  e.target.value = '';
-  const out = $('#replOutput');
-  const echo = document.createElement('span');
-  echo.className = 'repl-echo';
-  echo.textContent = `❭ ${line}\n`;
-  out.appendChild(echo);
-  out.scrollTop = out.scrollHeight;
-  if (!state.replId) await startRepl();
-  await api(`/api/repl/${state.replId}/input`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ line }) });
+$('#termTarget').addEventListener('change', (e) => termSetMode(e.target.value));
+
+// Drag the dock's top edge. Height is remembered because the useful size
+// depends on the screen, and re-dragging it every visit is the kind of small
+// tax that makes a tool feel unfinished.
+(function termResizer() {
+  const dock = $('#termDock');
+  const saved = Number(localStorage.getItem('ns-term-h'));
+  if (saved) dock.style.height = `${saved}px`;
+  let startY = 0, startH = 0, dragging = false;
+  $('#termResize').addEventListener('pointerdown', (e) => {
+    dragging = true; startY = e.clientY; startH = dock.getBoundingClientRect().height;
+    $('#termResize').setPointerCapture(e.pointerId);
+    document.body.classList.add('resizing-ns');
+  });
+  $('#termResize').addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const h = Math.max(140, Math.min(window.innerHeight - 120, startH + (startY - e.clientY)));
+    dock.classList.remove('expanded');
+    dock.style.height = `${h}px`;
+    termFit();
+  });
+  const end = () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove('resizing-ns');
+    localStorage.setItem('ns-term-h', String(Math.round(dock.getBoundingClientRect().height)));
+  };
+  $('#termResize').addEventListener('pointerup', end);
+  $('#termResize').addEventListener('pointercancel', end);
+})();
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === '`' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); termToggle(); return; }
+  if (e.key !== 'Escape') return;
+  if (!$('#findingModal').hidden) return show($('#findingModal'), false);
+  if (!$('#leadModal').hidden) return closeLeadModal();
+  if (!$('#authModal').hidden) return show($('#authModal'), false);
+  if (!$('#termDock').hidden) termClose();
 });
 
 // ---------------------------------------------------------------------------
 // boot
 // ---------------------------------------------------------------------------
 
+// Below 768px the sidebar slides off-canvas. It previously had no way back:
+// the CSS hid it and nothing could set .open.
+$('#btnSidebarToggle').addEventListener('click', () => $('#sidebar').classList.toggle('open'));
+$('#sbGroups').addEventListener('click', () => {
+  if (window.matchMedia('(max-width: 768px)').matches) $('#sidebar').classList.remove('open');
+});
+
 async function boot() {
   applyTheme();
   selectMode('run');
   goToStep(0);
   renderCustomLeads();
+  renderFindings('live');
+  renderFindings('detail');
   const meta = await api('/api/meta').catch(() => ({}));
   $('#sbVersion').textContent = `v${meta.version || '4.0.0'}`;
   await Promise.all([loadAgents(), loadProviders()]);
