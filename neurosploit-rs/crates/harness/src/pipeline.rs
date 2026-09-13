@@ -795,7 +795,12 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
                     Ok((m, text)) => {
                         let f = extract_findings(&text, &ag.name);
                         let _ = txc.send(format!("exploit {} via {} → {} candidate(s)", ag.name, m.label(), f.len())).await;
-                        if f.is_empty() && !text.trim().is_empty() && text.trim() != "[]" {
+                        // "no findings" is a RESULT, not a parse failure. Models
+                        // wrap the empty array in a ```json fence, so comparing the
+                        // raw text to "[]" reported every honest negative as
+                        // malformed — which teaches the operator to ignore a
+                        // warning that sometimes means a real parse failure.
+                        if f.is_empty() && !text.trim().is_empty() && !reported_nothing(&text) {
                             let tail: String = text.chars().rev().take(120).collect::<String>().chars().rev().collect();
                             let _ = txc.send(format!("⚠ agent {} returned text but 0 parseable findings (model may have produced malformed JSON). Tail: {:?}", ag.name, tail)).await;
                         }
@@ -1869,12 +1874,81 @@ fn transcript_of(raw: &[(String, String, Vec<Finding>)]) -> String {
 /// (0.9), a numeric string ("0.9"), or a word ("High"); `cvss` may be a number or
 /// a string. Strict typed deserialization fails the whole batch on any mismatch,
 /// so we parse leniently into `Value` and coerce every field.
+/// Did the agent explicitly report an empty result?
+///
+/// Accepts a bare `[]`, a fenced ```json block containing one, and the common
+/// `{"findings": []}` wrapper — all three mean "I looked and found nothing".
+fn reported_nothing(text: &str) -> bool {
+    let mut t = text.trim();
+    // Take the last fenced block when there is one; models narrate first and
+    // put the machine-readable answer at the end.
+    if let Some(start) = t.rfind("```") {
+        if let Some(open) = t[..start].rfind("```") {
+            let inner = &t[open + 3..start];
+            let inner = inner.strip_prefix("json").unwrap_or(inner);
+            t = inner.trim();
+        }
+    }
+    let t = t.trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
+    if t == "[]" {
+        return true;
+    }
+    serde_json::from_str::<serde_json::Value>(t)
+        .map(|v| match &v {
+            serde_json::Value::Array(a) => a.is_empty(),
+            serde_json::Value::Object(o) => o.get("findings").and_then(|f| f.as_array()).map(|a| a.is_empty()).unwrap_or(false),
+            _ => false,
+        })
+        .unwrap_or(false)
+}
+
+/// Every ```fenced``` block in the text, in order.
+fn fenced_blocks(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(open) = rest.find("```") {
+        let after = &rest[open + 3..];
+        let Some(close) = after.find("```") else { break };
+        let inner = &after[..close];
+        let inner = inner.strip_prefix("json").unwrap_or(inner);
+        out.push(inner.trim());
+        rest = &after[close + 3..];
+    }
+    out
+}
+
+/// Pull the findings array out of a model's reply.
+///
+/// The naive "first `[` to last `]`" span is wrong whenever the agent narrates
+/// before answering: a real reply here opened with the prose line
+/// `[low] Antiforgery cookie missing Secure flag`, so the span started inside
+/// prose, failed to parse, and the agent's actual findings were thrown away.
+/// Fenced blocks are tried first (last one wins — models narrate, then answer),
+/// and the span is only a fallback.
 fn extract_findings(text: &str, agent: &str) -> Vec<Finding> {
-    let slice = match (text.find('['), text.rfind(']')) {
-        (Some(a), Some(b)) if b > a => &text[a..=b],
-        _ => match (text.find('{'), text.rfind('}')) {
-            (Some(a), Some(b)) if b > a => &text[a..=b],
-            _ => {
+    let mut candidates: Vec<String> = Vec::new();
+    for b in fenced_blocks(text).into_iter().rev() {
+        if b.starts_with('[') || b.starts_with('{') {
+            candidates.push(b.to_string());
+        }
+    }
+    if let (Some(a), Some(b)) = (text.find('['), text.rfind(']')) {
+        if b > a {
+            candidates.push(text[a..=b].to_string());
+        }
+    }
+    if let (Some(a), Some(b)) = (text.find('{'), text.rfind('}')) {
+        if b > a {
+            candidates.push(text[a..=b].to_string());
+        }
+    }
+    let slice: String = match candidates.iter().find(|c| serde_json::from_str::<serde_json::Value>(c).is_ok()).cloned() {
+        Some(good) => good,
+        None => match candidates.into_iter().next() {
+            // Nothing parsed: keep the best guess so the salvage pass below
+            // still gets a shot at a trailing-comma mistake.
+            Some(first) => first,
+            None => {
                 if !text.trim().is_empty() && text.trim() != "[]" {
                     eprintln!("[extract_findings] agent {agent}: model returned text but no JSON array/object found (len={}); raw tail: {:?}",
                         text.len(), &text[text.len().saturating_sub(200)..]);
@@ -1883,6 +1957,7 @@ fn extract_findings(text: &str, agent: &str) -> Vec<Finding> {
             }
         },
     };
+    let slice: &str = &slice;
     let val: serde_json::Value = match serde_json::from_str(slice) {
         Ok(v) => v,
         Err(e) => {
@@ -2563,5 +2638,53 @@ mod evidence_tests {
         assert_eq!(collect_evidence(&mut miss, &wd), 0);
         assert!(miss[0].screenshots.is_empty());
         let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod extraction_tests {
+    use super::*;
+
+    /// The reply that exposed the bug: prose starting with `[low] …`, then the
+    /// real findings in a fenced block. The naive first-`[`-to-last-`]` span
+    /// began inside the prose and the agent's findings were discarded.
+    #[test]
+    fn narration_before_the_answer_does_not_eat_the_findings() {
+        let text = "[low] Antiforgery cookie missing Secure flag\n\
+                    - Endpoint: https://t.test/Account/Login\n\n\
+                    Final findings:\n\n\
+                    ```json\n[{\"id\":\"c1\",\"title\":\"Cookie without Secure\",\"severity\":\"Low\",\"cwe\":\"CWE-614\"}]\n```\n";
+        let f = extract_findings(text, "oauth_misconfiguration");
+        assert_eq!(f.len(), 1, "the fenced block is the answer");
+        assert_eq!(f[0].title, "Cookie without Secure");
+    }
+
+    #[test]
+    fn a_bare_array_still_works() {
+        let f = extract_findings("[{\"title\":\"X\",\"severity\":\"High\"}]", "a");
+        assert_eq!(f.len(), 1);
+    }
+
+    #[test]
+    fn the_last_fenced_block_wins() {
+        let text = "```json\n[{\"title\":\"draft\"}]\n```\nOn reflection:\n```json\n[{\"title\":\"final\"}]\n```";
+        let f = extract_findings(text, "a");
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].title, "final");
+    }
+
+    #[test]
+    fn an_empty_result_is_a_result_not_a_parse_failure() {
+        for t in ["[]", "```json\n[]\n```", "I looked and found nothing.\n\n```json\n[]\n```", "{\"findings\": []}"] {
+            assert!(reported_nothing(t), "{t:?} means 'nothing found'");
+            assert!(extract_findings(t, "a").is_empty());
+        }
+        assert!(!reported_nothing("[{\"title\":\"real\"}]"));
+    }
+
+    #[test]
+    fn a_trailing_comma_is_still_salvaged() {
+        let f = extract_findings("```json\n[{\"title\":\"X\",\"severity\":\"Low\"},]\n```", "a");
+        assert_eq!(f.len(), 1);
     }
 }
