@@ -286,6 +286,59 @@ time. Two stores fix that, both under `.neurosploit/` in the project directory:
   harness derived itself are marked `inferred` and drawn dashed in the web console. Secrets
   never enter the graph; they stay in the vault.
 
+### Scope: enforced, not requested
+
+`out_of_scope` used to be a sentence in the prompt and nothing checked it — a
+*request* to the model, not a control. Scope is now a guard in code
+(`crates/harness/src/scope.rs`):
+
+- **Hard scope** — an allowlist of hosts, `*.wildcards`, IPv4 CIDRs and URL
+  prefixes, plus exclusions that always win. It defaults to **the engagement's
+  target and nothing else**, so discovery can never widen the engagement:
+  finding a subdomain in a JS bundle is not authorization to test it.
+- **Soft scope** — guardrails inside authorized territory: observe-only zones,
+  destructive HTTP verbs (off by default), account-creation cap, request-rate
+  guard, and payload classes that are never acceptable (data destruction, DoS)
+  — refused even against an in-scope host.
+- Findings proven against a host outside the boundary are **withheld from the
+  report** and written to `out-of-scope-findings.json` as an incident to
+  disclose.
+
+```
+/inscope *.example.com 10.0.0.0/24     # authorize more
+/scope-out payments.example.com        # host-shaped entries become ENFORCED denials
+/observe legacy.example.com            # discovery allowed, interaction blocked
+/guardrail destructive on · accounts 5 · rate 60
+/policy                                # what is actually enforced
+```
+
+### Evidence & Validation Engine
+
+Voting is models checking models, and a confident hallucination passes a vote by
+being confident. `crates/harness/src/validation.rs` adds a deterministic layer
+that never consults a model:
+
+```
+HYPOTHESIS → CANDIDATE → [ VALIDATION ENGINE ] → CONFIRMED | NEEDS_REVIEW | REJECTED
+```
+
+Per-CWE rules, because "is this real?" has a different answer per class:
+
+| class | what confirms it |
+|-------|------------------|
+| SQLi (89/943) | baseline vs attack difference **that reproduces ≥2×** |
+| XSS (79/80) | a real browser executed a **harness-chosen marker** — reflection alone is not proof |
+| IDOR/BOLA (639/862/863) | identity B reads identity A's resource **and the body matches** (a 200 returning a login page is rejected) |
+| SSRF (918) | controlled callback, or retrieval of a canary resource |
+| LFI (22/23/98) | controlled file marker, or a file signature the baseline lacked |
+| RCE (77/78/94) | a unique nonce in command output or a callback — reflected input is rejected |
+
+Two rules keep it honest: absent evidence is **never** a pass (it becomes
+`needs-review`), and a class with no rule is never auto-confirmed.
+`NEUROSPLOIT_VALIDATION=advisory|enforcing|off` — advisory (default) rejects
+contradictions but won't demote a voted finding merely for missing artifacts;
+enforcing makes the verdict the status.
+
 ### Keeping a run going
 
 - **Command rectification** — a mistyped command is corrected (`/staus` → `/status`), completed

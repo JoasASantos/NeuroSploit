@@ -77,6 +77,12 @@ pub struct Finding {
     /// report can embed each image next to its vulnerability.
     #[serde(default)]
     pub screenshots: Vec<String>,
+    /// Structured artifacts for the deterministic validation engine: the
+    /// baseline/attack pair, repeats, markers, identity pair. Agents that
+    /// follow the evidence contract emit this alongside the finding, and
+    /// `crate::validation` judges the class from it without consulting a model.
+    #[serde(default)]
+    pub evidence_data: Option<crate::validation::Evidence>,
 }
 
 impl Default for Finding {
@@ -108,6 +114,7 @@ impl Default for Finding {
             review_status: String::new(),
             review_reason: String::new(),
             screenshots: Vec::new(),
+            evidence_data: None,
         }
     }
 }
@@ -197,6 +204,11 @@ pub struct RunConfig {
     /// the app to `<cwd>/.neurosploit/vault`; falls back to the run workdir.
     #[serde(default)]
     pub vault_dir: Option<String>,
+    /// Authorization boundary and guardrails. Empty `hard` means "derive from
+    /// the target" (see `pipeline::effective_scope`) — an engagement is never
+    /// implicitly authorized against anything but what it was pointed at.
+    #[serde(default)]
+    pub scope: crate::scope::ScopePolicy,
 }
 
 fn default_vote() -> usize {
@@ -239,6 +251,7 @@ impl RunConfig {
             recon_intensity: 3,
             temp_email: false,
             vault_dir: None,
+            scope: Default::default(),
         }
     }
 }

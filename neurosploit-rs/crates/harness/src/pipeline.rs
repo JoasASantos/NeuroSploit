@@ -41,13 +41,22 @@ fn operator_directives(cfg: &RunConfig) -> String {
     if let Some(focus) = cfg.instructions.as_deref().filter(|x| !x.trim().is_empty()) {
         s.push_str(&format!("OPERATOR FOCUS — prioritise this: {focus}\n"));
     }
+    // Scope is enforced in code (see `crate::scope`); this block exists so the
+    // agent does not burn a round trip discovering a boundary the guard would
+    // have refused anyway. The prose version alone was never a control.
+    s.push_str(&effective_scope(cfg).prompt_block());
     if let Some(oos) = cfg.out_of_scope.as_deref().filter(|x| !x.trim().is_empty()) {
         s.push_str(&format!(
-            "OUT OF SCOPE — HARD CONSTRAINT, do NOT test, probe, or interact with any of the following; \
-             skip them entirely even if reachable, and never report findings against them: {oos}\n"));
+            "OUT OF SCOPE — additional operator constraints (techniques, flows, data) beyond the host rules above: {oos}\n"));
     }
     if let Some(auth) = cfg.auth.as_deref().filter(|x| !x.trim().is_empty()) {
         s.push_str(&format!("AUTHENTICATION — test as an authenticated user; send this with each request: {auth}\n"));
+    }
+    // What the deterministic engine needs in order to confirm a class. Agents
+    // hold the target *now*; asking for a baseline/attack pair or a marker
+    // after the run is asking for something that no longer exists.
+    if crate::validation::Mode::from_env() != crate::validation::Mode::Off {
+        s.push_str(&crate::validation::evidence_contract());
     }
     let recalled = memory_directives(cfg);
     if !recalled.is_empty() {
@@ -83,6 +92,34 @@ pub(crate) fn run_id(cfg: &RunConfig) -> String {
         .and_then(|d| Path::new(d).file_name())
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default()
+}
+
+/// The engagement's authorization boundary.
+///
+/// Built from the target unless the operator configured one explicitly, with
+/// `out_of_scope` entries that name a host or network promoted into real
+/// exclusions — until now they were only ever prose in a prompt.
+pub fn effective_scope(cfg: &RunConfig) -> crate::scope::ScopePolicy {
+    let mut p = if cfg.scope.hard.is_empty() {
+        crate::scope::ScopePolicy::for_target(&cfg.target)
+    } else {
+        cfg.scope.clone()
+    };
+    if let Some(repo) = cfg.repo.as_deref().filter(|r| r.starts_with("http")) {
+        // A grey-box source repo is fetched, not attacked; authorize the fetch.
+        p.allow(&crate::scope::host_of(repo));
+    }
+    if let Some(oos) = cfg.out_of_scope.as_deref() {
+        for tok in oos.split([',', ';', '\n']) {
+            let t = tok.trim();
+            // Only host-shaped exclusions become rules; a sentence like "no
+            // destructive tests" is guidance for the prompt, not a pattern.
+            if !t.is_empty() && !t.contains(' ') && (t.contains('.') || t.contains('/')) {
+                p.deny(t);
+            }
+        }
+    }
+    p
 }
 
 /// Prior knowledge about this target, injected into recon/exploit prompts.
@@ -505,7 +542,7 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
     let probe_facts = if cfg.offline {
         String::new()
     } else {
-        let p = crate::probe::probe(&cfg.target).await;
+        let p = crate::probe::probe_in_scope(&cfg.target, &effective_scope(&cfg)).await;
         let _ = tx.send(crate::probe::probe_summary(&p)).await;
         // Liveness preflight: if the target never answered (connect failed /
         // status 0), don't waste agents on a dead host — abort with a clear note.
@@ -802,7 +839,7 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
     let recon = if cfg.offline {
         "{}".to_string()
     } else {
-        let p = crate::probe::probe(&cfg.target).await;
+        let p = crate::probe::probe_in_scope(&cfg.target, &effective_scope(&cfg)).await;
         let _ = tx.send(crate::probe::probe_summary(&p)).await;
         let facts = crate::probe::probe_json(&p);
         match pool.complete_routed(Task::Recon, "recon", RECON_SYS,
@@ -1453,6 +1490,51 @@ async fn finish(cfg: RunConfig, _lib: &Library, recon: String, transcript: Strin
     if let Some(p) = &cfg.rl_path {
         rl.save(Path::new(p));
         let _ = tx.send("RL rewards updated".into()).await;
+    }
+
+    // Deterministic validation. The votes above are models checking models; this
+    // pass asks whether the recorded artifacts actually demonstrate the class.
+    let vmode = crate::validation::Mode::from_env();
+    if vmode != crate::validation::Mode::Off {
+        let mut confirmed = 0usize;
+        let mut rejected: Vec<Finding> = Vec::new();
+        let mut kept: Vec<Finding> = Vec::new();
+        for mut f in findings.into_iter() {
+            match crate::validation::apply_mode(&mut f, vmode) {
+                Some(crate::validation::Verdict::Confirmed(_)) => {
+                    confirmed += 1;
+                    kept.push(f);
+                }
+                Some(crate::validation::Verdict::Rejected(r)) => {
+                    let _ = tx.send(format!("validator rejected '{}': {r}", f.title)).await;
+                    rejected.push(f);
+                }
+                _ => kept.push(f),
+            }
+        }
+        findings = kept;
+        let _ = tx.send(format!(
+            "validation engine ({:?}): {confirmed} deterministically confirmed, {} rejected, {} kept",
+            vmode, rejected.len(), findings.len()
+        )).await;
+    }
+
+    // Scope audit: anything proven against a host outside the authorization
+    // boundary is quarantined, not shipped. A finding on an unauthorized asset
+    // is an incident to disclose, not a deliverable.
+    let policy = effective_scope(&cfg);
+    let (in_scope, out_of_scope) = policy.audit_findings(findings);
+    findings = in_scope;
+    if !out_of_scope.is_empty() {
+        let _ = tx.send(format!(
+            "notify: ⚠ {} finding(s) were proven against hosts OUTSIDE the authorized scope and were withheld: {}",
+            out_of_scope.len(),
+            out_of_scope.iter().map(|f| crate::scope::host_of(&f.endpoint)).collect::<Vec<_>>().join(", ")
+        )).await;
+        if let Some(dir) = cfg.workdir.as_deref() {
+            let p = Path::new(dir).join("out-of-scope-findings.json");
+            let _ = std::fs::write(p, serde_json::to_string_pretty(&out_of_scope).unwrap_or_default());
+        }
     }
 
     // Durable knowledge. Everything above this point is about *this* run; these
@@ -2157,7 +2239,7 @@ pub async fn run_ai(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<
 
     // Recon the AI endpoint (probe + model recon).
     let recon = if cfg.offline { "{}".to_string() } else {
-        let p = crate::probe::probe(&cfg.target).await;
+        let p = crate::probe::probe_in_scope(&cfg.target, &effective_scope(&cfg)).await;
         let _ = tx.send(crate::probe::probe_summary(&p)).await;
         let facts = crate::probe::probe_json(&p);
         match pool.complete_routed(Task::Recon, "ai-recon", AI_RECON_SYS,

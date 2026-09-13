@@ -148,10 +148,11 @@ struct LiveCheckpoint {
 pub(crate) const ACCEPTED: &[&str] = &[
     "/?", "/agents", "/attach", "/auth", "/burp", "/chain", "/changed", "/clear", "/config",
     "/context", "/continue", "/creds", "/diff", "/exclude", "/exit", "/expand", "/feed",
-    "/finding", "/findings", "/focus", "/forget", "/full", "/go", "/goal", "/graph", "/help",
-    "/history", "/idle", "/instructions", "/integration", "/integrations", "/key", "/log",
-    "/logs", "/mcp", "/memory", "/model", "/models", "/objective", "/objectives", "/offline",
-    "/onboard", "/only", "/oos", "/outofscope", "/providers", "/proxy", "/q", "/quit", "/recon",
+    "/finding", "/findings", "/focus", "/forget", "/full", "/go", "/goal", "/graph", "/guardrail", "/guardrails", "/help",
+    "/history", "/idle", "/inscope", "/instructions", "/integration", "/integrations", "/key", "/log",
+    "/logs", "/mcp", "/memory", "/model", "/models", "/objective", "/objectives", "/observe",
+    "/observe-only", "/offline",
+    "/onboard", "/only", "/oos", "/outofscope", "/policy", "/providers", "/proxy", "/q", "/quit", "/recon",
     "/repo", "/report", "/results", "/resume", "/retest", "/revalidate", "/run", "/runs",
     "/scope", "/scope-out", "/show", "/status", "/stop", "/sub", "/subscription", "/target",
     "/temp-email", "/tempmail", "/theme", "/timeout", "/ua", "/url", "/useragent", "/validate",
@@ -164,7 +165,7 @@ const COMMANDS: &[&str] = &[
     "/repo", "/auth", "/creds", "/focus", "/objective", "/scope-out", "/attach", "/context", "/mcp", "/offline",
     "/votes", "/chain", "/recon", "/tempmail", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/only", "/theme", "/clear", "/run", "/stop", "/continue", "/runs", "/results", "/report",
     "/status", "/logs", "/diff", "/retest", "/validate", "/finding", "/expand", "/integrations",
-    "/memory", "/forget", "/graph", "/quit",
+    "/memory", "/forget", "/graph", "/inscope", "/observe", "/guardrail", "/policy", "/quit",
 ];
 
 /// rustyline helper: Tab-completes `/commands` and `@filesystem-paths`,
@@ -280,6 +281,8 @@ struct Session {
     objective: Option<String>,
     /// Explicit out-of-scope exclusions the agents must not touch.
     out_of_scope: Option<String>,
+    /// Authorization boundary + guardrails, enforced by the harness.
+    policy: harness::scope::ScopePolicy,
     attachments: Vec<String>,
     color: bool,
     /// Engagement scope from onboarding: web | infra | cloud | ai | skills.
@@ -313,6 +316,7 @@ impl Default for Session {
             instructions: None,
             objective: None,
             out_of_scope: None,
+            policy: Default::default(),
             attachments: Vec::new(),
             color: true,
             scope: "web",
@@ -706,7 +710,23 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
                     Some(prev) if !prev.trim().is_empty() => format!("{prev}; {arg}"),
                     _ => arg.to_string(),
                 });
-                println!("  out-of-scope: {}  \x1b[2m(hard constraint — agents skip these)\x1b[0m", s.out_of_scope.clone().unwrap_or_default());
+                // Host-shaped entries become ENFORCED exclusions right away, so
+                // `/policy` shows what will actually be blocked rather than
+                // deferring the promotion to run time. Prose ("no destructive
+                // tests") stays prompt guidance — it isn't a pattern.
+                let mut enforced = 0usize;
+                for tok in arg.split([',', ';']) {
+                    let t = tok.trim();
+                    if !t.is_empty() && !t.contains(' ') && (t.contains('.') || t.contains('/')) {
+                        enforced += s.policy.deny(t);
+                    }
+                }
+                println!("  out-of-scope: {}", s.out_of_scope.clone().unwrap_or_default());
+                if enforced > 0 {
+                    println!("  \x1b[2m{enforced} host rule(s) ENFORCED by the guard — requests there are blocked before they are sent\x1b[0m");
+                } else {
+                    println!("  \x1b[2m(guidance for the agents — not a host rule; use /scope-out <host> or /inscope to change the enforced boundary)\x1b[0m");
+                }
             }
             "/attach" => { let n = attach_path(arg.trim_start_matches('@'), &mut s); if n > 0 { println!("  attached ({} total)", s.attachments.len()); } }
             "/context" => {
@@ -1013,6 +1033,58 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
                 }
                 save_session(&s); println!("  session saved → {} · bye.", proj_dir().display()); break;
             }
+            "/inscope" | "/policy" => {
+                if cmd == "/policy" || arg.trim().is_empty() {
+                    let effective = if s.policy.hard.is_empty() {
+                        s.target.as_deref().map(harness::scope::ScopePolicy::for_target)
+                    } else { None };
+                    let p = effective.as_ref().unwrap_or(&s.policy);
+                    println!("  ┌ scope policy{}", if effective.is_some() { " (derived from /target — nothing added yet)" } else { "" });
+                    println!("  │ {}", p.summary());
+                    println!("  └ /inscope <host|*.dom|cidr|url> · /scope-out <host> · /observe <host> · /guardrail <key> <value>");
+                } else {
+                    if s.policy.hard.is_empty() {
+                        // Seed from the target first, or adding one host would
+                        // silently make the target itself out of scope.
+                        if let Some(t) = s.target.clone() { s.policy.allow(&harness::scope::host_of(&t)); }
+                    }
+                    let n = s.policy.allow(arg);
+                    println!("  +{n} in scope · {}", s.policy.summary());
+                }
+            }
+            "/observe" | "/observe-only" => {
+                if arg.trim().is_empty() { println!("  usage: /observe <host|*.domain> — discovery allowed there, interaction blocked"); }
+                else { let n = s.policy.observe_only(arg); println!("  +{n} observe-only · {}", s.policy.summary()); }
+            }
+            "/guardrail" | "/guardrails" => {
+                let (k, v) = arg.split_once(char::is_whitespace).unwrap_or((arg, ""));
+                match k.trim().to_lowercase().as_str() {
+                    "" => println!("  guardrails: {} · keys: destructive on|off · accounts <n|off> · rate <req/min>", s.policy.summary()),
+                    "destructive" => {
+                        s.policy.soft.allow_destructive_methods = matches!(v.trim(), "on" | "yes" | "true" | "1");
+                        println!("  destructive methods: {}", if s.policy.soft.allow_destructive_methods { "ALLOWED" } else { "blocked" });
+                    }
+                    "accounts" => {
+                        if matches!(v.trim(), "off" | "no" | "0") {
+                            s.policy.soft.allow_account_creation = false;
+                            println!("  account creation: blocked");
+                        } else {
+                            s.policy.soft.allow_account_creation = true;
+                            let (n, note) = crate::rectify::rectify_count(v, 0, 50, s.policy.soft.max_accounts as usize);
+                            if let Some(note) = note { println!("  \x1b[2m↻ {note}\x1b[0m"); }
+                            s.policy.soft.max_accounts = n as u32;
+                            println!("  account creation: allowed, max {n}");
+                        }
+                    }
+                    "rate" => {
+                        let (n, note) = crate::rectify::rectify_count(v, 0, 100_000, s.policy.soft.max_requests_per_minute as usize);
+                        if let Some(note) = note { println!("  \x1b[2m↻ {note}\x1b[0m"); }
+                        s.policy.soft.max_requests_per_minute = n as u32;
+                        println!("  rate guard: {} req/min", if n == 0 { "unlimited".into() } else { n.to_string() });
+                    }
+                    other => println!("  unknown guardrail '{other}' — destructive · accounts · rate"),
+                }
+            }
             "/memory" => memory_cmd(&s, arg),
             "/forget" => {
                 if arg.trim().is_empty() {
@@ -1227,6 +1299,7 @@ async fn run(base: &Path, s: &Session, history: &mut Vec<RunRecord>) {
     };
     cfg.objective = s.objective.clone();
     cfg.out_of_scope = s.out_of_scope.clone();
+    cfg.scope = s.policy.clone();
     cfg.auth = s.auth.clone();
     cfg.pinned = s.pinned.clone();
     // Multiple /auth identities → prepend the access-control (IDOR/BOLA/BFLA) directive.
@@ -1302,6 +1375,7 @@ async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
         else { Some(format!("{}\n\nATTACHED CONTEXT:\n{}", s.instructions.clone().unwrap_or_default(), s.attachments.join("\n\n"))) };
     cfg.objective = s.objective.clone();
     cfg.out_of_scope = s.out_of_scope.clone();
+    cfg.scope = s.policy.clone();
     cfg.auth = s.auth.clone();
     cfg.pinned = s.pinned.clone();
     if matches!(mode_e, crate::Mode::Grey) { cfg.repo = s.repo.clone(); }
@@ -1539,6 +1613,16 @@ struct Snapshot {
     objective: Option<String>,
     #[serde(default)]
     out_of_scope: Option<String>,
+    /// Scope written back as the text the operator typed, so the file stays
+    /// readable and editable by hand.
+    #[serde(default)]
+    scope_in: Vec<String>,
+    #[serde(default)]
+    scope_out: Vec<String>,
+    #[serde(default)]
+    scope_observe: Vec<String>,
+    #[serde(default)]
+    soft: Option<harness::scope::SoftScope>,
 }
 fn session_path() -> std::path::PathBuf { proj_dir().join("session.json") }
 fn save_session(s: &Session) {
@@ -1548,6 +1632,10 @@ fn save_session(s: &Session) {
         repo: s.repo.clone(), auth: s.auth.clone(), creds: s.creds.clone(),
         instructions: s.instructions.clone(),
         objective: s.objective.clone(), out_of_scope: s.out_of_scope.clone(),
+        scope_in: s.policy.hard.iter().map(|p| p.as_text()).collect(),
+        scope_out: s.policy.exclude.iter().map(|p| p.as_text()).collect(),
+        scope_observe: s.policy.soft.observe_only.iter().map(|p| p.as_text()).collect(),
+        soft: Some(s.policy.soft.clone()),
     };
     if let Ok(j) = serde_json::to_string_pretty(&snap) { std::fs::write(session_path(), j).ok(); }
 }
@@ -1561,6 +1649,10 @@ fn load_session(s: &mut Session) -> bool {
     s.target = snap.target; s.repo = snap.repo; s.auth = snap.auth;
     s.creds = snap.creds; s.instructions = snap.instructions;
     s.objective = snap.objective; s.out_of_scope = snap.out_of_scope;
+    if let Some(soft) = snap.soft { s.policy.soft = soft; }
+    for t in snap.scope_in { s.policy.allow(&t); }
+    for t in snap.scope_out { s.policy.deny(&t); }
+    for t in snap.scope_observe { s.policy.observe_only(&t); }
     true
 }
 
@@ -1879,7 +1971,11 @@ fn help() {
     h("/creds <file.yaml>", "creds: jwt/header/cookie/login + ssh/windows + aws/gcp/azure + roles");
     h("/focus <text>",      "steer the tests (or just type the instruction)");
     h("/objective <text>",  "engagement goal/context — shapes what agents prioritise & count as impact");
-    h("/scope-out <text>",  "out-of-scope exclusions — hard constraint, agents skip these (clear to reset)");
+    h("/scope-out <text>",  "out-of-scope exclusions — host-shaped entries become ENFORCED denials");
+    h("/inscope <patterns>","authorize more hosts: host · *.domain · 10.0.0.0/24 · https://host/path");
+    h("/observe <host>",    "observe-only: discovery allowed there, interaction blocked");
+    h("/guardrail k v",     "soft scope: destructive on|off · accounts <n|off> · rate <req/min>");
+    h("/policy",            "show the enforced scope + guardrails");
     h("@path @dir @f:1-20", "attach a file/folder/line-range to context (Tab → menu)");
     h("/attach <path>",     "attach a file/folder to context");
     h("/context",           "list current attachments");

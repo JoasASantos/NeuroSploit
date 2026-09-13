@@ -212,6 +212,27 @@ fn parse_forms(body: &str) -> Vec<FormInfo> {
 }
 
 /// Run the probe. Never panics; on total failure returns a Probe with a note.
+/// Probe a target after checking it against the engagement's boundary.
+///
+/// This is the harness's own network chokepoint: it is the one place the
+/// harness itself sends requests, so the guard runs here rather than trusting
+/// the caller. An out-of-scope target yields an empty probe with a note, not a
+/// request.
+pub async fn probe_in_scope(target: &str, policy: &crate::scope::ScopePolicy) -> Probe {
+    let d = policy.check(target, crate::scope::Action::Probe);
+    if !d.allowed() {
+        let mut p = Probe::default();
+        p.notes.push(format!("scope guard blocked the probe: {}", d.reason()));
+        return p;
+    }
+    if let crate::scope::Decision::Warn(w) = d {
+        let mut p = probe(target).await;
+        p.notes.push(format!("scope guard: {w}"));
+        return p;
+    }
+    probe(target).await
+}
+
 pub async fn probe(target: &str) -> Probe {
     let mut p = Probe { url: target.to_string(), ..Default::default() };
     let c = client();

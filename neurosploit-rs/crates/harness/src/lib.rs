@@ -22,7 +22,9 @@ pub mod pool;
 pub mod probe;
 pub mod report;
 pub mod rl;
+pub mod scope;
 pub mod types;
+pub mod validation;
 
 pub use agents::{Agent, Library};
 pub use models::{
@@ -34,4 +36,6 @@ pub use pipeline::run;
 pub use knowledge_graph::{EdgeKind, KnowledgeGraph, NodeKind};
 pub use memory::{Memory, Query as MemoryQuery, Tier as MemoryTier};
 pub use pool::{ModelPool, Task};
+pub use scope::{Action as ScopeAction, Decision as ScopeDecision, ScopePolicy};
 pub use types::{Finding, RunConfig};
+pub use validation::{judge as judge_finding, CweValidator, Evidence, Verdict};
