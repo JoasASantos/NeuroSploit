@@ -91,6 +91,14 @@ pub struct Probe {
     pub notes: Vec<String>,
 }
 
+/// The harness's HTTP client: identifying User-Agent, proxy honoured, and
+/// invalid certificates tolerated (test targets rarely have valid ones).
+/// Shared with `crate::replay` so every request the harness itself makes is
+/// shaped the same way and is attributable to NeuroSploit.
+pub fn http_client() -> reqwest::Client {
+    client()
+}
+
 fn client() -> reqwest::Client {
     let ua = std::env::var("NEUROSPLOIT_UA").ok().filter(|v| !v.trim().is_empty())
         .unwrap_or_else(crate::pipeline::default_user_agent);
