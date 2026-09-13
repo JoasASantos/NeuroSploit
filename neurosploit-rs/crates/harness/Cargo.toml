@@ -16,4 +16,7 @@ reqwest.workspace = true
 anyhow.workspace = true
 futures.workspace = true
 walkdir = "2"
+sha2 = "0.10"
+hmac = "0.12"
+base64 = "0.22"
 regex = "1"

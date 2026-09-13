@@ -8,13 +8,16 @@
 
 pub mod agents;
 pub mod attack_graph;
+pub mod audit;
 pub mod belief;
+pub mod capability;
 pub mod creds;
 pub mod grounding;
 pub mod hygiene;
 pub mod integrations;
 pub mod knowledge_graph;
 pub mod memory;
+pub mod policy;
 pub mod pomdp;
 pub mod models;
 pub mod pipeline;
@@ -37,6 +40,9 @@ pub use pipeline::run;
 pub use knowledge_graph::{EdgeKind, KnowledgeGraph, NodeKind};
 pub use memory::{Memory, Query as MemoryQuery, Tier as MemoryTier};
 pub use pool::{ModelPool, Task};
+pub use audit::{AuditLog, AuditRecord, KillReason, KillSwitch};
+pub use capability::{Capability, TokenError};
+pub use policy::{Act, ActionKind, BlastRadius, EngagementPolicy, Environment, Protocol, Risk, RiskDecision, SafetyPolicy};
 pub use replay::{ReplayEngine, ReqSpec};
 pub use scope::{Action as ScopeAction, Decision as ScopeDecision, ScopePolicy};
 pub use types::{Finding, RunConfig};
