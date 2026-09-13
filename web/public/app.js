@@ -784,6 +784,28 @@ function leaveLiveJob() {
   termSyncTargets();
 }
 $('#btnBackToBoard').addEventListener('click', () => { leaveLiveJob(); show($('#liveView'), false); show($('#dashView'), false); show($('#wizardView'), true); });
+// Regenerating from the evidence already on disk, rather than re-running the
+// engagement: a run whose PDF was never produced (no `typst` at the time, or a
+// since-improved template) would otherwise be unreportable.
+$('#btnBuildReport').addEventListener('click', async () => {
+  const id = state.currentDetailId;
+  if (!id) return;
+  const btn = $('#btnBuildReport');
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Generating…';
+  try {
+    const r = await api(`/api/runs/${encodeURIComponent(id)}/report`, { method: 'POST' });
+    toast(r.pdf ? 'Report rebuilt — PDF ready.' : (r.note || 'Report rebuilt.'), r.pdf ? 'ok' : 'warn', 7000);
+    await loadDetail(id);
+  } catch (e) {
+    toast(`Couldn't generate the report: ${e.message}`, 'error', 9000);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+});
+
 $('#btnDetailBack').addEventListener('click', () => { clearInterval(state.detailPoll); show($('#detailView'), false); show($('#dashView'), false); show($('#wizardView'), true); });
 $('#btnNewEngagement').addEventListener('click', () => { leaveLiveJob(); clearInterval(state.detailPoll); show($('#detailView'), false); show($('#liveView'), false); show($('#dashView'), false); show($('#wizardView'), true); });
 

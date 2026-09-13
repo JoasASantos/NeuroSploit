@@ -115,6 +115,12 @@ enum Cmd {
         #[arg(short, long)]
         verbose: bool,
     },
+    /// Rebuild a finished run's report artifacts (md · json · html · pdf) from
+    /// its findings, without re-running the engagement.
+    Rebuild {
+        /// Run id (`ns-…`) or a path to the run directory.
+        run: String,
+    },
     /// Issue or inspect a signed capability token (the engagement's authorization).
     Capability {
         #[command(subcommand)]
@@ -430,6 +436,19 @@ async fn main() -> anyhow::Result<()> {
                 for m in &p.models {
                     println!("      {}:{}", p.key, m);
                 }
+            }
+        }
+        Cmd::Rebuild { run } => {
+            // Accept either a path or a bare run id, resolved against the same
+            // runs root the engagement wrote to.
+            let dir = std::path::PathBuf::from(&run);
+            let dir = if dir.is_dir() { dir } else { base.join("runs").join(&run) };
+            if !dir.is_dir() {
+                anyhow::bail!("no such run directory: {}", dir.display());
+            }
+            match harness::report::rebuild(&dir) {
+                Ok(p) => println!("  report rebuilt → {}", p.display()),
+                Err(e) => anyhow::bail!("rebuild failed: {e}"),
             }
         }
         Cmd::Capability { cmd } => handle_capability(cmd)?,

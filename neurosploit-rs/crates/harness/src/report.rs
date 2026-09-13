@@ -721,8 +721,38 @@ pub fn write_all(target: &str, findings: &[Finding], dir: &Path) -> std::io::Res
     md.push_str(&pocs_section(dir));
     std::fs::write(dir.join("report.md"), md)?;
     std::fs::write(dir.join("report.json"), json_report(target, findings, &run_id, &meta))?;
-    std::fs::write(dir.join("report.html"), html(target, findings, &meta))?;
+    let pocs: Vec<String> = std::fs::read_dir(dir.join("pocs"))
+        .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect())
+        .unwrap_or_default();
+    std::fs::write(dir.join("report.html"), html_with_pocs(target, findings, &meta, &pocs))?;
     typst_report(target, findings, dir)
+}
+
+/// Rebuild every report artifact for a finished run, reading its own
+/// `findings.json`.
+///
+/// The web console needs this: a PDF is only produced at run time, and when
+/// `typst` was missing then (or the report template improved since), the
+/// operator has no way to get one without re-running the engagement. This
+/// regenerates from the evidence already on disk.
+pub fn rebuild(dir: &Path) -> std::io::Result<PathBuf> {
+    let findings: Vec<Finding> = std::fs::read_to_string(dir.join("findings.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    let status: serde_json::Value = std::fs::read_to_string(dir.join("status.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let meta = read_meta(dir);
+    let target = status
+        .get("target")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| if meta.target.is_empty() { None } else { Some(meta.target.clone()) })
+        .unwrap_or_else(|| dir.file_name().and_then(|s| s.to_str()).unwrap_or("target").to_string());
+    write_all(&target, &findings, dir)
 }
 
 #[cfg(test)]

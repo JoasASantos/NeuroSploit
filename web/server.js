@@ -1038,6 +1038,38 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // ---- report rebuild (generate/refresh the PDF for a finished run) ----
+    m = p.match(/^\/api\/runs\/([^/]+)\/report$/);
+    if (req.method === 'POST' && m) {
+      const id = decodeURIComponent(m[1]);
+      const dir = safeRunDir(id);
+      if (!dir || !fs.existsSync(dir)) return sendJson(res, 404, { error: 'run not found' });
+      if (!BIN) return sendJson(res, 500, { error: 'neurosploit binary not found — run `cargo build --release` in neurosploit-rs/' });
+      // The harness owns report generation (Typst template, severity ordering,
+      // the evidence sections); shelling out to it keeps one implementation
+      // instead of a second, drifting one in JavaScript.
+      const out = await new Promise((resolve) => {
+        const child = spawn(BIN, ['rebuild', dir], { cwd: ROOT, env: { ...process.env, ...envOverrides() } });
+        let buf = '';
+        child.stdout.on('data', (c) => { buf += c.toString('utf8'); });
+        child.stderr.on('data', (c) => { buf += c.toString('utf8'); });
+        child.on('close', (code) => resolve({ code, buf }));
+        child.on('error', (e) => resolve({ code: -1, buf: e.message }));
+      });
+      const built = ['report.pdf', 'report.html', 'report.md', 'report.json'].filter((f) => fs.existsSync(path.join(dir, f)));
+      if (out.code !== 0 && !built.includes('report.pdf')) {
+        return sendJson(res, 502, { error: stripAnsi(out.buf).trim() || 'rebuild failed', built });
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        built,
+        // Typst is optional; saying so beats handing back a link to a file that
+        // was never produced.
+        pdf: built.includes('report.pdf'),
+        note: built.includes('report.pdf') ? '' : 'PDF needs the `typst` binary on PATH — the HTML and Markdown reports were rebuilt.',
+      });
+    }
+
     // ---- aggregate stats for the dashboard ----
     if (req.method === 'GET' && p === '/api/stats') {
       return sendJson(res, 200, await stats());

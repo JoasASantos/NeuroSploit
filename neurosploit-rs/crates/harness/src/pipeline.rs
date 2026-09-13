@@ -771,7 +771,14 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
                      - `remediation`: the concrete change, naming the control (parameterised query, server-side authorisation check, allowlist), not \"sanitise input\".\n\
                      - `repro_steps`: an ORDERED array of literal commands someone can paste one by one from a clean shell — baseline request first, then the attack, then how to read the result. Include the real URL and the real payload.\n\
                      - `evidence`: the concrete proof (request/response excerpt with status, key headers and the decisive part of the body). \
-                     A PoC script is an EXTRA artifact, never a substitute for these steps. \
+                     A PoC script is an EXTRA artifact, never a substitute for these steps.\n\
+                     - `evidence_data`: the artifacts the harness verifies WITHOUT a model. Shape:\n\
+                       {{\"baseline\":{{\"method\":\"GET\",\"url\":\"...\",\"status\":200,\"body\":\"...\",\"headers\":{{\"set-cookie\":\"...\"}},\"request_headers\":{{}},\"elapsed_ms\":120,\"identity\":\"\"}},\n\
+                        \"attack\":{{same shape, the request carrying the payload}},\n\
+                        \"repeats\":[{{same shape, the attack repeated}}],\n\
+                        \"marker\":\"a unique token YOU chose\",\"marker_observed\":true|false,\"browser_executed\":true|false,\"callback_received\":true|false,\n\
+                        \"identity_a\":{{the owner's response}},\"identity_b\":{{another identity requesting the SAME resource}}}}\n\
+                       Fill only what applies to the class (see the evidence contract above); truncate bodies to the decisive part. \
                      `screenshots` is an array of proof-image paths you saved into the evidence dir (see EVIDENCE SCREENSHOTS above); omit or leave empty when you captured none. \
                      Set `auth_context` to \"authenticated\" or \"unauthenticated\"; set `account` to the test user/role you used (if any); \
                      for a created test account set `secret` to its generated password (it is stored in the run vault and masked in the report).",
@@ -1923,6 +1930,11 @@ fn extract_findings(text: &str, agent: &str) -> Vec<Finding> {
                 repro_steps: o.get("repro_steps").and_then(|v| v.as_array())
                     .map(|a| a.iter().filter_map(|x| x.as_str().map(|t| t.to_string())).collect())
                     .unwrap_or_default(),
+                // Structured artifacts for the deterministic validators. Without
+                // this the evidence contract in the prompt goes to an agent that
+                // dutifully fills it in and a parser that throws it away — the
+                // whole validation engine would sit idle on live runs.
+                evidence_data: o.get("evidence_data").and_then(|v| serde_json::from_value(v.clone()).ok()),
                 impact: s(o, "impact"),
                 remediation: s(o, "remediation"),
                 confidence: conf(o.get("confidence")),
