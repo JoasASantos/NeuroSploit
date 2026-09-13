@@ -2170,10 +2170,121 @@ fn conf(v: Option<&serde_json::Value>) -> f64 {
 
 /// Drop duplicate findings (same CWE + endpoint + lowercased title) that
 /// different agents/models may each report, keeping the highest-confidence one.
+/// Merge the same finding reported by several agents.
+///
+/// The old key was `cwe|endpoint|title[..40]`, and a live engagement showed why
+/// that fails: one cookie issue came back five times and one missing header
+/// four, because each agent writes the CWE as `CWE-614` or
+/// `CWE-614 (Sensitive Cookie in HTTPS Session Without Secure Attribute)`, and
+/// the endpoint as `https://host/` or `GET https://host/ (and /Account/Login)`.
+/// Worse, the severities disagreed — the same issue arrived as Low from one
+/// agent and Medium from another, which is indefensible in a report.
+///
+/// Grouping by `(cwe number, normalized endpoint)` alone would over-merge:
+/// missing `nosniff`, `Referrer-Policy` and `Permissions-Policy` are all
+/// CWE-693 on `/` and are three separate fixes. So within a group, entries
+/// merge only when their titles are actually about the same thing (token
+/// overlap), and the survivor keeps the HIGHEST severity with the fullest
+/// evidence — agreement between independent agents raises confidence, it does
+/// not lower severity.
 fn dedup_findings(mut v: Vec<Finding>) -> Vec<Finding> {
-    v.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
-    let mut seen = std::collections::HashSet::new();
-    v.into_iter().filter(|f| seen.insert(finding_key(f))).collect()
+    v.sort_by(|a, b| {
+        sev_rank(&b.severity)
+            .cmp(&sev_rank(&a.severity))
+            .then(b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal))
+            .then(b.evidence.len().cmp(&a.evidence.len()))
+    });
+    let mut kept: Vec<Finding> = Vec::new();
+    let mut corroborators: Vec<Vec<String>> = Vec::new();
+    for f in v {
+        let mut merged = false;
+        for (i, k) in kept.iter_mut().enumerate() {
+            if cwe_num(&k.cwe) == cwe_num(&f.cwe)
+                && endpoint_key(&k.endpoint) == endpoint_key(&f.endpoint)
+                // 0.4, calibrated on real engagement output: two phrasings of
+                // the cookie issue score 0.44, while `Referrer-Policy` and
+                // `Permissions-Policy` (both CWE-693 on the same path, and
+                // genuinely different fixes) score 0.33 and stay apart.
+                && title_overlap(&k.title, &f.title) >= 0.4
+            {
+                // Keep whatever the duplicate knew that the survivor did not.
+                if k.evidence.len() < f.evidence.len() {
+                    k.evidence = f.evidence.clone();
+                }
+                if k.remediation.is_empty() {
+                    k.remediation = f.remediation.clone();
+                }
+                if k.repro_steps.is_empty() {
+                    k.repro_steps = f.repro_steps.clone();
+                }
+                if k.evidence_data.is_none() {
+                    k.evidence_data = f.evidence_data.clone();
+                }
+                if !f.agent.is_empty() && f.agent != k.agent && !corroborators[i].contains(&f.agent) {
+                    corroborators[i].push(f.agent.clone());
+                }
+                merged = true;
+                break;
+            }
+        }
+        if !merged {
+            kept.push(f);
+            corroborators.push(Vec::new());
+        }
+    }
+    for (f, also) in kept.iter_mut().zip(corroborators) {
+        if !also.is_empty() {
+            // Independent agreement is a confidence signal and belongs in the
+            // report, not on the cutting-room floor.
+            let note = format!("corroborated by {}", also.join(", "));
+            f.votes = if f.votes.is_empty() { note } else { format!("{} · {note}", f.votes) };
+            f.confidence = (f.confidence + 0.05 * also.len() as f64).min(0.99);
+        }
+    }
+    kept
+}
+
+/// Just the digits of a CWE id, so `CWE-614` and `CWE-614 (Sensitive Cookie…)`
+/// are the same weakness.
+fn cwe_num(cwe: &str) -> String {
+    cwe.chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect()
+}
+
+/// Host + path of the first URL in an endpoint field, however the agent dressed
+/// it up (`GET https://h/p`, `https://h/p (and /other)`, `https://h/p?x=1`).
+fn endpoint_key(endpoint: &str) -> String {
+    let e = endpoint.trim();
+    let token = e
+        .split_whitespace()
+        .find(|t| t.contains("://") || t.starts_with('/'))
+        .unwrap_or(e)
+        .trim_matches(|c: char| c == ',' || c == '(' || c == ')');
+    let no_scheme = token.split_once("://").map(|(_, r)| r).unwrap_or(token);
+    let no_query = no_scheme.split(['?', '#']).next().unwrap_or(no_scheme);
+    no_query.trim_end_matches('/').trim_start_matches("www.").to_lowercase()
+}
+
+/// Jaccard overlap of the meaningful words in two titles. Two phrasings of the
+/// same issue share most of them; "missing nosniff" and "missing
+/// Referrer-Policy" do not.
+fn title_overlap(a: &str, b: &str) -> f64 {
+    const NOISE: &[&str] = &["the", "a", "an", "of", "on", "in", "at", "to", "and", "or", "for", "with", "without", "over", "set", "is", "are", "no", "not", "missing"];
+    let words = |s: &str| -> Vec<String> {
+        s.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric() && c != '-')
+            .filter(|w| w.len() > 2 && !NOISE.contains(w))
+            .map(|w| w.to_string())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    };
+    let (x, y) = (words(a), words(b));
+    if x.is_empty() || y.is_empty() {
+        return 0.0;
+    }
+    let inter = x.iter().filter(|w| y.contains(*w)).count() as f64;
+    let union = (x.len() + y.len()) as f64 - inter;
+    if union == 0.0 { 0.0 } else { inter / union }
 }
 
 fn norm_sev(s: &str) -> String {
@@ -2686,5 +2797,89 @@ mod extraction_tests {
     fn a_trailing_comma_is_still_salvaged() {
         let f = extract_findings("```json\n[{\"title\":\"X\",\"severity\":\"Low\"},]\n```", "a");
         assert_eq!(f.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod dedup_tests {
+    use super::*;
+
+    fn f(agent: &str, title: &str, cwe: &str, endpoint: &str, sev: &str) -> Finding {
+        Finding {
+            agent: agent.into(),
+            title: title.into(),
+            cwe: cwe.into(),
+            endpoint: endpoint.into(),
+            severity: sev.into(),
+            confidence: 0.8,
+            ..Default::default()
+        }
+    }
+
+    /// The five reports of one cookie issue from a live engagement — different
+    /// agents, different CWE spellings, different endpoint decorations,
+    /// different severities.
+    #[test]
+    fn one_issue_reported_by_five_agents_becomes_one_finding() {
+        let v = vec![
+            f("cleartext_transmission", "Antiforgery cookie set without Secure flag (transmittable over cleartext HTTP)", "CWE-614", "https://h.test/ (any page; e.g. /Account/Login, /Account/Register)", "Low"),
+            f("account_takeover_chain", "Antiforgery cookie set without Secure flag + no HSTS on identity flows", "CWE-614", "https://h.test/Account/Login", "Low"),
+            f("insecure_cookie_flags", "Antiforgery (CSRF-token) cookie set over HTTPS without the Secure flag", "CWE-614", "https://h.test/ (also /Account/Login, /Account/Register)", "Medium"),
+            f("account_registration_and_forms", "Antiforgery cookie set without Secure flag over HTTPS", "CWE-614 (Sensitive Cookie in HTTPS Session Without Secure Attribute)", "GET https://h.test/ (and /Account/Register, /Account/Login)", "Low"),
+        ];
+        let out = dedup_findings(v);
+        let cookie: Vec<&Finding> = out.iter().filter(|x| cwe_num(&x.cwe) == "614" && endpoint_key(&x.endpoint) == "h.test").collect();
+        assert_eq!(cookie.len(), 1, "got {:?}", out.iter().map(|x| (&x.agent, &x.title)).collect::<Vec<_>>());
+        // Severity must not drift down just because most agents said Low.
+        assert_eq!(cookie[0].severity, "Medium");
+        assert!(cookie[0].votes.contains("corroborated by"), "agreement belongs in the report: {:?}", cookie[0].votes);
+    }
+
+    /// Three different missing headers are all CWE-693 on `/` and are three
+    /// separate fixes — merging by (cwe, endpoint) alone would erase two.
+    #[test]
+    fn different_headers_under_one_cwe_stay_separate() {
+        let v = vec![
+            f("security_headers", "Missing X-Content-Type-Options: nosniff", "CWE-693", "https://h.test/", "Low"),
+            f("security_headers", "Missing Referrer-Policy header", "CWE-693", "https://h.test/", "Low"),
+            f("security_headers", "Missing Permissions-Policy header", "CWE-693", "https://h.test/", "Low"),
+            f("security_headers", "Weak Content-Security-Policy — only frame-ancestors defined, no script-src/default-src", "CWE-693", "https://h.test/", "Low"),
+        ];
+        assert_eq!(dedup_findings(v).len(), 4);
+    }
+
+    /// Same CWE, same host, different endpoints: three real findings with
+    /// different impact (login spraying vs reset-email flooding).
+    #[test]
+    fn the_same_weakness_on_different_endpoints_is_not_a_duplicate() {
+        let v = vec![
+            f("rate_limit_abuse", "Missing rate limiting & account lockout on login", "CWE-307", "https://h.test/Account/Login", "Medium"),
+            f("rate_limit_abuse", "Missing rate limiting on password-reset flow", "CWE-307", "https://h.test/Account/ForgotPassword", "Medium"),
+            f("rate_limit_abuse", "Missing rate limiting on resend-email-confirmation", "CWE-307", "https://h.test/Account/ResendEmailConfirmation", "Medium"),
+        ];
+        assert_eq!(dedup_findings(v).len(), 3);
+    }
+
+    #[test]
+    fn the_survivor_keeps_the_fullest_evidence_and_the_missing_pieces() {
+        let mut thin = f("a", "Missing HSTS header", "CWE-319", "https://h.test/", "Medium");
+        thin.evidence = "short".into();
+        let mut rich = f("b", "Missing HTTP Strict-Transport-Security (HSTS) header", "CWE-319", "https://h.test/", "Low");
+        rich.evidence = "a much longer evidence blob with the full header dump".into();
+        rich.remediation = "Add Strict-Transport-Security with max-age".into();
+        let out = dedup_findings(vec![thin, rich]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].severity, "Medium", "highest severity wins");
+        assert!(out[0].evidence.contains("full header dump"), "fullest evidence wins");
+        assert!(!out[0].remediation.is_empty(), "the duplicate's remediation is not lost");
+    }
+
+    #[test]
+    fn endpoint_and_cwe_are_normalized_the_same_however_they_were_written() {
+        assert_eq!(cwe_num("CWE-614 (Sensitive Cookie…)"), "614");
+        assert_eq!(cwe_num("CWE-204 (Observable Response Discrepancy) / CWE-200"), "204");
+        assert_eq!(endpoint_key("GET https://h.test/ (and /Account/Register)"), "h.test");
+        assert_eq!(endpoint_key("https://h.test/Account/Login?x=1"), "h.test/account/login");
+        assert_eq!(endpoint_key("https://www.h.test/a/"), "h.test/a");
     }
 }
