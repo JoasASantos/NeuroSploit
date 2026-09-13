@@ -138,6 +138,10 @@ function goToStep(n) {
   show($('#btnLaunch'), state.step === STEP_COUNT - 1);
   if (state.step === STEP_COUNT - 1) renderReview();
   updateWizardSummary();
+  // The stepper scrolls horizontally on a phone; advancing to a step that is
+  // off-screen would look like nothing happened.
+  const active = $('.step-tab.active');
+  if (active?.scrollIntoView) active.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
 }
 
 // Errors land next to the field they belong to. A modal alert forced the
@@ -1902,6 +1906,7 @@ document.addEventListener('keydown', (e) => {
   if (!$('#findingModal').hidden) return show($('#findingModal'), false);
   if (!$('#leadModal').hidden) return closeLeadModal();
   if (!$('#authModal').hidden) return show($('#authModal'), false);
+  if ($('#sidebar').classList.contains('open')) return setSidebar(false);
   if (!$('#termDock').hidden) termClose();
 });
 
@@ -2250,12 +2255,26 @@ $('#runFilter').addEventListener('input', (e) => { state.runFilter = e.target.va
 // boot
 // ---------------------------------------------------------------------------
 
-// Below 768px the sidebar slides off-canvas. It previously had no way back:
+// Below 900px the sidebar slides off-canvas. It previously had no way back:
 // the CSS hid it and nothing could set .open.
-$('#btnSidebarToggle').addEventListener('click', () => $('#sidebar').classList.toggle('open'));
-$('#sbGroups').addEventListener('click', () => {
-  if (window.matchMedia('(max-width: 768px)').matches) $('#sidebar').classList.remove('open');
+const NARROW = '(max-width: 900px)';
+function setSidebar(open) {
+  $('#sidebar').classList.toggle('open', open);
+  show($('#sidebarScrim'), open && window.matchMedia(NARROW).matches);
+  $('#btnSidebarToggle').setAttribute('aria-expanded', String(open));
+}
+$('#btnSidebarToggle').addEventListener('click', () => setSidebar(!$('#sidebar').classList.contains('open')));
+$('#sidebarScrim').addEventListener('click', () => setSidebar(false));
+// Picking a run is the drawer's whole purpose — it should get out of the way
+// once you have.
+$('#sbGroups').addEventListener('click', (e) => {
+  if (e.target.closest('.sb-run') && window.matchMedia(NARROW).matches) setSidebar(false);
 });
+$('#btnDashboard').addEventListener('click', () => { if (window.matchMedia(NARROW).matches) setSidebar(false); });
+$('#btnNewEngagement').addEventListener('click', () => { if (window.matchMedia(NARROW).matches) setSidebar(false); });
+// Growing the window past the breakpoint leaves a scrim over a sidebar that is
+// no longer a drawer.
+window.matchMedia(NARROW).addEventListener('change', (m) => { if (!m.matches) setSidebar(false); });
 
 async function boot() {
   applyTheme();

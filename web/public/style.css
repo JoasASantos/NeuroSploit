@@ -91,7 +91,11 @@ a { color: var(--accent); text-decoration: none; }
 
 /* ============================================================ AppShell */
 
-.app { display: flex; height: 100vh; overflow: hidden; }
+/* 100vh is wrong on mobile: it measures the viewport WITHOUT the browser's
+   collapsing address bar, so the bottom of the app sits under it and the
+   footer/CTA is unreachable until you scroll the chrome away. dvh tracks the
+   visible box; the vh line stays as the fallback for older engines. */
+.app { display: flex; height: 100vh; height: 100dvh; overflow: hidden; }
 
 .sidebar {
   width: 248px; flex: none; background: var(--surface); border-right: 1px solid var(--border);
@@ -402,7 +406,12 @@ textarea { resize: vertical; min-height: 72px; }
 
 .runpage { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .runpage[hidden] { display: none; }
-.run-head { display: flex; align-items: flex-start; justify-content: space-between; padding: var(--sp-5) var(--sp-5) var(--sp-4); border-bottom: 1px solid var(--border); }
+.run-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-4); padding: var(--sp-5) var(--sp-5) var(--sp-4); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+/* The header is a title plus a row of buttons. Without a flex basis the
+   buttons win the width fight and the title wraps one character per line —
+   which is exactly what happened at 390px. */
+.run-head-main { flex: 1 1 260px; }
+.run-actions { flex: 0 0 auto; flex-wrap: wrap; }
 .run-head-main { min-width: 0; }
 .run-target { font-size: 15px; font-weight: 600; font-family: var(--mono); overflow-wrap: anywhere; }
 .run-meta { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-1); font-size: 12px; color: var(--text-dim); font-family: var(--mono); }
@@ -446,7 +455,7 @@ textarea { resize: vertical; min-height: 72px; }
 /* The canvas is a fixed viewport that the graph pans inside — letting the box
    grow to the graph's height (1187px on a 27-finding run) meant scrolling the
    page blind, with no way to see the shape of the path. */
-.ap-canvas-wrap { position: relative; height: min(60vh, 560px); border-radius: var(--radius-md); overflow: hidden; background: var(--surface-2); border: 1px solid var(--border); cursor: grab; touch-action: none; }
+.ap-canvas-wrap { position: relative; height: min(60dvh, 560px); min-height: 240px; border-radius: var(--radius-md); overflow: hidden; background: var(--surface-2); border: 1px solid var(--border); cursor: grab; touch-action: none; }
 .ap-canvas-wrap.dragging { cursor: grabbing; }
 .ap-canvas { display: block; width: 100%; height: 100%; }
 .ap-canvas text { font-family: var(--sans); }
@@ -533,7 +542,7 @@ textarea { resize: vertical; min-height: 72px; }
 
 .modal-overlay { position: fixed; inset: 0; background: rgba(10,9,8,.45); display: flex; align-items: center; justify-content: center; z-index: 60; }
 .modal-overlay[hidden] { display: none; }
-.modal { width: 620px; max-width: calc(100vw - 40px); max-height: calc(100vh - 80px); background: var(--surface); border-radius: var(--radius-md); box-shadow: var(--shadow-float); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border); }
+.modal { width: 620px; max-width: calc(100vw - 40px); max-height: calc(100vh - 80px); max-height: calc(100dvh - 80px); background: var(--surface); border-radius: var(--radius-md); box-shadow: var(--shadow-float); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border); }
 .modal-sm { width: 520px; }
 .modal-lg { width: 760px; }
 .modal-foot { display: flex; justify-content: flex-end; gap: var(--sp-2); padding: var(--sp-3) var(--sp-5); border-top: 1px solid var(--border); }
@@ -560,7 +569,9 @@ textarea { resize: vertical; min-height: 72px; }
    floating drawer covered "Next →" and "Start Exploitation". */
 
 .term-dock {
-  position: relative; flex: none; height: 320px; min-height: 140px;
+  /* A fixed 320px dock eats 82% of a phone in landscape. Track the viewport
+     and keep a floor that still shows a usable number of rows. */
+  position: relative; flex: none; height: clamp(180px, 42dvh, 340px); min-height: 140px;
   display: flex; flex-direction: column; overflow: hidden;
   background: var(--term-bg); color: var(--term-fg); border-top: 1px solid var(--border-strong);
 }
@@ -572,7 +583,7 @@ textarea { resize: vertical; min-height: 72px; }
 body.resizing-ns { user-select: none; cursor: ns-resize; }
 
 .term-head {
-  display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3);
+  display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); flex-wrap: wrap;
   background: rgba(255,255,255,.03); border-bottom: 1px solid rgba(255,255,255,.07);
   font-size: 11.5px; color: #a5a099;
 }
@@ -616,28 +627,105 @@ body.resizing-ns { user-select: none; cursor: ns-resize; }
 
 /* ============================================================ Responsive */
 
+.sidebar-scrim {
+  display: none; position: fixed; inset: 0; z-index: 54; background: rgba(10, 9, 8, .45);
+}
+.sidebar-scrim[hidden] { display: none !important; }
 .sidebar-toggle {
   display: none; position: fixed; left: 10px; top: 10px; z-index: 60;
   width: 32px; height: 32px; border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
 }
 
-@media (max-width: 1024px) {
-  .sidebar { width: 208px; }
+/* Wide screens: line length, not width, is the constraint — a findings table
+   stretched across 2560px is harder to read, not easier. */
+@media (min-width: 1600px) {
+  .dash-body > *, .run-body > * { max-width: 1500px; margin-left: auto; margin-right: auto; }
 }
-@media (max-width: 768px) {
+
+@media (max-width: 1200px) {
+  .sidebar { width: 216px; }
+}
+
+/* Tablet portrait and small laptops: the sidebar is the first thing to go,
+   because the main pane is where the work happens. */
+@media (max-width: 900px) {
   .sidebar-toggle { display: block; }
-  .sidebar { position: fixed; left: -260px; top: 0; bottom: 0; width: 240px; z-index: 55; transition: left .2s; box-shadow: var(--shadow-float); }
+  .sidebar {
+    position: fixed; left: -280px; top: 0; bottom: 0; width: min(280px, 82vw); z-index: 55;
+    transition: left .2s ease; box-shadow: var(--shadow-float);
+  }
   .sidebar.open { left: 0; }
-  .topbar, .run-head { padding-left: 52px; }
+  /* Tapping the page behind an open drawer must close it — otherwise the only
+     way out is the same small button that opened it. */
+  .sidebar-scrim { display: block; }
+  .topbar, .run-head { padding-left: 56px; }
   .field-row { flex-direction: column; }
-  .modal { width: calc(100vw - 24px); }
-  .review-grid { grid-template-columns: 1fr; }
-  .term-dock { height: 260px; }
+  .review-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
 }
+
+@media (max-width: 680px) {
+  .topbar { flex-wrap: wrap; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4) var(--sp-3) 56px; }
+  .topbar-sub { display: none; }
+  .run-head { flex-direction: column; padding: var(--sp-4) var(--sp-4) var(--sp-3) 56px; }
+  /* In the column layout the title block must size to its content — the
+     desktop `flex: 1` made it grow and pushed the buttons to the bottom of a
+     tall empty header. */
+  .run-head-main { flex: 0 0 auto; width: 100%; }
+  .run-actions { width: 100%; }
+  .run-actions .btn { flex: 1 1 auto; justify-content: center; }
+  .run-facts { display: block; }
+  .run-facts span { display: inline; }
+  .wizard-body, .run-body, .dash-body { padding: var(--sp-4) var(--sp-3) var(--sp-6); }
+  .wizard-panel { gap: var(--sp-4); }
+  .modal { width: calc(100vw - 16px); max-width: none; max-height: calc(100dvh - 32px); }
+  .modal-body, .modal-head, .modal-tabs, .modal-foot { padding-left: var(--sp-4); padding-right: var(--sp-4); }
+  .review-grid, .dash-grid, .stat-row { grid-template-columns: 1fr; }
+  .data-table { min-width: 560px; }
+  .lead-toolbar .btn { flex: 1 1 auto; justify-content: center; }
+  .search-wrap { max-width: none; }
+  .term-status { display: none; }
+  .term-target { max-width: 150px; }
+  .bar-row { grid-template-columns: 76px 1fr 34px; }
+}
+
 @media (max-width: 480px) {
-  .topbar { flex-wrap: wrap; gap: var(--sp-2); }
-  .stepper { padding: 0 var(--sp-3); }
-  .wizard-footer { flex-direction: column; align-items: stretch; gap: var(--sp-2); }
-  .footer-actions { justify-content: flex-end; }
+  .stepper { padding: 0 var(--sp-2); }
+  .step-tab { padding: var(--sp-3) var(--sp-2) var(--sp-2); }
+  .wizard-footer { flex-direction: column; align-items: stretch; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); }
+  .footer-actions .btn { flex: 1 1 auto; justify-content: center; }
+  .mode-tiles { grid-template-columns: 1fr 1fr; }
+  .fair-likely .v { font-size: 24px; }
+  .stat-v { font-size: 26px; }
+}
+
+/* Phone in landscape: ~390px of height, most of it browser chrome. Anything
+   with a fixed vertical share has to shrink or the content disappears. */
+@media (max-height: 500px) and (orientation: landscape) {
+  .topbar, .run-head { padding-top: var(--sp-2); padding-bottom: var(--sp-2); min-height: 0; }
+  .term-dock { height: clamp(120px, 46dvh, 220px); }
+  .ap-canvas-wrap { height: 58dvh; min-height: 160px; }
+  .term-hints { display: none; }
+}
+
+/* Touch devices: a 26px button is a miss target, and iOS zooms the whole page
+   when a focused input is under 16px — which then breaks the layout the user
+   was typing into. */
+@media (pointer: coarse) {
+  .icon-btn { width: 38px; height: 38px; }
+  .btn { min-height: 40px; }
+  .btn-sm { min-height: 34px; }
+  .sb-run { padding: var(--sp-3) var(--sp-2); }
+  .run-tab, .step-tab, .modal-tab { min-height: 44px; }
+  input[type="text"], input[type="number"], input[type="password"], select, textarea { font-size: 16px; }
+  .switch { width: 38px; height: 22px; }
+  .switch .thumb { width: 18px; height: 18px; }
+  .switch input:checked + .track + .thumb { transform: translateX(16px); }
+  .switch input:indeterminate + .track + .thumb { transform: translateX(8px); }
+}
+
+/* Respect a reduced-motion preference: the drawer slide and the progress
+   animation are decoration, not information. */
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
