@@ -53,6 +53,16 @@ pub struct Exchange {
     /// Identity this exchange was performed as ("", "userA", "admin", …).
     #[serde(default)]
     pub identity: String,
+    /// Response headers, lowercased keys. Several classes are decided entirely
+    /// by a header (`Location`, `Set-Cookie`, `Access-Control-Allow-*`), so the
+    /// body alone is not enough evidence for them.
+    #[serde(default)]
+    pub headers: std::collections::BTreeMap<String, String>,
+    /// Request headers that mattered (Origin, Cookie, Authorization). Kept
+    /// separate because "what we sent" and "what came back" answer different
+    /// questions.
+    #[serde(default)]
+    pub request_headers: std::collections::BTreeMap<String, String>,
 }
 
 impl Exchange {
@@ -61,6 +71,29 @@ impl Exchange {
     }
     pub fn is_empty(&self) -> bool {
         self.body.is_empty()
+    }
+    /// Case-insensitive response header lookup.
+    pub fn header(&self, name: &str) -> &str {
+        let n = name.to_lowercase();
+        self.headers
+            .iter()
+            .find(|(k, _)| k.to_lowercase() == n)
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("")
+    }
+    pub fn request_header(&self, name: &str) -> &str {
+        let n = name.to_lowercase();
+        self.request_headers
+            .iter()
+            .find(|(k, _)| k.to_lowercase() == n)
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("")
+    }
+    pub fn is_redirect(&self) -> bool {
+        (300..400).contains(&self.status)
+    }
+    pub fn is_success(&self) -> bool {
+        (200..300).contains(&self.status)
     }
 }
 
@@ -434,7 +467,7 @@ impl CweValidator for RceValidator {
         "rce"
     }
     fn cwes(&self) -> &'static [&'static str] {
-        &["77", "78", "94", "95", "502", "1336", "917"]
+        &["77", "78", "94", "95", "502", "917"]
     }
     fn evidence_required(&self) -> &'static [&'static str] {
         &["controlled side effect", "unique nonce", "output/callback confirmation"]
@@ -455,6 +488,441 @@ impl CweValidator for RceValidator {
         }
         Verdict::NeedsReview("no nonce in the output and no callback — execution was not demonstrated".into())
     }
+}
+
+pub struct OpenRedirectValidator;
+impl CweValidator for OpenRedirectValidator {
+    fn name(&self) -> &'static str { "redirect" }
+    fn cwes(&self) -> &'static [&'static str] { &["601"] }
+    fn evidence_required(&self) -> &'static [&'static str] {
+        &["3xx response", "Location header pointing at an attacker-controlled host"]
+    }
+    fn validate(&self, _f: &Finding, ev: &Evidence) -> Verdict {
+        let Some(a) = &ev.attack else {
+            return Verdict::NeedsReview("no attack response captured".into());
+        };
+        let loc = a.header("location");
+        if loc.is_empty() {
+            // A redirect parameter that renders a link is not a redirect.
+            return Verdict::Rejected("no Location header — the response does not redirect".into());
+        }
+        let target_host = crate::scope::host_of(&a.url);
+        let dest_host = crate::scope::host_of(loc);
+        if !a.is_redirect() {
+            return Verdict::NeedsReview(format!("Location present but status is {} — not a redirect", a.status));
+        }
+        if dest_host.is_empty() || dest_host == target_host {
+            return Verdict::Rejected(format!("redirect stays on {target_host} — same-origin redirects are not open redirects"));
+        }
+        Verdict::Confirmed(format!("{} redirect to off-site host {dest_host} (Location: {loc})", a.status))
+    }
+}
+
+pub struct XxeValidator;
+impl CweValidator for XxeValidator {
+    fn name(&self) -> &'static str { "xxe" }
+    fn cwes(&self) -> &'static [&'static str] { &["611", "776", "827"] }
+    fn evidence_required(&self) -> &'static [&'static str] {
+        &["controlled entity retrieval (file marker or canary URL) OR out-of-band callback"]
+    }
+    fn validate(&self, _f: &Finding, ev: &Evidence) -> Verdict {
+        if ev.callback_received && !ev.marker.is_empty() {
+            return Verdict::Confirmed(format!("the parser fetched the external entity and called back with {}", ev.marker));
+        }
+        let Some(a) = &ev.attack else {
+            return Verdict::NeedsReview("no attack response captured".into());
+        };
+        if !ev.marker.is_empty() && a.body.contains(&ev.marker) {
+            return Verdict::Confirmed(format!("the response echoed the entity's controlled content ({})", ev.marker));
+        }
+        if a.body.contains("root:x:0:0") && ev.baseline.as_ref().map(|b| !b.body.contains("root:x:0:0")).unwrap_or(true) {
+            return Verdict::Confirmed("the parsed document disclosed /etc/passwd through an external entity".into());
+        }
+        // An XML parse error proves the parser read the doctype, not that it
+        // resolved anything — a very common overclaim in this class.
+        let parse_error = ["entity", "doctype", "xml parsing", "saxparse"].iter().any(|k| a.body.to_lowercase().contains(k));
+        if parse_error {
+            return Verdict::NeedsReview("only a parser error mentioning entities — that shows the DTD was read, not that an entity resolved".into());
+        }
+        Verdict::NeedsReview("no entity content and no callback — XXE was not demonstrated".into())
+    }
+}
+
+pub struct SstiValidator;
+impl CweValidator for SstiValidator {
+    fn name(&self) -> &'static str { "ssti" }
+    fn cwes(&self) -> &'static [&'static str] { &["1336"] }
+    fn evidence_required(&self) -> &'static [&'static str] {
+        &["arithmetic/expression oracle evaluated server-side", "result absent from the payload itself"]
+    }
+    fn validate(&self, f: &Finding, ev: &Evidence) -> Verdict {
+        let Some(a) = &ev.attack else {
+            return Verdict::NeedsReview("no attack response captured".into());
+        };
+        // The oracle: the response must contain the RESULT of an expression
+        // that never appears literally in what was sent. Otherwise the "proof"
+        // is just the payload being echoed back.
+        let sent = format!("{} {}", f.payload, a.url);
+        if !ev.marker.is_empty() {
+            let evaluated = a.body.contains(&ev.marker) && !sent.contains(&ev.marker);
+            if evaluated {
+                return Verdict::Confirmed(format!("the template engine evaluated the expression and produced {}", ev.marker));
+            }
+            if a.body.contains(&ev.marker) {
+                return Verdict::Rejected("the marker appears in the response but was also present in the request — that is reflection, not evaluation".into());
+            }
+        }
+        for (expr, result) in [("7*7", "49"), ("7*'7'", "7777777"), ("1337*2", "2674")] {
+            if sent.contains(expr) && a.body.contains(result) && !sent.contains(result) {
+                let baseline_had = ev.baseline.as_ref().map(|b| b.body.contains(result)).unwrap_or(false);
+                if baseline_had {
+                    return Verdict::Rejected(format!("'{result}' already appears in the baseline response — not produced by the payload"));
+                }
+                return Verdict::Confirmed(format!("expression '{expr}' evaluated server-side to '{result}'"));
+            }
+        }
+        Verdict::NeedsReview("no evaluated expression observed — template injection needs an oracle whose result was never sent".into())
+    }
+}
+
+pub struct CorsValidator;
+impl CweValidator for CorsValidator {
+    fn name(&self) -> &'static str { "cors" }
+    fn cwes(&self) -> &'static [&'static str] { &["942", "346", "1385"] }
+    fn evidence_required(&self) -> &'static [&'static str] {
+        &["request Origin", "Access-Control-Allow-Origin reflecting it", "Access-Control-Allow-Credentials: true"]
+    }
+    fn validate(&self, _f: &Finding, ev: &Evidence) -> Verdict {
+        let Some(a) = &ev.attack else {
+            return Verdict::NeedsReview("no response captured".into());
+        };
+        let acao = a.header("access-control-allow-origin");
+        let acac = a.header("access-control-allow-credentials").eq_ignore_ascii_case("true");
+        let origin = a.request_header("origin");
+        if acao.is_empty() {
+            return Verdict::Rejected("no Access-Control-Allow-Origin in the response — CORS is not enabled here".into());
+        }
+        if acao == "*" {
+            return if acac {
+                // Browsers refuse this combination outright, so it is a
+                // misconfiguration that cannot actually be exploited.
+                Verdict::NeedsReview("ACAO '*' with credentials is rejected by browsers — a misconfiguration, not an exploitable one".into())
+            } else {
+                Verdict::Rejected("ACAO '*' without credentials exposes only data any client could already read anonymously".into())
+            };
+        }
+        if !origin.is_empty() && acao.eq_ignore_ascii_case(origin) {
+            return if acac {
+                Verdict::Confirmed(format!("the app reflected attacker Origin '{origin}' into ACAO with credentials enabled — cross-origin reads of authenticated data"))
+            } else {
+                Verdict::NeedsReview(format!("Origin '{origin}' is reflected but credentials are not allowed — only unauthenticated data is exposed"))
+            };
+        }
+        Verdict::Rejected(format!("ACAO is a fixed value ('{acao}'), not a reflection of the sent Origin"))
+    }
+}
+
+pub struct CookieFlagsValidator;
+impl CweValidator for CookieFlagsValidator {
+    fn name(&self) -> &'static str { "cookie" }
+    fn cwes(&self) -> &'static [&'static str] { &["614", "1004", "1275", "1018"] }
+    fn evidence_required(&self) -> &'static [&'static str] { &["Set-Cookie header", "the URL's scheme"] }
+    fn validate(&self, _f: &Finding, ev: &Evidence) -> Verdict {
+        let Some(a) = ev.attack.as_ref().or(ev.baseline.as_ref()) else {
+            return Verdict::NeedsReview("no response with a Set-Cookie header captured".into());
+        };
+        let sc = a.header("set-cookie");
+        if sc.is_empty() {
+            return Verdict::Rejected("the response sets no cookie".into());
+        }
+        let low = sc.to_lowercase();
+        let https = a.url.starts_with("https://");
+        let mut missing = Vec::new();
+        if !low.contains("httponly") {
+            missing.push("HttpOnly");
+        }
+        if https && !low.contains("secure") {
+            missing.push("Secure");
+        }
+        if !low.contains("samesite") {
+            missing.push("SameSite");
+        }
+        if low.contains("samesite=none") && !low.contains("secure") {
+            missing.push("Secure (required with SameSite=None)");
+        }
+        if missing.is_empty() {
+            return Verdict::Rejected("the cookie carries HttpOnly, Secure and SameSite".into());
+        }
+        // Fully decidable from the header — no interpretation needed.
+        Verdict::Confirmed(format!("Set-Cookie is missing {} ({})", missing.join(", "), short_header(sc)))
+    }
+}
+
+pub struct ClickjackingValidator;
+impl CweValidator for ClickjackingValidator {
+    fn name(&self) -> &'static str { "framing" }
+    fn cwes(&self) -> &'static [&'static str] { &["1021"] }
+    fn evidence_required(&self) -> &'static [&'static str] {
+        &["absence of X-Frame-Options AND of CSP frame-ancestors on a state-changing page"]
+    }
+    fn validate(&self, _f: &Finding, ev: &Evidence) -> Verdict {
+        let Some(a) = ev.attack.as_ref().or(ev.baseline.as_ref()) else {
+            return Verdict::NeedsReview("no response captured".into());
+        };
+        let xfo = a.header("x-frame-options");
+        let csp = a.header("content-security-policy").to_lowercase();
+        if !xfo.is_empty() {
+            return Verdict::Rejected(format!("X-Frame-Options: {xfo} is present"));
+        }
+        if csp.contains("frame-ancestors") {
+            return Verdict::Rejected("CSP frame-ancestors is set".into());
+        }
+        if ev.browser_executed && ev.marker_observed {
+            return Verdict::Confirmed("the page rendered inside an attacker-controlled frame in a real browser".into());
+        }
+        Verdict::Confirmed("neither X-Frame-Options nor CSP frame-ancestors is set — the page can be framed".into())
+    }
+}
+
+pub struct AuthBypassValidator;
+impl CweValidator for AuthBypassValidator {
+    fn name(&self) -> &'static str { "authz" }
+    fn cwes(&self) -> &'static [&'static str] { &["306", "287", "288", "289", "302"] }
+    fn evidence_required(&self) -> &'static [&'static str] {
+        &["authenticated response", "same request WITHOUT credentials", "protected content returned anyway"]
+    }
+    fn validate(&self, _f: &Finding, ev: &Evidence) -> Verdict {
+        let (Some(a), Some(b)) = (&ev.identity_a, &ev.identity_b) else {
+            return Verdict::NeedsReview("needs the authenticated response and the unauthenticated one to compare".into());
+        };
+        if !b.request_header("authorization").is_empty() || !b.request_header("cookie").is_empty() {
+            return Verdict::Rejected("the 'unauthenticated' request still carried credentials — nothing was bypassed".into());
+        }
+        if b.status == 401 || b.status == 403 {
+            return Verdict::Rejected(format!("the anonymous request was denied ({}) — authentication is enforced", b.status));
+        }
+        if b.is_redirect() {
+            let loc = b.header("location").to_lowercase();
+            if loc.contains("login") || loc.contains("signin") || loc.contains("auth") {
+                return Verdict::Rejected("the anonymous request was redirected to login — the control works".into());
+            }
+        }
+        if !b.is_success() {
+            return Verdict::Rejected(format!("the anonymous request got {} — no content was obtained", b.status));
+        }
+        let overlap = semantic_overlap(&a.body, &b.body);
+        if overlap < 0.6 {
+            return Verdict::Rejected(format!("anonymous got 200 but the body does not match the protected resource ({:.0}% overlap)", overlap * 100.0));
+        }
+        Verdict::Confirmed(format!("the protected resource was served without credentials ({:.0}% content match)", overlap * 100.0))
+    }
+}
+
+pub struct JwtValidator;
+impl CweValidator for JwtValidator {
+    fn name(&self) -> &'static str { "jwt" }
+    fn cwes(&self) -> &'static [&'static str] { &["347", "345", "290"] }
+    fn evidence_required(&self) -> &'static [&'static str] {
+        &["a forged/modified token", "the server accepting it", "privileged content returned"]
+    }
+    fn validate(&self, _f: &Finding, ev: &Evidence) -> Verdict {
+        let (Some(a), Some(b)) = (&ev.identity_a, &ev.identity_b) else {
+            return Verdict::NeedsReview("needs a legitimate response and one made with the forged token".into());
+        };
+        let forged = b.request_header("authorization");
+        if forged.is_empty() {
+            return Verdict::NeedsReview("the forged token was not recorded on the request".into());
+        }
+        if b.status == 401 || b.status == 403 {
+            return Verdict::Rejected(format!("the forged token was rejected ({}) — the signature is verified", b.status));
+        }
+        if !b.is_success() {
+            return Verdict::Rejected(format!("the forged token produced {} — no access was obtained", b.status));
+        }
+        let overlap = semantic_overlap(&a.body, &b.body);
+        if overlap < 0.5 {
+            return Verdict::Rejected(format!("200 with the forged token, but the content is not the privileged resource ({:.0}% overlap)", overlap * 100.0));
+        }
+        Verdict::Confirmed(format!("the server accepted a forged token and returned privileged content ({:.0}% match)", overlap * 100.0))
+    }
+}
+
+pub struct RateLimitValidator;
+impl CweValidator for RateLimitValidator {
+    fn name(&self) -> &'static str { "ratelimit" }
+    fn cwes(&self) -> &'static [&'static str] { &["307", "799", "770"] }
+    fn evidence_required(&self) -> &'static [&'static str] {
+        &["a burst of attempts", "no 429/lockout across them", ">= 20 attempts"]
+    }
+    fn validate(&self, _f: &Finding, ev: &Evidence) -> Verdict {
+        const MIN_ATTEMPTS: usize = 20;
+        let n = ev.repeats.len();
+        if n < MIN_ATTEMPTS {
+            return Verdict::NeedsReview(format!(
+                "only {n} attempt(s) recorded — absence of throttling needs at least {MIN_ATTEMPTS} to distinguish it from a limit that was never reached"
+            ));
+        }
+        if let Some(blocked) = ev.repeats.iter().find(|r| r.status == 429 || r.status == 423) {
+            return Verdict::Rejected(format!("attempt was throttled with {} — rate limiting is enforced", blocked.status));
+        }
+        if ev.repeats.iter().any(|r| !r.header("retry-after").is_empty()) {
+            return Verdict::Rejected("the server returned Retry-After — throttling is in place".into());
+        }
+        Verdict::Confirmed(format!("{n} consecutive attempts, none throttled (no 429, no lockout, no Retry-After)"))
+    }
+}
+
+pub struct SessionFixationValidator;
+impl CweValidator for SessionFixationValidator {
+    fn name(&self) -> &'static str { "session" }
+    fn cwes(&self) -> &'static [&'static str] { &["384"] }
+    fn evidence_required(&self) -> &'static [&'static str] {
+        &["session id before authentication", "session id after authentication", "they are identical"]
+    }
+    fn validate(&self, _f: &Finding, ev: &Evidence) -> Verdict {
+        let (Some(before), Some(after)) = (&ev.baseline, &ev.attack) else {
+            return Verdict::NeedsReview("needs the pre-login and post-login responses".into());
+        };
+        let pre = session_id(before.header("set-cookie")).or_else(|| session_id(before.request_header("cookie")));
+        let post = session_id(after.header("set-cookie")).or_else(|| session_id(after.request_header("cookie")));
+        let (Some(pre), Some(post)) = (pre, post) else {
+            return Verdict::NeedsReview("no session cookie was captured on one of the two responses".into());
+        };
+        if pre == post {
+            Verdict::Confirmed(format!("the session id survived authentication unchanged ({}…)", &pre[..pre.len().min(8)]))
+        } else {
+            Verdict::Rejected("the session id was regenerated at login — fixation is prevented".into())
+        }
+    }
+}
+
+pub struct MassAssignmentValidator;
+impl CweValidator for MassAssignmentValidator {
+    fn name(&self) -> &'static str { "massassign" }
+    fn cwes(&self) -> &'static [&'static str] { &["915", "913"] }
+    fn evidence_required(&self) -> &'static [&'static str] {
+        &["request setting a privileged field", "read-back confirming it changed"]
+    }
+    fn validate(&self, _f: &Finding, ev: &Evidence) -> Verdict {
+        let Some(a) = &ev.attack else {
+            return Verdict::NeedsReview("no attack request captured".into());
+        };
+        if !a.is_success() {
+            return Verdict::Rejected(format!("the write was refused ({})", a.status));
+        }
+        // A 200 on the write proves nothing: many APIs accept and ignore extra
+        // fields. Only the read-back decides it.
+        let Some(verify) = &ev.identity_a else {
+            return Verdict::NeedsReview("the write succeeded, but without a read-back the field may simply have been ignored".into());
+        };
+        if ev.marker.is_empty() {
+            return Verdict::NeedsReview("needs a unique value for the privileged field so the read-back is unambiguous".into());
+        }
+        if verify.body.contains(&ev.marker) {
+            Verdict::Confirmed(format!("the privileged field was persisted and read back ({})", ev.marker))
+        } else {
+            Verdict::Rejected("the read-back does not contain the injected value — the extra field was accepted and ignored".into())
+        }
+    }
+}
+
+pub struct CsrfValidator;
+impl CweValidator for CsrfValidator {
+    fn name(&self) -> &'static str { "csrf" }
+    fn cwes(&self) -> &'static [&'static str] { &["352"] }
+    fn evidence_required(&self) -> &'static [&'static str] {
+        &["state-changing request without a token / with a foreign Origin", "the change taking effect"]
+    }
+    fn validate(&self, _f: &Finding, ev: &Evidence) -> Verdict {
+        let Some(a) = &ev.attack else {
+            return Verdict::NeedsReview("no cross-origin request captured".into());
+        };
+        if a.method.eq_ignore_ascii_case("GET") {
+            return Verdict::NeedsReview("a GET is not a state change — CSRF needs the request that mutates".into());
+        }
+        if a.status == 403 || a.status == 419 || a.status == 401 {
+            return Verdict::Rejected(format!("the request without a valid token was refused ({})", a.status));
+        }
+        if !a.is_success() && !a.is_redirect() {
+            return Verdict::Rejected(format!("the request returned {} — no state change", a.status));
+        }
+        // SameSite=Lax/Strict on the session cookie stops the classic attack, so
+        // a "successful" replay from a test harness would not work from a real
+        // attacker page.
+        let sc = a.header("set-cookie").to_lowercase();
+        if sc.contains("samesite=strict") || sc.contains("samesite=lax") {
+            return Verdict::NeedsReview("the session cookie is SameSite — a browser would not attach it cross-site, so this is likely not exploitable".into());
+        }
+        let Some(verify) = &ev.identity_a else {
+            return Verdict::NeedsReview("the request succeeded, but without a read-back there is no proof the state actually changed".into());
+        };
+        if !ev.marker.is_empty() && verify.body.contains(&ev.marker) {
+            return Verdict::Confirmed(format!("a cross-origin state change took effect and was read back ({})", ev.marker));
+        }
+        Verdict::NeedsReview("the read-back does not show the injected change".into())
+    }
+}
+
+pub struct ExposureValidator;
+impl CweValidator for ExposureValidator {
+    fn name(&self) -> &'static str { "exposure" }
+    fn cwes(&self) -> &'static [&'static str] { &["200", "538", "540", "548", "312", "532"] }
+    fn evidence_required(&self) -> &'static [&'static str] {
+        &["a 2xx response", "a recognizable secret/listing signature absent from the baseline"]
+    }
+    fn validate(&self, _f: &Finding, ev: &Evidence) -> Verdict {
+        let Some(a) = &ev.attack else {
+            return Verdict::NeedsReview("no response captured".into());
+        };
+        if !a.is_success() {
+            return Verdict::Rejected(format!("the resource returned {} — nothing was exposed", a.status));
+        }
+        // A soft-404 that returns the site's normal page with status 200 is the
+        // most common false positive for "exposed file".
+        if let Some(b) = &ev.baseline {
+            if semantic_overlap(&b.body, &a.body) > 0.9 && b.status == a.status {
+                return Verdict::Rejected("the response is identical to the baseline/404 page — a soft-404, not an exposed resource".into());
+            }
+        }
+        const SIGS: &[(&str, &str)] = &[
+            ("-----BEGIN RSA PRIVATE KEY-----", "an RSA private key"),
+            ("-----BEGIN OPENSSH PRIVATE KEY-----", "an OpenSSH private key"),
+            ("aws_secret_access_key", "AWS credentials"),
+            ("AKIA", "an AWS access key id"),
+            ("Index of /", "a directory listing"),
+            ("<ListBucketResult", "an open object-storage bucket"),
+            ("DB_PASSWORD=", "a .env file"),
+            ("BEGIN CERTIFICATE", "a certificate"),
+            ("[core]\nrepositoryformatversion", "a .git directory"),
+        ];
+        if let Some((sig, what)) = SIGS.iter().find(|(s, _)| a.body.contains(*s)) {
+            let baseline_had = ev.baseline.as_ref().map(|b| b.body.contains(*sig)).unwrap_or(false);
+            if baseline_had {
+                return Verdict::Rejected(format!("{what} also appears in the baseline — not specific to this path"));
+            }
+            return Verdict::Confirmed(format!("the resource disclosed {what}"));
+        }
+        Verdict::NeedsReview("200 with no recognizable secret or listing signature — the impact has to be judged by a human".into())
+    }
+}
+
+/// First 80 characters of a header value, for a readable verdict.
+fn short_header(v: &str) -> String {
+    v.chars().take(80).collect()
+}
+
+/// Extract a session identifier value from a Cookie/Set-Cookie header.
+fn session_id(header: &str) -> Option<String> {
+    const NAMES: &[&str] = &["sessionid", "session_id", "jsessionid", "phpsessid", "asp.net_sessionid", "connect.sid", "session", "sid"];
+    for part in header.split(';') {
+        let p = part.trim();
+        let (k, v) = p.split_once('=')?;
+        let key = k.trim().to_lowercase();
+        if NAMES.iter().any(|n| key == *n) && !v.trim().is_empty() {
+            return Some(v.trim().to_string());
+        }
+    }
+    None
 }
 
 /// Crude content-similarity: fraction of the owner's distinctive tokens that
@@ -484,6 +952,19 @@ pub fn validators() -> Vec<Box<dyn CweValidator>> {
         Box::new(SsrfValidator),
         Box::new(LfiValidator),
         Box::new(RceValidator),
+        Box::new(SstiValidator),
+        Box::new(XxeValidator),
+        Box::new(OpenRedirectValidator),
+        Box::new(CorsValidator),
+        Box::new(CookieFlagsValidator),
+        Box::new(ClickjackingValidator),
+        Box::new(AuthBypassValidator),
+        Box::new(JwtValidator),
+        Box::new(RateLimitValidator),
+        Box::new(SessionFixationValidator),
+        Box::new(MassAssignmentValidator),
+        Box::new(CsrfValidator),
+        Box::new(ExposureValidator),
     ]
 }
 
@@ -513,6 +994,26 @@ pub fn validator_for(f: &Finding) -> Option<Box<dyn CweValidator>> {
         ("local file inclusion", || Box::new(LfiValidator)),
         ("remote code execution", || Box::new(RceValidator)),
         ("command injection", || Box::new(RceValidator)),
+        ("template injection", || Box::new(SstiValidator)),
+        ("ssti", || Box::new(SstiValidator)),
+        ("xxe", || Box::new(XxeValidator)),
+        ("xml external entity", || Box::new(XxeValidator)),
+        ("open redirect", || Box::new(OpenRedirectValidator)),
+        ("cors", || Box::new(CorsValidator)),
+        ("cookie", || Box::new(CookieFlagsValidator)),
+        ("clickjacking", || Box::new(ClickjackingValidator)),
+        ("authentication bypass", || Box::new(AuthBypassValidator)),
+        ("missing authentication", || Box::new(AuthBypassValidator)),
+        ("unauthenticated access", || Box::new(AuthBypassValidator)),
+        ("jwt", || Box::new(JwtValidator)),
+        ("rate limit", || Box::new(RateLimitValidator)),
+        ("brute force", || Box::new(RateLimitValidator)),
+        ("session fixation", || Box::new(SessionFixationValidator)),
+        ("mass assignment", || Box::new(MassAssignmentValidator)),
+        ("csrf", || Box::new(CsrfValidator)),
+        ("cross-site request forgery", || Box::new(CsrfValidator)),
+        ("directory listing", || Box::new(ExposureValidator)),
+        ("information disclosure", || Box::new(ExposureValidator)),
     ];
     by_title.iter().find(|(k, _)| t.contains(k)).map(|(_, mk)| mk())
 }
@@ -851,6 +1352,265 @@ mod tests {
         };
         apply_mode(&mut finding, Mode::Advisory);
         assert_eq!(finding.review_status, "rejected");
+    }
+
+    fn exh(status: u16, body: &str, headers: &[(&str, &str)]) -> Exchange {
+        let mut e = ex(status, body);
+        for (k, v) in headers {
+            e.headers.insert((*k).to_string(), (*v).to_string());
+        }
+        e
+    }
+
+    #[test]
+    fn open_redirect_needs_a_location_off_site() {
+        let same = Evidence { attack: Some(exh(302, "", &[("Location", "/dashboard")])), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-601", "Open redirect"), Some(&same)), Verdict::Rejected(_)));
+
+        let mut off = exh(302, "", &[("Location", "https://evil.test/steal")]);
+        off.url = "https://t.test/go?next=https://evil.test".into();
+        let ev = Evidence { attack: Some(off), ..Default::default() };
+        match judge(&f("CWE-601", "Open redirect"), Some(&ev)) {
+            Verdict::Confirmed(r) => assert!(r.contains("evil.test"), "{r}"),
+            v => panic!("expected confirmation, got {v:?}"),
+        }
+    }
+
+    #[test]
+    fn a_reflected_redirect_parameter_without_a_location_is_rejected() {
+        let ev = Evidence { attack: Some(ex(200, "<a href=https://evil.test>click</a>")), ..Default::default() };
+        match judge(&f("CWE-601", "Open redirect"), Some(&ev)) {
+            Verdict::Rejected(r) => assert!(r.contains("does not redirect"), "{r}"),
+            v => panic!("a rendered link is not a redirect: {v:?}"),
+        }
+    }
+
+    #[test]
+    fn xxe_rejects_a_parser_error_as_proof() {
+        let ev = Evidence { attack: Some(ex(500, "SAXParseException: undefined entity 'xxe'")), ..Default::default() };
+        match judge(&f("CWE-611", "XXE"), Some(&ev)) {
+            Verdict::NeedsReview(r) => assert!(r.contains("not that an entity resolved"), "{r}"),
+            v => panic!("a parser error is not entity resolution: {v:?}"),
+        }
+        let ev2 = Evidence { marker: canary("nsxxe"), callback_received: true, ..Default::default() };
+        assert!(matches!(judge(&f("CWE-611", "XXE"), Some(&ev2)), Verdict::Confirmed(_)));
+    }
+
+    #[test]
+    fn ssti_requires_the_result_to_be_absent_from_what_was_sent() {
+        let mut finding = f("CWE-1336", "SSTI");
+        finding.payload = "{{7*7}}".into();
+        let ev = Evidence {
+            baseline: Some(ex(200, "hello")),
+            attack: Some(ex(200, "hello 49")),
+            ..Default::default()
+        };
+        match judge(&finding, Some(&ev)) {
+            Verdict::Confirmed(r) => assert!(r.contains("49"), "{r}"),
+            v => panic!("expected evaluation to confirm: {v:?}"),
+        }
+
+        // The trap: the payload itself already contained the "result".
+        let mut echo = f("CWE-1336", "SSTI");
+        echo.payload = "{{7*7}} 49".into();
+        let ev2 = Evidence { attack: Some(ex(200, "you said {{7*7}} 49")), ..Default::default() };
+        assert!(!matches!(judge(&echo, Some(&ev2)), Verdict::Confirmed(_)), "reflection must not confirm SSTI");
+    }
+
+    #[test]
+    fn cors_confirms_only_reflection_plus_credentials() {
+        let mut a = exh(200, "{}", &[("Access-Control-Allow-Origin", "https://evil.test"), ("Access-Control-Allow-Credentials", "true")]);
+        a.request_headers.insert("Origin".into(), "https://evil.test".into());
+        let ev = Evidence { attack: Some(a), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-942", "CORS misconfiguration"), Some(&ev)), Verdict::Confirmed(_)));
+
+        // Wildcard without credentials exposes nothing an anonymous client
+        // could not already read.
+        let ev2 = Evidence { attack: Some(exh(200, "{}", &[("Access-Control-Allow-Origin", "*")])), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-942", "CORS"), Some(&ev2)), Verdict::Rejected(_)));
+    }
+
+    #[test]
+    fn cookie_flags_are_decided_entirely_by_the_header() {
+        let mut good = exh(200, "", &[("Set-Cookie", "sid=abc; HttpOnly; Secure; SameSite=Lax")]);
+        good.url = "https://t.test/".into();
+        let ev = Evidence { attack: Some(good), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-614", "Insecure cookie"), Some(&ev)), Verdict::Rejected(_)));
+
+        let mut bad = exh(200, "", &[("Set-Cookie", "sid=abc; Path=/")]);
+        bad.url = "https://t.test/".into();
+        let ev2 = Evidence { attack: Some(bad), ..Default::default() };
+        match judge(&f("CWE-1004", "Cookie without HttpOnly"), Some(&ev2)) {
+            Verdict::Confirmed(r) => {
+                assert!(r.contains("HttpOnly") && r.contains("Secure") && r.contains("SameSite"), "{r}");
+            }
+            v => panic!("a header-only class must be decidable: {v:?}"),
+        }
+    }
+
+    #[test]
+    fn clickjacking_is_rejected_when_either_control_is_present() {
+        let ev = Evidence { attack: Some(exh(200, "", &[("X-Frame-Options", "DENY")])), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-1021", "Clickjacking"), Some(&ev)), Verdict::Rejected(_)));
+        let ev2 = Evidence { attack: Some(exh(200, "", &[("Content-Security-Policy", "frame-ancestors 'none'")])), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-1021", "Clickjacking"), Some(&ev2)), Verdict::Rejected(_)));
+        let ev3 = Evidence { attack: Some(ex(200, "page")), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-1021", "Clickjacking"), Some(&ev3)), Verdict::Confirmed(_)));
+    }
+
+    #[test]
+    fn auth_bypass_rejects_a_request_that_still_carried_credentials() {
+        let mut a = ex(200, "admin panel users list 4711");
+        a.identity = "admin".into();
+        let mut b = ex(200, "admin panel users list 4711");
+        b.request_headers.insert("Cookie".into(), "sid=stolen".into());
+        let ev = Evidence { identity_a: Some(a.clone()), identity_b: Some(b), ..Default::default() };
+        match judge(&f("CWE-306", "Missing authentication"), Some(&ev)) {
+            Verdict::Rejected(r) => assert!(r.contains("still carried credentials"), "{r}"),
+            v => panic!("that is not a bypass: {v:?}"),
+        }
+
+        let anon = ex(200, "admin panel users list 4711");
+        let ev2 = Evidence { identity_a: Some(a), identity_b: Some(anon), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-306", "Missing authentication"), Some(&ev2)), Verdict::Confirmed(_)));
+    }
+
+    #[test]
+    fn auth_bypass_rejects_a_redirect_to_login() {
+        let mut a = ex(200, "protected content here for real");
+        a.identity = "user".into();
+        let b = exh(302, "", &[("Location", "/login?next=/admin")]);
+        let ev = Evidence { identity_a: Some(a), identity_b: Some(b), ..Default::default() };
+        match judge(&f("CWE-306", "Missing authentication"), Some(&ev)) {
+            Verdict::Rejected(r) => assert!(r.contains("login"), "{r}"),
+            v => panic!("a login redirect is the control working: {v:?}"),
+        }
+    }
+
+    #[test]
+    fn a_forged_jwt_that_is_refused_is_not_a_finding() {
+        let mut a = ex(200, "account balance 4711 owner alice");
+        a.identity = "alice".into();
+        let mut b = ex(401, "invalid signature");
+        b.request_headers.insert("Authorization".into(), "Bearer forged.token.here".into());
+        let ev = Evidence { identity_a: Some(a), identity_b: Some(b), ..Default::default() };
+        match judge(&f("CWE-347", "JWT signature not verified"), Some(&ev)) {
+            Verdict::Rejected(r) => assert!(r.contains("signature is verified"), "{r}"),
+            v => panic!("401 means the check works: {v:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_rate_limiting_needs_a_real_burst() {
+        let few = Evidence { repeats: (0..5).map(|_| ex(200, "ok")).collect(), ..Default::default() };
+        match judge(&f("CWE-307", "No rate limiting"), Some(&few)) {
+            Verdict::NeedsReview(r) => assert!(r.contains("at least"), "{r}"),
+            v => panic!("five attempts prove nothing: {v:?}"),
+        }
+        let burst = Evidence { repeats: (0..25).map(|_| ex(200, "ok")).collect(), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-307", "No rate limiting"), Some(&burst)), Verdict::Confirmed(_)));
+
+        let mut throttled: Vec<Exchange> = (0..25).map(|_| ex(200, "ok")).collect();
+        throttled[20] = ex(429, "slow down");
+        let ev = Evidence { repeats: throttled, ..Default::default() };
+        assert!(matches!(judge(&f("CWE-307", "No rate limiting"), Some(&ev)), Verdict::Rejected(_)));
+    }
+
+    #[test]
+    fn session_fixation_compares_the_id_across_login() {
+        let before = exh(200, "", &[("Set-Cookie", "JSESSIONID=AAAA1111; Path=/")]);
+        let after_same = exh(302, "", &[("Set-Cookie", "JSESSIONID=AAAA1111; Path=/")]);
+        let ev = Evidence { baseline: Some(before.clone()), attack: Some(after_same), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-384", "Session fixation"), Some(&ev)), Verdict::Confirmed(_)));
+
+        let after_new = exh(302, "", &[("Set-Cookie", "JSESSIONID=BBBB2222; Path=/")]);
+        let ev2 = Evidence { baseline: Some(before), attack: Some(after_new), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-384", "Session fixation"), Some(&ev2)), Verdict::Rejected(_)));
+    }
+
+    #[test]
+    fn mass_assignment_needs_the_read_back_not_just_a_200() {
+        let marker = canary("nsma");
+        let ev = Evidence { marker: marker.clone(), attack: Some(ex(200, "updated")), ..Default::default() };
+        match judge(&f("CWE-915", "Mass assignment"), Some(&ev)) {
+            Verdict::NeedsReview(r) => assert!(r.contains("read-back"), "{r}"),
+            v => panic!("APIs accept and ignore extra fields all the time: {v:?}"),
+        }
+        let body = format!("{{\"role\":\"{marker}\"}}");
+        let ev2 = Evidence {
+            marker: marker.clone(),
+            attack: Some(ex(200, "updated")),
+            identity_a: Some(ex(200, &body)),
+            ..Default::default()
+        };
+        assert!(matches!(judge(&f("CWE-915", "Mass assignment"), Some(&ev2)), Verdict::Confirmed(_)));
+    }
+
+    #[test]
+    fn csrf_is_not_claimed_when_the_cookie_is_samesite() {
+        let mut a = exh(200, "ok", &[("Set-Cookie", "sid=x; SameSite=Lax")]);
+        a.method = "POST".into();
+        let ev = Evidence { attack: Some(a), ..Default::default() };
+        match judge(&f("CWE-352", "CSRF"), Some(&ev)) {
+            Verdict::NeedsReview(r) => assert!(r.contains("SameSite"), "{r}"),
+            v => panic!("a browser would not attach that cookie cross-site: {v:?}"),
+        }
+    }
+
+    #[test]
+    fn csrf_rejects_a_get_and_a_refused_post() {
+        let mut g = ex(200, "ok");
+        g.method = "GET".into();
+        assert!(matches!(judge(&f("CWE-352", "CSRF"), Some(&Evidence { attack: Some(g), ..Default::default() })), Verdict::NeedsReview(_)));
+        let mut p = ex(403, "csrf token mismatch");
+        p.method = "POST".into();
+        assert!(matches!(judge(&f("CWE-352", "CSRF"), Some(&Evidence { attack: Some(p), ..Default::default() })), Verdict::Rejected(_)));
+    }
+
+    #[test]
+    fn exposure_rejects_a_soft_404() {
+        let page = "welcome to our site, nothing here, please use the navigation menu above";
+        let ev = Evidence { baseline: Some(ex(200, page)), attack: Some(ex(200, page)), ..Default::default() };
+        match judge(&f("CWE-548", "Directory listing exposed"), Some(&ev)) {
+            Verdict::Rejected(r) => assert!(r.contains("soft-404"), "{r}"),
+            v => panic!("a soft-404 is the classic false positive here: {v:?}"),
+        }
+    }
+
+    #[test]
+    fn exposure_confirms_a_real_secret_signature() {
+        let ev = Evidence {
+            baseline: Some(ex(404, "not found")),
+            attack: Some(ex(200, "DB_PASSWORD=hunter2\nAPP_KEY=xyz")),
+            ..Default::default()
+        };
+        match judge(&f("CWE-200", "Exposed .env"), Some(&ev)) {
+            Verdict::Confirmed(r) => assert!(r.contains(".env"), "{r}"),
+            v => panic!("expected confirmation: {v:?}"),
+        }
+    }
+
+    #[test]
+    fn every_validator_declares_what_it_needs() {
+        for v in validators() {
+            assert!(!v.cwes().is_empty(), "{} owns no CWE", v.name());
+            assert!(!v.evidence_required().is_empty(), "{} states no evidence contract", v.name());
+        }
+    }
+
+    #[test]
+    fn no_two_validators_claim_the_same_cwe() {
+        // Ambiguous ownership would make routing depend on registration order,
+        // which is how a class silently gets the wrong rule.
+        let mut seen: Vec<(&str, &str)> = Vec::new();
+        for v in validators() {
+            for c in v.cwes() {
+                if let Some((other, _)) = seen.iter().find(|(_, cwe)| cwe == c) {
+                    panic!("CWE-{c} is claimed by both {} and {}", other, v.name());
+                }
+                seen.push((v.name(), c));
+            }
+        }
     }
 
     #[test]

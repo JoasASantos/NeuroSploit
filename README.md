@@ -324,14 +324,30 @@ HYPOTHESIS → CANDIDATE → [ VALIDATION ENGINE ] → CONFIRMED | NEEDS_REVIEW 
 
 Per-CWE rules, because "is this real?" has a different answer per class:
 
-| class | what confirms it |
-|-------|------------------|
-| SQLi (89/943) | baseline vs attack difference **that reproduces ≥2×** |
-| XSS (79/80) | a real browser executed a **harness-chosen marker** — reflection alone is not proof |
-| IDOR/BOLA (639/862/863) | identity B reads identity A's resource **and the body matches** (a 200 returning a login page is rejected) |
-| SSRF (918) | controlled callback, or retrieval of a canary resource |
-| LFI (22/23/98) | controlled file marker, or a file signature the baseline lacked |
-| RCE (77/78/94) | a unique nonce in command output or a callback — reflected input is rejected |
+19 validators, each owning a disjoint set of CWEs (a test enforces that no two
+claim the same one, so routing never depends on registration order):
+
+| class | what confirms it | what it rejects |
+|-------|------------------|-----------------|
+| SQLi (89/943/564) | baseline↔attack difference **reproducing ≥2×** | an app that always prints SQL errors |
+| XSS (79/80/83/87) | a browser executed a **harness-chosen marker** | reflection in HTML |
+| IDOR/BOLA (639/862/863/284/285) | identity B reads A's resource **and the body matches** | a 200 that is really a login page; a 403 |
+| SSRF (918) | controlled callback or canary retrieval | timing alone |
+| LFI (22/23/35/98/73) | controlled marker or a file signature the baseline lacked | a signature the baseline already had |
+| RCE (77/78/94/95/502/917) | unique nonce in output, or a callback | a nonce that is only reflected input |
+| SSTI (1336) | an expression evaluated server-side whose **result was never sent** | the payload echoing its own "result" |
+| XXE (611/776/827) | entity content returned, or an OOB callback | a parser error mentioning entities |
+| Open redirect (601) | 3xx **with** a `Location` pointing off-site | a rendered link; a same-origin redirect |
+| CORS (942/346/1385) | reflected `Origin` **plus** credentials | `ACAO: *` without credentials (browsers already refuse it) |
+| Cookie flags (614/1004/1275) | decided entirely by `Set-Cookie` + scheme | a cookie that carries all three flags |
+| Clickjacking (1021) | neither `X-Frame-Options` nor CSP `frame-ancestors` | either control present |
+| Auth bypass (306/287/288) | protected content served with **no credentials sent** | a "bypass" that still carried a cookie; a login redirect |
+| JWT (347/345/290) | forged token accepted **and** privileged content returned | a 401 on the forged token |
+| Rate limiting (307/799/770) | ≥20 attempts, none throttled | any 429 / `Retry-After` in the burst |
+| Session fixation (384) | the session id survives login unchanged | a regenerated id |
+| Mass assignment (915/913) | a read-back showing the privileged field persisted | a 200 on the write alone (APIs accept and ignore extras) |
+| CSRF (352) | cross-origin state change **read back** | a GET; a 403; a `SameSite` session cookie |
+| Exposure (200/538/540/548/312/532) | a real secret/listing signature the baseline lacked | a soft-404 that mirrors the baseline page |
 
 Two rules keep it honest: absent evidence is **never** a pass (it becomes
 `needs-review`), and a class with no rule is never auto-confirmed.
