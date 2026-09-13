@@ -10,7 +10,8 @@
 //   #let meta = (target: "", run_id: "", generated: "", model: "")
 //   #let findings = ( (severity: "", title: "", agent: "", cwe: "", cvss: "",
 //                      endpoint: "", payload: "", evidence: "", impact: "",
-//                      remediation: "", votes: "", confidence: 0.0), ... )
+//                      remediation: "", votes: "", confidence: 0.0,
+//                      location: "", steps: ""), ... )
 
 #let sevcolor = (
   Critical: rgb("#c0392b"), High: rgb("#e67e22"), Medium: rgb("#f1c40f"),
@@ -140,9 +141,12 @@
       text(8pt, fill: gray)[Location], text(8pt)[#raw(f.endpoint)],
       text(8pt, fill: gray)[Agent], text(8pt)[#raw(f.agent)],
     )
-    #v(4pt) #strong[Description / Impact] #linebreak() #text(9pt)[#f.impact]
-    #v(4pt) #strong[Proof of Concept] #linebreak() #raw(f.payload)
-    #v(3pt) #strong[Evidence] #linebreak() #raw(f.evidence)
+    #v(4pt) #strong[Where the problem is] #linebreak() #text(9pt)[#f.at("location", default: f.endpoint)]
+    #v(4pt) #strong[What it means] #linebreak() #text(9pt)[#f.impact]
+    #v(4pt) #strong[How to fix it] #linebreak() #text(9pt)[#f.remediation]
+    #v(4pt) #strong[Proof of concept — step by step] #linebreak() #raw(f.at("steps", default: f.payload))
+    #if f.payload != "" [ #v(3pt) #strong[Payload] #linebreak() #raw(f.payload) ]
+    #v(3pt) #strong[Technical evidence] #linebreak() #raw(f.evidence)
     #let shots = f.at("screenshots", default: ())
     #if shots.len() > 0 [
       #v(4pt) #strong[Proof Screenshots]
@@ -154,7 +158,7 @@
         ]
       ]
     ]
-    #v(3pt) #strong[Remediation] #linebreak() #text(9pt)[#f.remediation]
+
   ]
   #v(8pt)
 ]

@@ -77,6 +77,16 @@ pub struct Finding {
     /// report can embed each image next to its vulnerability.
     #[serde(default)]
     pub screenshots: Vec<String>,
+    /// Exactly where the problem is: the parameter, field, header, flow step or
+    /// `file:line` — not just the URL. "POST /api/orders, field `role` in the
+    /// JSON body" is actionable; an endpoint alone sends the reader hunting.
+    #[serde(default)]
+    pub location: String,
+    /// Literal, ordered commands that reproduce the finding from a clean shell.
+    /// A reader must be able to paste them one by one — this is the difference
+    /// between a report that can be verified and one that has to be believed.
+    #[serde(default)]
+    pub repro_steps: Vec<String>,
     /// Structured artifacts for the deterministic validation engine: the
     /// baseline/attack pair, repeats, markers, identity pair. Agents that
     /// follow the evidence contract emit this alongside the finding, and
@@ -114,6 +124,8 @@ impl Default for Finding {
             review_status: String::new(),
             review_reason: String::new(),
             screenshots: Vec::new(),
+            location: String::new(),
+            repro_steps: Vec::new(),
             evidence_data: None,
         }
     }

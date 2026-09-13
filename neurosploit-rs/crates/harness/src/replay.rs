@@ -24,7 +24,7 @@
 //! - **Bodies are truncated.** Evidence is stored with the run and shipped in
 //!   the report; a 40MB response is not evidence, it is a liability.
 
-use crate::scope::{Action, ScopePolicy};
+use crate::scope::ScopePolicy;
 use crate::validation::{Evidence, Exchange};
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};

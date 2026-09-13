@@ -827,11 +827,16 @@ function openFindingModal(f, pocs, runId) {
   const impactCombined = bizText && bizText !== impactText
     ? [impactText, bizText].filter(Boolean).join('\n\n') : impactText;
 
+  // A reader works through a finding in a fixed order — where is it, what does
+  // it mean, how do I fix it, how do I see it myself. The old layout led with
+  // an evidence dump, which answers the last question first and the first three
+  // not at all.
   $('#fmSection-evidence').innerHTML =
-    proseBlock('Description', clean(f.evidence)) +
-    codeBlock('Technical evidence', [f.endpoint, f.payload].filter(Boolean).join('\n\n'));
-  $('#fmSection-impact').innerHTML = proseBlock('Impact', impactCombined);
-  $('#fmSection-remediation').innerHTML = proseBlock('Remediation', clean(f.remediation));
+    proseBlock('Where the problem is', locationLine(f)) +
+    proseBlock('What it means', impactCombined || clean(f.evidence)) +
+    proseBlock('How to fix it', clean(f.remediation));
+  $('#fmSection-impact').innerHTML = pocBlock(f, pocs, runId);
+  $('#fmSection-remediation').innerHTML = codeBlock('Technical evidence', technicalEvidence(f));
   $('#fmSection-chains').innerHTML =
     ((f.chains_from || []).length ? `<div class="field-help">Chains from: ${esc(f.chains_from.join(', '))}</div>` : '') +
     (attributed ? '<div class="field-help" style="margin-top:6px;">Identified and validated by NeuroSploit (multi-model adversarial validation) — full methodology in the generated report.</div>' : '');
@@ -839,12 +844,13 @@ function openFindingModal(f, pocs, runId) {
   // Proof of concept — doctrine tells agents to cite the PoC's file name in
   // `evidence` (see pocs_line() in pipeline.rs), so match on that text first;
   // fall back to whatever the run wrote to pocs/ if nothing was cited.
-  const citedIn = `${f.evidence || ''} ${f.payload || ''}`;
-  const matches = (pocs || []).filter((p) => citedIn.includes(p));
-  const list = matches.length ? matches : (pocs || []);
+  // Scripts this finding cites are rendered inside the PoC block above; this
+  // list is the run's remaining scripts, so nothing written is hidden.
+  const citedIn = `${f.evidence || ''} ${f.payload || ''} ${(f.repro_steps || []).join(' ')}`;
+  const list = (pocs || []).filter((p) => !citedIn.includes(p));
   const pocRoot = $('#fmPocList');
   if (!list.length) {
-    pocRoot.textContent = 'No PoC script written for this finding yet — the exploiting agent only writes one when the finding warrants a runnable repro.';
+    pocRoot.textContent = 'No other scripts from this run.';
   } else {
     pocRoot.innerHTML = list.map((name) => `
       <div class="poc-file">
@@ -1258,6 +1264,109 @@ function renderAttackPath(container, allFindings, target, graph) {
     g.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
   });
 }
+/// Exactly where the problem is: parameter/field/flow, not just the URL.
+function locationLine(f) {
+  const loc = (f.location || '').trim();
+  const ep = (f.endpoint || '').trim();
+  if (!loc && !ep) return '(location not recorded)';
+  if (!loc) return ep;
+  if (!ep || loc.includes(ep)) return loc;
+  return `${ep} — ${loc}`;
+}
+
+function isSecretHeader(k) {
+  const n = k.toLowerCase();
+  return n === 'authorization' || n === 'cookie' || n === 'x-api-key' || n.includes('token') || n.includes('secret');
+}
+
+/// A pasteable curl for the recorded request. Credentials are redacted: a
+/// finding gets shared, and a live session cookie in a document is a new bug.
+function curlCommand(f) {
+  const a = f.evidence_data?.attack;
+  if (a) {
+    let cmd = 'curl -i -s';
+    const m = (a.method || 'GET').toUpperCase();
+    if (m !== 'GET') cmd += ` -X ${m}`;
+    for (const [k, v] of Object.entries(a.request_headers || {})) {
+      cmd += ` \\\n  -H '${k}: ${isSecretHeader(k) ? '<redacted — use your own>' : v}'`;
+    }
+    if (f.payload && m !== 'GET') cmd += ` \\\n  --data-raw '${String(f.payload).replace(/'/g, "'\\''")}'`;
+    cmd += ` \\\n  '${a.url}'`;
+    return cmd;
+  }
+  return f.endpoint ? `curl -i -s '${f.endpoint}'` : '';
+}
+
+/// Ordered steps: what the agent recorded, or a minimal derived sequence.
+function reproSteps(f) {
+  if (Array.isArray(f.repro_steps) && f.repro_steps.length) return f.repro_steps;
+  const steps = [];
+  const ev = f.evidence_data;
+  if (ev?.identity_a && ev?.identity_b) {
+    steps.push(`As ${ev.identity_a.identity || 'the owner'}:\ncurl -i -s '${ev.identity_a.url}'`);
+    steps.push(`As ${ev.identity_b.identity || 'the other identity'}, request the SAME resource:\ncurl -i -s '${ev.identity_b.url}'`);
+    steps.push('Compare the two bodies — the second returning the first\u2019s data is the finding.');
+    return steps;
+  }
+  if (ev?.baseline) steps.push(`Baseline — the same resource without the payload:\ncurl -i -s '${ev.baseline.url}'`);
+  const curl = curlCommand(f);
+  if (curl) steps.push(`Send the request carrying the payload:\n${curl}`);
+  if (f.payload) steps.push(`Payload used:\n${String(f.payload).trim()}`);
+  return steps.length ? steps : ['No reproduction steps were recorded for this finding.'];
+}
+
+/// The measured difference plus the raw exchanges — what turns "it returned a
+/// 500" into something a reviewer can check.
+function technicalEvidence(f) {
+  const ev = f.evidence_data;
+  let out = '';
+  const ex = (label, x) => {
+    if (!x) return '';
+    let s = `${label}\n  ${(x.method || 'GET')} ${x.url} → ${x.status}\n`;
+    if (x.identity) s += `  identity: ${x.identity}\n`;
+    for (const k of ['location', 'set-cookie', 'content-type', 'access-control-allow-origin', 'access-control-allow-credentials', 'x-frame-options', 'content-security-policy', 'retry-after']) {
+      const v = (x.headers || {})[k];
+      if (v) s += `  ${k}: ${String(v).slice(0, 200)}\n`;
+    }
+    if (x.body?.trim()) s += `  body (${x.body.length} bytes, excerpt):\n${x.body.trim().slice(0, 1200).split('\n').map((l) => '    ' + l).join('\n')}\n`;
+    return s + '\n';
+  };
+  if (ev?.baseline && ev?.attack) {
+    const b = ev.baseline, a = ev.attack;
+    const ratio = b.body?.length ? (a.body.length / b.body.length) : 0;
+    out += `MEASURED DIFFERENCE\n  baseline : ${b.status} · ${b.body?.length ?? 0} bytes · ${b.elapsed_ms ?? 0} ms\n`
+        +  `  attack   : ${a.status} · ${a.body?.length ?? 0} bytes · ${a.elapsed_ms ?? 0} ms\n`
+        +  `  delta    : status ${b.status} → ${a.status}, body ${((ratio - 1) * 100).toFixed(0)}%\n`;
+    if (ev.repeats?.length) out += `  repeats  : ${ev.repeats.length} recorded\n`;
+    out += '\n';
+  }
+  if (ev?.marker) {
+    out += `CONTROLLED MARKER\n  ${ev.marker} — observed: ${ev.marker_observed ? 'yes' : 'no'}`
+        +  `${ev.browser_executed ? ' · executed in a real browser' : ''}${ev.callback_received ? ' · out-of-band callback' : ''}\n\n`;
+  }
+  out += ex('BASELINE', ev?.baseline) + ex('ATTACK', ev?.attack) + ex('AS OWNER', ev?.identity_a) + ex('AS OTHER IDENTITY', ev?.identity_b);
+  if (f.evidence?.trim()) out += `AGENT-RECORDED EVIDENCE\n${f.evidence.trim()}\n`;
+  return out.trim();
+}
+
+/// The proof: numbered steps, then the payload, with any script offered as an
+/// extra artifact rather than as the proof itself.
+function pocBlock(f, pocs, runId) {
+  const steps = reproSteps(f).map((s) => `<li><pre class="step">${esc(s)}</pre></li>`).join('');
+  const payload = f.payload?.trim()
+    ? `<div class="field-group"><label class="field-label">Payload</label><pre class="poc-pre">${esc(f.payload.trim())}</pre></div>` : '';
+  const cited = `${f.evidence || ''} ${f.payload || ''} ${(f.repro_steps || []).join(' ')}`;
+  const scripts = (pocs || []).filter((p) => cited.includes(p));
+  const scriptBlock = scripts.length
+    ? `<div class="field-group"><label class="field-label">Runnable script (extra)</label>
+       <div class="field-help">The steps above are the proof; this script automates them.</div>
+       ${scripts.map((n) => `<div class="poc-file"><span class="fn">pocs/${esc(n)}</span>
+         <a class="btn btn-sm" href="/api/runs/${esc(runId)}/asset/pocs/${esc(n)}" target="_blank">Open raw</a></div>`).join('')}</div>`
+    : '';
+  return `<div class="field-group"><label class="field-label">Proof of concept — step by step</label>
+            <ol class="poc-steps">${steps}</ol></div>${payload}${scriptBlock}`;
+}
+
 function trimMid(s, n) {
   s = String(s || '');
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
@@ -1454,6 +1563,15 @@ async function loadDetail(id) {
     reportLink.href = `/api/runs/${encodeURIComponent(id)}/asset/report.html`;
     show(reportLink, true);
   } else show(reportLink, false);
+  // The PDF is produced by the harness (Typst) when that binary is present, so
+  // it is offered only when it actually exists — a dead download button is
+  // worse than none.
+  const pdfLink = $('#detailOpenPdf');
+  if (detail.assets.includes('report.pdf')) {
+    pdfLink.href = `/api/runs/${encodeURIComponent(id)}/asset/report.pdf`;
+    pdfLink.setAttribute('download', `${id}.pdf`);
+    show(pdfLink, true);
+  } else show(pdfLink, false);
   if (detail.status?.state === 'running') state.detailPoll = setInterval(() => loadDetail(id), 4000);
 }
 

@@ -682,8 +682,14 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
                     "AUTHORIZED engagement — you have explicit permission to test {target}. \
                      Do not ask for confirmation — proceed and PROVE each issue.\n\n\
                      {directives}{react}{depth}{decision}{spa}{safety}{ops}{doctrine}{shots}{body}\n\nWhen done, reply with ONLY a JSON array of confirmed findings (may be empty []). \
-                     Each item: {{id,title,severity,cwe,endpoint,payload,evidence,impact,remediation,confidence,auth_context,account,secret,screenshots}}. \
-                     `evidence` must contain the concrete proof (request/response excerpt). \
+                     Each item: {{id,title,severity,cwe,endpoint,location,payload,evidence,repro_steps,impact,remediation,confidence,auth_context,account,secret,screenshots}}. \
+                     Write for a developer who has never seen this app and has to fix it today:\n\
+                     - `location`: EXACTLY where it is — the parameter, form field, header, JSON key, or flow step (e.g. \"POST /api/orders, JSON field `role`\"). An endpoint alone sends them hunting.\n\
+                     - `impact`: what an attacker gets, in one or two plain sentences tied to THIS app's data or users. No boilerplate, no hedging.\n\
+                     - `remediation`: the concrete change, naming the control (parameterised query, server-side authorisation check, allowlist), not \"sanitise input\".\n\
+                     - `repro_steps`: an ORDERED array of literal commands someone can paste one by one from a clean shell — baseline request first, then the attack, then how to read the result. Include the real URL and the real payload.\n\
+                     - `evidence`: the concrete proof (request/response excerpt with status, key headers and the decisive part of the body). \
+                     A PoC script is an EXTRA artifact, never a substitute for these steps. \
                      `screenshots` is an array of proof-image paths you saved into the evidence dir (see EVIDENCE SCREENSHOTS above); omit or leave empty when you captured none. \
                      Set `auth_context` to \"authenticated\" or \"unauthenticated\"; set `account` to the test user/role you used (if any); \
                      for a created test account set `secret` to its generated password (it is stored in the run vault and masked in the report).",
@@ -1687,7 +1693,10 @@ fn persist(cfg: &RunConfig, recon: &str, transcript: &str, findings: &[Finding])
     put("findings.json", serde_json::to_string_pretty(findings).unwrap_or_else(|_| "[]".into()));
     put("findings.md", findings_md(&cfg.target, findings));
     let meta = cfg.workdir.as_deref().map(|d| report::read_meta(Path::new(d))).unwrap_or_default();
-    put("report.html", report::html(&cfg.target, findings, &meta));
+    let pocs: Vec<String> = std::fs::read_dir(dir.join("pocs"))
+        .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect())
+        .unwrap_or_default();
+    put("report.html", report::html_with_pocs(&cfg.target, findings, &meta, &pocs));
     written
 }
 
@@ -1769,6 +1778,10 @@ fn extract_findings(text: &str, agent: &str) -> Vec<Finding> {
                 endpoint: s(o, "endpoint"),
                 payload: s(o, "payload"),
                 evidence: s(o, "evidence"),
+                location: s(o, "location"),
+                repro_steps: o.get("repro_steps").and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|x| x.as_str().map(|t| t.to_string())).collect())
+                    .unwrap_or_default(),
                 impact: s(o, "impact"),
                 remediation: s(o, "remediation"),
                 confidence: conf(o.get("confidence")),

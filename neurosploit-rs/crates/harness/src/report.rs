@@ -55,6 +55,13 @@ fn esc(s: &str) -> String {
 /// grid, and a vulnerability summary table. No attack-path/kill-chain
 /// section — that lives in the interactive web console's live graph instead.
 pub fn html(target: &str, findings: &[Finding], meta: &EngagementMeta) -> String {
+    html_with_pocs(target, findings, meta, &[])
+}
+
+/// As [`html`], but told which scripts exist in the run's `pocs/` directory so
+/// each finding can link the ones it cites.
+pub fn html_with_pocs(target: &str, findings: &[Finding], meta: &EngagementMeta, available_pocs: &[String]) -> String {
+    let available_pocs = available_pocs.to_vec();
     let mut sorted = findings.to_vec();
     sorted.sort_by_key(|f| sev_rank(&f.severity));
 
@@ -103,15 +110,42 @@ pub fn html(target: &str, findings: &[Finding], meta: &EngagementMeta) -> String
                    <tr><td class=fk>Agent</td><td>{agent}</td>{authcell}</tr>\
                  </table>\
                  {reviewnote}\
-                 <h4>Description / Impact</h4><p>{impact}</p>\
-                 <h4>Proof of Concept</h4><pre>{payload}</pre>\
-                 <h4>Evidence</h4><pre>{evidence}</pre>{shots}\
-                 <h4>Remediation</h4><p>{remediation}</p></section>",
+                 <h4>Where the problem is</h4><p class=where>{where_}</p>\
+                 <h4>What it means</h4><p>{impact}</p>\
+                 <h4>How to fix it</h4><p>{remediation}</p>\
+                 <h4>Proof of concept — step by step</h4>{steps}\
+                 {payloadblock}\
+                 <h4>Technical evidence</h4><pre>{evidence}</pre>{shots}\
+                 {scripts}</section>",
                 sevc = sev_color(&f.severity), sev = esc(&f.severity), i = i + 1, title = esc(&f.title),
                 agent = esc(&f.agent),
                 owaspcwe = [esc(&f.owasp), esc(&f.cwe)].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · "),
                 confline = if f.votes.is_empty() { format!("conf {:.2}", f.confidence) } else { format!("{} · conf {:.2}", esc(&f.votes), f.confidence) },
-                endpoint = esc(&f.endpoint), payload = esc(&f.payload), evidence = esc(&f.evidence),
+                endpoint = esc(&f.endpoint),
+                where_ = esc(&location_line(f)),
+                steps = {
+                    // Numbered, pasteable commands. A reader who cannot
+                    // reproduce a finding has to take it on faith, and a report
+                    // that must be believed is worth less than one that can be
+                    // checked.
+                    let items: String = repro_steps(f).iter()
+                        .map(|st| format!("<li><pre class=step>{}</pre></li>", esc(st)))
+                        .collect();
+                    format!("<ol class=steps>{items}</ol>")
+                },
+                payloadblock = if f.payload.trim().is_empty() { String::new() } else {
+                    format!("<h4>Payload</h4><pre class=payload>{}</pre>", esc(f.payload.trim()))
+                },
+                scripts = {
+                    let names = poc_scripts(f, &available_pocs);
+                    if names.is_empty() { String::new() } else {
+                        let items: String = names.iter()
+                            .map(|n| format!("<li><a href=\"pocs/{n}\"><code>pocs/{n}</code></a></li>", n = esc(n)))
+                            .collect();
+                        format!("<h4>Runnable script (extra)</h4><p class=hint>The steps above are the proof; this script automates them.</p><ul class=pocs>{items}</ul>")
+                    }
+                },
+                evidence = esc(&technical_evidence(f)),
                 impact = esc(&f.impact), remediation = esc(&f.remediation),
                 status = if needs_review(f) { "<span style=color:#8e44ad>needs-review</span>" } else { "<span style=color:#27ae60>confirmed</span>" },
                 shots = if f.screenshots.is_empty() { String::new() } else {
@@ -186,6 +220,183 @@ pub fn html(target: &str, findings: &[Finding], meta: &EngagementMeta) -> String
 
 // ===== Typst report =====
 
+// ---------------------------------------------------------------------------
+// Proof of concept & technical evidence
+//
+// A finding is only useful if the reader can (a) find the problem, (b) see why
+// it matters, (c) fix it, and (d) reproduce it without trusting us. The report
+// used to print a payload blob and an evidence blob, which serves (d) badly and
+// the rest not at all: "payload: ' OR 1=1--" tells a developer nothing about
+// WHERE to look, and a PoC script attached as a file is a black box unless you
+// run it.
+//
+// So the PoC is rendered as steps a person can paste, with the script offered
+// as an extra artifact rather than as the proof itself.
+// ---------------------------------------------------------------------------
+
+/// Where the problem is, in one line, as precisely as the finding allows.
+pub fn location_line(f: &Finding) -> String {
+    match (f.location.trim(), f.endpoint.trim()) {
+        ("", "") => "(location not recorded)".into(),
+        ("", ep) => ep.to_string(),
+        (loc, "") => loc.to_string(),
+        (loc, ep) if loc.contains(ep) => loc.to_string(),
+        (loc, ep) => format!("{ep} — {loc}"),
+    }
+}
+
+/// A curl command that reproduces the request, built from the structured
+/// evidence when the agent recorded it and from the endpoint/payload otherwise.
+pub fn curl_command(f: &Finding) -> String {
+    if let Some(ev) = &f.evidence_data {
+        if let Some(a) = &ev.attack {
+            let mut cmd = String::from("curl -i -s");
+            let method = a.method.to_uppercase();
+            if !method.is_empty() && method != "GET" {
+                cmd.push_str(&format!(" -X {method}"));
+            }
+            for (k, v) in &a.request_headers {
+                // Never print a real credential into a document that gets
+                // shared; the reader substitutes their own.
+                let val = if is_secret_header(k) { "<redacted — use your own>" } else { v.as_str() };
+                cmd.push_str(&format!(" \\\n  -H '{k}: {val}'"));
+            }
+            if !f.payload.trim().is_empty() && method != "GET" {
+                cmd.push_str(&format!(" \\\n  --data-raw '{}'", f.payload.replace('\'', "'\\''")));
+            }
+            cmd.push_str(&format!(" \\\n  '{}'", a.url));
+            return cmd;
+        }
+    }
+    if f.endpoint.trim().is_empty() {
+        return String::new();
+    }
+    format!("curl -i -s '{}'", f.endpoint.trim())
+}
+
+fn is_secret_header(k: &str) -> bool {
+    let k = k.to_lowercase();
+    k == "authorization" || k == "cookie" || k == "x-api-key" || k.contains("token") || k.contains("secret")
+}
+
+/// Ordered reproduction steps. Uses what the agent recorded; falls back to a
+/// minimal derived sequence so every finding carries something runnable.
+pub fn repro_steps(f: &Finding) -> Vec<String> {
+    if !f.repro_steps.is_empty() {
+        return f.repro_steps.clone();
+    }
+    let mut steps = Vec::new();
+    let curl = curl_command(f);
+    if let Some(ev) = &f.evidence_data {
+        if let Some(b) = &ev.baseline {
+            steps.push(format!("Baseline — request the same resource without the payload:\ncurl -i -s '{}'", b.url));
+        }
+        if ev.identity_a.is_some() && ev.identity_b.is_some() {
+            let a = ev.identity_a.as_ref().unwrap();
+            let b = ev.identity_b.as_ref().unwrap();
+            steps.push(format!("As {}: curl -i -s '{}'", if a.identity.is_empty() { "the owner" } else { &a.identity }, a.url));
+            steps.push(format!("As {}: request the SAME resource:\ncurl -i -s '{}'", if b.identity.is_empty() { "the other identity" } else { &b.identity }, b.url));
+            steps.push("Compare the two bodies — the second returning the first's data is the finding.".into());
+            return steps;
+        }
+    }
+    if !curl.is_empty() {
+        steps.push(format!("Send the request carrying the payload:\n{curl}"));
+    }
+    if !f.payload.trim().is_empty() {
+        steps.push(format!("Payload used:\n{}", f.payload.trim()));
+    }
+    if steps.is_empty() {
+        steps.push("No reproduction steps were recorded for this finding.".into());
+    }
+    steps
+}
+
+/// The detailed technical evidence: the measured difference between baseline
+/// and attack, then the raw exchanges. This is what turns "it returned a 500"
+/// into something a reviewer can check.
+pub fn technical_evidence(f: &Finding) -> String {
+    let mut out = String::new();
+    if let Some(ev) = &f.evidence_data {
+        if let (Some(b), Some(a)) = (&ev.baseline, &ev.attack) {
+            let d = crate::validation::diff(b, a);
+            out.push_str(&format!(
+                "MEASURED DIFFERENCE\n  baseline : {} {} · {} bytes · {} ms\n  attack   : {} {} · {} bytes · {} ms\n  delta    : {}\n",
+                b.status, b.url, b.len(), b.elapsed_ms,
+                a.status, a.url, a.len(), a.elapsed_ms,
+                d.describe()
+            ));
+            if !ev.repeats.is_empty() {
+                let (ok, hits) = crate::validation::reproducible(b, &ev.repeats, 2);
+                out.push_str(&format!(
+                    "  repeats  : {hits}/{} reproduced the same difference{}\n",
+                    ev.repeats.len(),
+                    if ok { "" } else { " — NOT deterministic" }
+                ));
+            }
+            out.push('\n');
+        }
+        if !ev.marker.is_empty() {
+            out.push_str(&format!(
+                "CONTROLLED MARKER\n  {} — observed: {}{}{}\n\n",
+                ev.marker,
+                if ev.marker_observed { "yes" } else { "no" },
+                if ev.browser_executed { " · executed in a real browser" } else { "" },
+                if ev.callback_received { " · out-of-band callback received" } else { "" },
+            ));
+        }
+        for (label, x) in [("BASELINE", &ev.baseline), ("ATTACK", &ev.attack), ("AS OWNER", &ev.identity_a), ("AS OTHER IDENTITY", &ev.identity_b)] {
+            if let Some(x) = x {
+                out.push_str(&render_exchange(label, x));
+            }
+        }
+    }
+    if !f.evidence.trim().is_empty() {
+        out.push_str("AGENT-RECORDED EVIDENCE\n");
+        out.push_str(f.evidence.trim());
+        out.push('\n');
+    }
+    out.trim_end().to_string()
+}
+
+fn render_exchange(label: &str, x: &crate::validation::Exchange) -> String {
+    let mut s = format!("{label}\n  {} {} → {}\n", if x.method.is_empty() { "GET" } else { &x.method }, x.url, x.status);
+    if !x.identity.is_empty() {
+        s.push_str(&format!("  identity: {}\n", x.identity));
+    }
+    for k in ["location", "set-cookie", "content-type", "access-control-allow-origin", "access-control-allow-credentials", "x-frame-options", "content-security-policy", "retry-after"] {
+        let v = x.header(k);
+        if !v.is_empty() {
+            s.push_str(&format!("  {k}: {}\n", clip(v, 200)));
+        }
+    }
+    if !x.body.trim().is_empty() {
+        s.push_str(&format!("  body ({} bytes, excerpt):\n{}\n", x.len(), indent(&clip(x.body.trim(), 1200), "    ")));
+    }
+    s.push('\n');
+    s
+}
+
+fn clip(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(n).collect();
+    format!("{cut}…")
+}
+
+fn indent(s: &str, pad: &str) -> String {
+    s.lines().map(|l| format!("{pad}{l}")).collect::<Vec<_>>().join("\n")
+}
+
+/// PoC scripts this finding cites, or that the run wrote. The script is an
+/// extra artifact — the steps above are the proof.
+pub fn poc_scripts(f: &Finding, available: &[String]) -> Vec<String> {
+    let cited = format!("{} {} {}", f.evidence, f.payload, f.repro_steps.join(" "));
+    let matches: Vec<String> = available.iter().filter(|p| cited.contains(p.as_str())).cloned().collect();
+    matches
+}
+
 /// Is the `typst` binary available on PATH?
 fn typst_available() -> bool {
     std::env::var_os("PATH")
@@ -236,12 +447,16 @@ pub fn typst_report(target: &str, findings: &[Finding], dir: &Path) -> std::io::
         let shots = format!("({})",
             f.screenshots.iter().map(|p| format!("{},", tq(p))).collect::<String>());
         data.push_str(&format!(
-            "  (severity: {}, title: {}, agent: {}, cwe: {}, owasp: {}, cvss: {}, endpoint: {}, payload: {}, evidence: {}, impact: {}, remediation: {}, votes: {}, confidence: {}, status: {}, auth: {}, screenshots: {}),\n",
+            "  (severity: {}, title: {}, agent: {}, cwe: {}, owasp: {}, cvss: {}, endpoint: {}, payload: {}, evidence: {}, impact: {}, remediation: {}, votes: {}, confidence: {}, status: {}, auth: {}, screenshots: {}, location: {}, steps: {}),\n",
             tq(&f.severity), tq(&f.title), tq(&f.agent), tq(&f.cwe), tq(&owasp), tq(&f.cvss),
-            tq(&f.endpoint), tq(&f.payload), tq(&f.evidence), tq(&f.impact),
+            tq(&f.endpoint), tq(&f.payload), tq(&technical_evidence(f)), tq(&f.impact),
             tq(&f.remediation), tq(&f.votes), f.confidence, tq(status),
             tq(if f.auth_context.is_empty() { "-" } else { &f.auth_context }),
             shots,
+            tq(&location_line(f)),
+            // The PDF gets the same pasteable steps as the HTML — a printed
+            // report that cannot be reproduced is the one people argue with.
+            tq(&repro_steps(f).iter().enumerate().map(|(i, st)| format!("{}. {}", i + 1, st)).collect::<Vec<_>>().join("\n\n")),
         ));
     }
     data.push_str(")\n\n");
@@ -325,15 +540,26 @@ pub fn markdown(target: &str, findings: &[Finding], meta: &EngagementMeta) -> St
         if needs_review(f) && !f.review_reason.is_empty() {
             s.push_str(&format!("> ⚠️ **Needs human review** — {}\n\n", f.review_reason));
         }
-        if !f.endpoint.is_empty() { s.push_str(&format!("**Endpoint:** `{}`\n\n", f.endpoint)); }
-        if !f.payload.is_empty() { s.push_str(&format!("**Payload**\n```\n{}\n```\n\n", f.payload)); }
-        if !f.evidence.is_empty() { s.push_str(&format!("**Evidence**\n```\n{}\n```\n\n", f.evidence)); }
+        // Order follows how a reader works through a finding: where it is, what
+        // it means, how to fix it, then how to see it for themselves.
+        s.push_str(&format!("**Where the problem is:** {}\n\n", location_line(f)));
+        if !f.impact.is_empty() { s.push_str(&format!("**What it means:** {}\n\n", f.impact)); }
+        if !f.remediation.is_empty() { s.push_str(&format!("**How to fix it:** {}\n\n", f.remediation)); }
+        let steps = repro_steps(f);
+        if !steps.is_empty() {
+            s.push_str("**Proof of concept — step by step**\n\n");
+            for (n, st) in steps.iter().enumerate() {
+                s.push_str(&format!("{}. ```\n{}\n```\n", n + 1, st));
+            }
+            s.push('\n');
+        }
+        if !f.payload.trim().is_empty() { s.push_str(&format!("**Payload**\n```\n{}\n```\n\n", f.payload.trim())); }
+        let tech = technical_evidence(f);
+        if !tech.is_empty() { s.push_str(&format!("**Technical evidence**\n```\n{}\n```\n\n", tech)); }
         if !f.screenshots.is_empty() {
             s.push_str("**Proof screenshots**\n\n");
             for p in &f.screenshots { s.push_str(&format!("![{}]({})\n\n", f.title.replace(']', ")"), p)); }
         }
-        if !f.impact.is_empty() { s.push_str(&format!("**Impact:** {}\n\n", f.impact)); }
-        if !f.remediation.is_empty() { s.push_str(&format!("**Remediation:** {}\n\n", f.remediation)); }
         s.push_str("---\n\n");
         s
     };
