@@ -221,6 +221,15 @@ pub struct RunConfig {
     /// implicitly authorized against anything but what it was pointed at.
     #[serde(default)]
     pub scope: crate::scope::ScopePolicy,
+    /// A signed capability token (`ns-cap.v1.…`). When present it is verified
+    /// before the run starts and becomes the CEILING on scope: local config can
+    /// narrow it, never widen it. A token that fails verification stops the
+    /// run — a broken grant is not a grant.
+    #[serde(default)]
+    pub capability: Option<String>,
+    /// Engagement policy: risk ceilings, reasoning rules, proof requirements.
+    #[serde(default)]
+    pub policy: crate::policy::EngagementPolicy,
 }
 
 fn default_vote() -> usize {
@@ -264,6 +273,8 @@ impl RunConfig {
             temp_email: false,
             vault_dir: None,
             scope: Default::default(),
+            capability: None,
+            policy: Default::default(),
         }
     }
 }

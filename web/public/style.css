@@ -564,6 +564,10 @@ textarea { resize: vertical; min-height: 72px; }
 .modal-body { padding: var(--sp-5); overflow-y: auto; flex: 1; }
 .modal-panel[hidden] { display: none; }
 
+.field-status { font-size: 11.5px; font-family: var(--mono); color: var(--text-faint); overflow-wrap: anywhere; }
+.field-status.ok { color: var(--sev-low-fg); }
+.field-status.bad { color: var(--sev-critical-fg); }
+
 .provider-row { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) 0; border-bottom: 1px solid var(--border); }
 .provider-row:last-child { border-bottom: none; }
 .provider-row .p-name { flex: none; width: 150px; font-size: 12.5px; font-weight: 500; }

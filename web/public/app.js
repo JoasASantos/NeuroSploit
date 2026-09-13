@@ -27,6 +27,8 @@ const state = {
   providers: [],
   auth: { header: '', roles: [] },
   credsPath: '',
+  // Engagement authorization: the grant, plus settings that may only narrow it.
+  authz: { capability: '', inScope: '', environment: 'production', policyProfile: 'web' },
   keys: [],
   runs: [],
   currentJob: null,
@@ -496,6 +498,10 @@ async function startExploitation() {
     auth: state.auth.header || undefined,
     roles: state.auth.roles.length ? state.auth.roles : undefined,
     creds: state.credsPath || undefined,
+    capability: state.authz.capability || undefined,
+    inScope: state.authz.inScope.split(/[,;\s]+/).filter(Boolean),
+    environment: state.authz.environment,
+    policyProfile: state.authz.policyProfile,
   };
 
   $('#btnLaunch').disabled = true;
@@ -1566,6 +1572,13 @@ async function loadDetail(id) {
   // The PDF is produced by the harness (Typst) when that binary is present, so
   // it is offered only when it actually exists — a dead download button is
   // worse than none.
+  // The audit trail travels with the run's evidence; offering it here is what
+  // makes "show me what the tool did" a link rather than a support request.
+  const auditLink = $('#detailOpenAudit');
+  if (detail.assets.includes('audit.jsonl')) {
+    auditLink.href = `/api/runs/${encodeURIComponent(id)}/asset/audit.jsonl`;
+    show(auditLink, true);
+  } else show(auditLink, false);
   const pdfLink = $('#detailOpenPdf');
   if (detail.assets.includes('report.pdf')) {
     pdfLink.href = `/api/runs/${encodeURIComponent(id)}/asset/report.pdf`;
@@ -1598,6 +1611,31 @@ $$('.modal-tab').forEach((tab) => tab.addEventListener('click', () => {
 $('#authHeader').addEventListener('input', (e) => { state.auth.header = e.target.value.trim(); });
 $('#authHeader').value = state.auth.header;
 $('#credsPath').addEventListener('input', (e) => { state.credsPath = e.target.value.trim(); });
+
+$('#capToken').addEventListener('input', (e) => {
+  state.authz.capability = e.target.value.trim();
+  // Decode the claims for display only. This is NOT verification — the
+  // signature is checked by the harness, which holds the key; showing a
+  // "valid" badge here would be the browser vouching for something it cannot
+  // check.
+  const el = $('#capStatus');
+  const t = state.authz.capability;
+  if (!t) { el.textContent = ''; el.className = 'field-status'; return; }
+  try {
+    const body = t.replace(/^ns-cap\.v1\./, '').split('.')[0];
+    const claims = JSON.parse(atob(body.replace(/-/g, '+').replace(/_/g, '/')));
+    const left = claims.expires_at ? Math.round((claims.expires_at - Date.now() / 1000) / 3600) : null;
+    el.className = 'field-status ' + (left !== null && left <= 0 ? 'bad' : 'ok');
+    el.textContent = `claims (unverified here — the harness checks the signature): ${claims.issuer} → ${claims.subject} · ${(claims.scope || []).join(', ')} · ${claims.environment} · max ${claims.max_action}` +
+      (left === null ? '' : left <= 0 ? ' · EXPIRED' : ` · ${left}h left`);
+  } catch {
+    el.className = 'field-status bad';
+    el.textContent = 'not a readable ns-cap.v1 token';
+  }
+});
+$('#inScope').addEventListener('input', (e) => { state.authz.inScope = e.target.value; });
+$('#envSelect').addEventListener('change', (e) => { state.authz.environment = e.target.value; });
+$('#policySelect').addEventListener('change', (e) => { state.authz.policyProfile = e.target.value; });
 
 function renderRoleList() {
   const root = $('#roleList');

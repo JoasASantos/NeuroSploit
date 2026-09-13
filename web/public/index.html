@@ -306,6 +306,7 @@
         <div class="run-actions">
           <a class="btn" id="detailOpenReport" target="_blank" hidden>Open report</a>
           <a class="btn" id="detailOpenPdf" target="_blank" hidden>⤓ PDF</a>
+          <a class="btn" id="detailOpenAudit" target="_blank" hidden title="Every action this run took, hash-chained">Audit trail</a>
           <button class="btn" id="btnDetailBack">← New engagement</button>
         </div>
       </header>
@@ -372,6 +373,7 @@
       <button class="modal-tab active" data-mtab="target">Target auth</button>
       <button class="modal-tab" data-mtab="keys">API keys</button>
       <button class="modal-tab" data-mtab="creds">Creds file</button>
+      <button class="modal-tab" data-mtab="authz">Authorization</button>
     </div>
     <div class="modal-body">
       <div class="modal-panel" data-mpanel="target">
@@ -390,6 +392,45 @@
       <div class="modal-panel" data-mpanel="keys" hidden>
         <div class="field-help" style="margin-bottom:12px;">Keys are kept in this server process's memory only — never written to disk. Cleared on restart.</div>
         <div id="providerKeyList"></div>
+      </div>
+      <div class="modal-panel" data-mpanel="authz" hidden>
+        <div class="field-group">
+          <label class="field-label" for="capToken">Capability token</label>
+          <input id="capToken" type="text" placeholder="ns-cap.v1.…" spellcheck="false" />
+          <div class="field-status" id="capStatus"></div>
+          <div class="field-help">
+            The signed grant for this engagement: who authorized it, which hosts, which environment, until when.
+            It is verified by the harness (<code>NEUROSPLOIT_CAPABILITY_KEY</code>) and acts as a <strong>ceiling</strong> —
+            the settings below can narrow the scope, never widen it. Mint one with
+            <code>neurosploit capability issue</code>.
+          </div>
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="inScope">Additional authorized hosts</label>
+          <input id="inScope" type="text" placeholder="app.example.com, *.api.example.com, 10.0.0.0/24" />
+          <div class="field-help">Without this the engagement is authorized against the target and nothing else — discovering a host is not permission to test it.</div>
+        </div>
+        <div class="field-row">
+          <div class="field-group">
+            <label class="field-label" for="envSelect">Environment</label>
+            <select id="envSelect">
+              <option value="production" selected>production</option>
+              <option value="staging">staging</option>
+              <option value="development">development</option>
+              <option value="lab">lab</option>
+              <option value="ot-production">ot-production (ICS/SCADA)</option>
+            </select>
+            <div class="field-help">Scales every risk score — the same action is a different act on a lab bench and on a live substation.</div>
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="policySelect">Policy profile</label>
+            <select id="policySelect">
+              <option value="web" selected>web — standard</option>
+              <option value="ot">ot — read-only, paced, industrial writes blocked</option>
+            </select>
+            <div class="field-help">OT blocks writes, disruptive actions, fuzzing and exploit payloads over industrial protocols, and caps the rate at ~1 req/s.</div>
+          </div>
+        </div>
       </div>
       <div class="modal-panel" data-mpanel="creds" hidden>
         <div class="field-group">

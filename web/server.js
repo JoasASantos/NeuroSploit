@@ -454,7 +454,7 @@ async function runDetail(id) {
     readJsonSafe(path.join(dir, 'status.json'), {}),
     readJsonSafe(path.join(dir, 'findings.json'), []),
   ]);
-  const assets = ['report.html', 'report.pdf', 'report.md', 'recon.md', 'exploitation.md']
+  const assets = ['report.html', 'report.pdf', 'report.md', 'recon.md', 'exploitation.md', 'audit.jsonl', 'graph.json']
     .filter((f) => fs.existsSync(path.join(dir, f)));
   const pocs = await fsp.readdir(path.join(dir, 'pocs')).catch(() => []);
   return { id, name: engagementNames.get(id) || '', meta, status, findings, assets, pocs };
@@ -588,6 +588,12 @@ function buildArgs(body) {
   if (body.focus) args.push('--focus', body.focus);
   if (body.objective) args.push('--objective', body.objective);
   if (body.outOfScope) args.push('--out-of-scope', body.outOfScope);
+  // Authorization: the signed grant caps the scope, the extra in-scope entries
+  // can only narrow within it, and the environment scales every risk score.
+  for (const entry of body.inScope || []) args.push('--in-scope', entry);
+  if (body.capability) args.push('--capability-token', body.capability);
+  if (body.environment) args.push('--environment', body.environment);
+  if (body.policyProfile) args.push('--policy', body.policyProfile);
   for (const a of body.agents || []) args.push('--only', a);
   args.push('--verbose');
   return args;
@@ -635,6 +641,18 @@ async function startJob(body) {
 /// engagement (`/target`/`/repo` → `/model` → toggles → `/only` → `/run`).
 /// `/only` is what makes this equivalent to the CLI's `--only` — REPL had no
 /// such command before this feature (added to app/src/repl.rs alongside it).
+/// Flags that apply to every mode, including the REPL-backed one. The REPL
+/// takes them as argv because a `/`-command for an authorization ceiling would
+/// let the session widen its own grant mid-run.
+function authArgs(body) {
+  const args = [];
+  for (const entry of body.inScope || []) args.push('--in-scope', entry);
+  if (body.capability) args.push('--capability-token', body.capability);
+  if (body.environment) args.push('--environment', body.environment);
+  if (body.policyProfile) args.push('--policy', body.policyProfile);
+  return args;
+}
+
 function buildReplScript(body) {
   const lines = [];
   if (body.mode === 'whitebox') lines.push(`/repo ${body.repo || body.target}`);
@@ -670,12 +688,15 @@ async function startJobViaRepl(body) {
   const id = crypto.randomUUID();
   const credsPath = await materializeCreds(body, id);
   const script = buildReplScript({ ...body, creds: credsPath });
-  const job = new Job(id, BIN, [], body.repo || body.target || '', body.name || '');
+  const auth = authArgs(body);
+  const job = new Job(id, BIN, auth, body.repo || body.target || '', body.name || '');
   job.pinnedAgents = body.agents || [];
   job.repl = true;
   jobs.set(id, job);
 
-  const child = spawn(BIN, [], { cwd: ROOT, env: { ...process.env, ...envOverrides() } });
+  // The REPL session inherits the engagement's authorization from argv, so the
+  // ceiling is set before the first command is scripted into it.
+  const child = spawn(BIN, auth, { cwd: ROOT, env: { ...process.env, ...envOverrides() } });
   job.child = child;
   let buf = '';
   const onData = (chunk) => {

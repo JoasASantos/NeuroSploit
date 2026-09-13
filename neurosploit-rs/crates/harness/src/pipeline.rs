@@ -99,6 +99,38 @@ pub(crate) fn run_id(cfg: &RunConfig) -> String {
 /// Built from the target unless the operator configured one explicitly, with
 /// `out_of_scope` entries that name a host or network promoted into real
 /// exclusions — until now they were only ever prose in a prompt.
+/// Verify the engagement's capability token, if one was supplied.
+///
+/// Returns the grant and any local scope entries it refused to cover. A token
+/// that does not verify is an error, not a warning: running anyway would mean
+/// acting on an authorization nobody can prove was issued.
+pub fn verify_capability(cfg: &RunConfig) -> Result<Option<crate::capability::Capability>, String> {
+    let Some(token) = cfg.capability.as_deref().filter(|t| !t.trim().is_empty()) else {
+        return Ok(None);
+    };
+    let Some(key) = crate::capability::key_from_env() else {
+        return Err("a capability token was supplied but no verification key is configured — set NEUROSPLOIT_CAPABILITY_KEY or NEUROSPLOIT_CAPABILITY_KEY_FILE. An unverifiable token is not authorization.".into());
+    };
+    crate::capability::Capability::verify(token, &key).map(Some).map_err(|e| e.to_string())
+}
+
+/// The audit trail for this run: one per run directory, plus nothing else —
+/// the chain is per-engagement so a run's trail travels with its evidence.
+pub fn audit_log(cfg: &RunConfig) -> crate::audit::AuditLog {
+    let path = cfg
+        .workdir
+        .as_deref()
+        .map(|d| Path::new(d).join("audit.jsonl"))
+        .unwrap_or_else(|| proj_store(cfg).join("audit.jsonl"));
+    crate::audit::AuditLog::open(path)
+}
+
+/// Id of the grant in force, for the audit records. Empty when the run is
+/// operating on local configuration alone, which is itself worth recording.
+fn capability_id(cfg: &RunConfig) -> String {
+    verify_capability(cfg).ok().flatten().map(|c| c.id).unwrap_or_default()
+}
+
 pub fn effective_scope(cfg: &RunConfig) -> crate::scope::ScopePolicy {
     let mut p = if cfg.scope.hard.is_empty() {
         crate::scope::ScopePolicy::for_target(&cfg.target)
@@ -118,6 +150,14 @@ pub fn effective_scope(cfg: &RunConfig) -> crate::scope::ScopePolicy {
                 p.deny(t);
             }
         }
+    }
+    // A verified grant is the ceiling. Anything the operator configured that
+    // the grant does not cover is dropped here rather than at request time —
+    // the boundary should be wrong-proof before the first packet, not enforced
+    // after an agent has already decided to go somewhere.
+    if let Ok(Some(cap)) = verify_capability(cfg) {
+        let (constrained, _dropped) = cap.constrain(&p);
+        return constrained;
     }
     p
 }
@@ -526,6 +566,48 @@ fn write_meta(cfg: &RunConfig, p: &crate::probe::Probe, asset: &str) {
 /// Black-box web engagement: recon → parallel exploit → N-model vote → report.
 pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<String>) -> RunOutput {
     pool.set_progress(tx.clone());
+
+    // Authorization first. A supplied token that does not verify ends the run
+    // here: proceeding would mean acting on a grant nobody can prove was
+    // issued, which is the one failure this whole layer exists to prevent.
+    let grant = match verify_capability(&cfg) {
+        Ok(g) => g,
+        Err(e) => {
+            let _ = tx.send(format!("notify: ⛔ {e}")).await;
+            audit_log(&cfg).append(
+                crate::audit::AuditRecord::new("harness", "engagement-start", &cfg.target)
+                    .decision(&format!("deny: {e}"))
+                    .tool("capability")
+                    .result("run refused"),
+            );
+            return RunOutput {
+                target: cfg.target.clone(),
+                workdir: cfg.workdir.clone().unwrap_or_default(),
+                findings: vec![],
+                agents_ran: vec![],
+                candidates: 0,
+                recon: String::new(),
+                artifacts: vec![],
+            };
+        }
+    };
+    let audit = audit_log(&cfg);
+    let cap_id = grant.as_ref().map(|c| c.id.clone()).unwrap_or_default();
+    let policy_scope = effective_scope(&cfg);
+    audit.append(
+        crate::audit::AuditRecord::new("harness", "engagement-start", &cfg.target)
+            .decision(&format!("allow: scope [{}]", policy_scope.summary()))
+            .tool("neurosploit")
+            .capability(&cap_id)
+            .result(&format!(
+                "{} · {}",
+                grant.as_ref().map(|c| c.summary()).unwrap_or_else(|| "no capability token — local configuration only".into()),
+                cfg.policy.safety.summary()
+            )),
+    );
+    if let Some(c) = &grant {
+        let _ = tx.send(format!("notify: 🔏 capability verified — {}", c.summary())).await;
+    }
     let _ = tx
         .send(format!(
             "Loaded {} agents ({} vuln / {} recon / {} code / {} meta) · models: {} · vote_n={} · concurrency={}{}",
@@ -1498,6 +1580,11 @@ async fn finish(cfg: RunConfig, _lib: &Library, recon: String, transcript: Strin
         let _ = tx.send("RL rewards updated".into()).await;
     }
 
+    // This finalize path is shared by every mode, so it opens its own handle on
+    // the run's trail rather than borrowing one from a particular entry point.
+    let audit = audit_log(&cfg);
+    let cap_id = capability_id(&cfg);
+
     // Deterministic validation. The votes above are models checking models; this
     // pass asks whether the recorded artifacts actually demonstrate the class.
     let vmode = crate::validation::Mode::from_env();
@@ -1513,6 +1600,15 @@ async fn finish(cfg: RunConfig, _lib: &Library, recon: String, transcript: Strin
                 }
                 Some(crate::validation::Verdict::Rejected(r)) => {
                     let _ = tx.send(format!("validator rejected '{}': {r}", f.title)).await;
+                    audit.append(
+                        crate::audit::AuditRecord::new("validation-engine", "reject-finding", &f.endpoint)
+                            .hypothesis(&f.id)
+                            .decision(&format!("deny: {r}"))
+                            .tool("validator")
+                            .capability(&cap_id)
+                            .evidence(f.evidence.as_bytes())
+                            .result(&format!("rejected '{}'", f.title)),
+                    );
                     rejected.push(f);
                 }
                 _ => kept.push(f),
@@ -1532,6 +1628,19 @@ async fn finish(cfg: RunConfig, _lib: &Library, recon: String, transcript: Strin
     let (in_scope, out_of_scope) = policy.audit_findings(findings);
     findings = in_scope;
     if !out_of_scope.is_empty() {
+        for f in &out_of_scope {
+            // The record of a boundary violation is the point: this is the
+            // line an operator has to be able to show afterwards.
+            audit.append(
+                crate::audit::AuditRecord::new(&f.agent, "finding-out-of-scope", &f.endpoint)
+                    .hypothesis(&f.id)
+                    .decision("deny: proven against a host outside the authorized scope")
+                    .tool("scope-guard")
+                    .capability(&cap_id)
+                    .evidence(f.evidence.as_bytes())
+                    .result("withheld from the report"),
+            );
+        }
         let _ = tx.send(format!(
             "notify: ⚠ {} finding(s) were proven against hosts OUTSIDE the authorized scope and were withheld: {}",
             out_of_scope.len(),
@@ -1540,6 +1649,38 @@ async fn finish(cfg: RunConfig, _lib: &Library, recon: String, transcript: Strin
         if let Some(dir) = cfg.workdir.as_deref() {
             let p = Path::new(dir).join("out-of-scope-findings.json");
             let _ = std::fs::write(p, serde_json::to_string_pretty(&out_of_scope).unwrap_or_default());
+        }
+    }
+
+    // Every finding that survives to the report gets a record tying it to the
+    // evidence it was proven with — that hash is what links a claim in a PDF to
+    // the artifact behind it months later.
+    for f in &findings {
+        audit.append(
+            crate::audit::AuditRecord::new(&f.agent, "report-finding", &f.endpoint)
+                .hypothesis(&f.id)
+                .decision(&format!("allow: {}", if f.review_status.is_empty() { "reported" } else { &f.review_status }))
+                .tool("pipeline")
+                .capability(&cap_id)
+                .evidence(f.evidence.as_bytes())
+                .result(&format!("[{}] {}", f.severity, f.title)),
+        );
+    }
+    audit.append(
+        crate::audit::AuditRecord::new("harness", "engagement-end", &cfg.target)
+            .decision("allow")
+            .tool("neurosploit")
+            .capability(&cap_id)
+            .result(&format!("{} finding(s) reported", findings.len())),
+    );
+    match audit.verify() {
+        Ok(n) => {
+            let _ = tx.send(format!("audit trail: {n} record(s), hash chain intact → audit.jsonl")).await;
+        }
+        Err(e) => {
+            // Worth shouting about: the trail is the artifact that proves what
+            // was done, and a broken chain means it can no longer do that.
+            let _ = tx.send(format!("notify: ⚠ audit chain verification FAILED — {e}")).await;
         }
     }
 

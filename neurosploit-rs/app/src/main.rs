@@ -33,6 +33,22 @@ TIP: run inside Kali Linux (or `docker run -it kalilinux/kali-rolling`) so curl/
 struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
+    /// Authorization for an interactive session, set before the first command
+    /// is typed. The REPL deliberately has no `/`-command that can WIDEN the
+    /// grant — a session must not be able to authorize itself — so the ceiling
+    /// arrives here, from whoever launched it.
+    #[arg(long = "capability-token", global = true)]
+    capability_token: Option<String>,
+    /// Extra authorized hosts for an interactive session.
+    #[arg(long = "session-in-scope", global = true)]
+    session_in_scope: Vec<String>,
+    /// Environment for an interactive session: lab · development · staging ·
+    /// production · ot-production.
+    #[arg(long = "session-environment", global = true)]
+    session_environment: Option<String>,
+    /// Policy profile for an interactive session: web · ot.
+    #[arg(long = "session-policy", global = true)]
+    session_policy: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -75,6 +91,18 @@ enum Cmd {
         /// agents must not touch. Repeatable or comma/semicolon-separated.
         #[arg(long = "out-of-scope")]
         out_of_scope: Option<String>,
+        /// Additional authorized hosts: host · *.domain · 10.0.0.0/24 · https://host/path.
+        /// Without this the engagement is authorized against the target and nothing else.
+        #[arg(long = "in-scope")]
+        in_scope: Vec<String>,
+        /// Environment, which scales every risk score: lab · development ·
+        /// staging · production · ot-production (aliases: ics, scada).
+        #[arg(long = "environment", default_value = "production")]
+        environment: String,
+        /// Engagement policy profile: web · ot (ot = read-only, paced, with the
+        /// dangerous industrial primitives removed).
+        #[arg(long = "policy", default_value = "web")]
+        policy: String,
         /// Open a Jira card per finding (needs the jira integration enabled).
         #[arg(long)]
         jira: bool,
@@ -86,6 +114,11 @@ enum Cmd {
         /// Verbose: log each agent as it launches, recon, and votes.
         #[arg(short, long)]
         verbose: bool,
+    },
+    /// Issue or inspect a signed capability token (the engagement's authorization).
+    Capability {
+        #[command(subcommand)]
+        cmd: CapCmd,
     },
     /// White-box: analyse a repository's source code for vulnerabilities.
     Whitebox {
@@ -363,14 +396,22 @@ fn find_base() -> PathBuf {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
     let base = find_base();
 
     // No subcommand → launch the Claude-Code-style interactive session.
-    let cmd = match cli.cmd {
+    let cmd = match cli.cmd.take() {
         Some(c) => c,
         None => {
-            repl::repl(&base).await?;
+            // The session's authorization comes from whoever launched it, not
+            // from inside it.
+            let auth = repl::SessionAuth {
+                capability: cli.capability_token.clone().or_else(|| std::env::var("NEUROSPLOIT_CAPABILITY").ok()).filter(|t| !t.trim().is_empty()),
+                in_scope: cli.session_in_scope.clone(),
+                environment: cli.session_environment.clone(),
+                policy: cli.session_policy.clone(),
+            };
+            repl::repl(&base, auth).await?;
             return Ok(());
         }
     };
@@ -391,7 +432,8 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        Cmd::Run { url, models, max_agents, vote_n, chain_depth, recon, offline, subscription, mcp, creds, focus, objective, out_of_scope, jira, only, verbose } => {
+        Cmd::Capability { cmd } => handle_capability(cmd)?,
+        Cmd::Run { url, models, max_agents, vote_n, chain_depth, recon, offline, subscription, mcp, creds, focus, objective, out_of_scope, in_scope, environment, policy, jira, only, verbose } => {
             let url = if url.starts_with("http") { url } else { format!("https://{url}") };
             let mut cfg = RunConfig::new(&url);
             cfg.max_agents = max_agents;
@@ -405,6 +447,7 @@ async fn main() -> anyhow::Result<()> {
             cfg.objective = objective;
             cfg.out_of_scope = out_of_scope;
             cfg.pinned = parse_only(&only);
+            apply_authorization(&mut cfg, &in_scope, cli.capability_token.clone(), &environment, &policy)?;
             if !models.is_empty() {
                 cfg.models = models;
             }
@@ -913,6 +956,147 @@ pub(crate) fn print_findings(out: &RunOutput) {
 
 /// Parse repeated `--only` values into a clean agent allowlist. Accepts repeats
 /// and comma/semicolon-separated lists (`--only sqli,xss` == `--only sqli --only xss`).
+/// Apply the engagement's authorization to a config: extra scope, the signed
+/// grant, the environment (which scales every risk score) and the policy
+/// profile.
+///
+/// The token is verified HERE, before anything runs, so an invalid grant fails
+/// at the command line with a readable message instead of halfway through an
+/// engagement.
+fn apply_authorization(
+    cfg: &mut RunConfig,
+    in_scope: &[String],
+    token: Option<String>,
+    environment: &str,
+    policy: &str,
+) -> anyhow::Result<()> {
+    use harness::policy::{EngagementPolicy, Environment};
+
+    let env = Environment::parse(environment).ok_or_else(|| {
+        anyhow::anyhow!("unknown environment '{environment}' — use lab, development, staging, production or ot-production")
+    })?;
+    cfg.policy = match policy.trim().to_lowercase().as_str() {
+        "ot" | "ics" | "scada" => EngagementPolicy::ot(),
+        "web" | "" => EngagementPolicy::web(env),
+        other => anyhow::bail!("unknown policy profile '{other}' — use web or ot"),
+    };
+    cfg.policy.safety.environment = env;
+
+    if !in_scope.is_empty() {
+        // Seed from the target first: adding one host to an empty policy would
+        // otherwise leave the target itself out of scope.
+        if cfg.scope.hard.is_empty() {
+            cfg.scope.allow(&harness::scope::host_of(&cfg.target));
+        }
+        for entry in in_scope {
+            cfg.scope.allow(entry);
+        }
+    }
+
+    cfg.capability = token.or_else(|| std::env::var("NEUROSPLOIT_CAPABILITY").ok()).filter(|t| !t.trim().is_empty());
+    match harness::pipeline::verify_capability(cfg) {
+        Ok(Some(cap)) => {
+            println!("  \x1b[32m🔏 capability verified\x1b[0m — {}", cap.summary());
+            let (_, dropped) = cap.constrain(&cfg.scope);
+            if !dropped.is_empty() {
+                println!("  \x1b[33m⚠ outside the grant, removed from scope:\x1b[0m {}", dropped.join(", "));
+            }
+        }
+        Ok(None) => {}
+        Err(e) => anyhow::bail!("{e}"),
+    }
+    Ok(())
+}
+
+#[derive(Subcommand)]
+enum CapCmd {
+    /// Mint a token. Requires the signing key (NEUROSPLOIT_CAPABILITY_KEY),
+    /// which is what makes the grant attributable to whoever authorized it.
+    Issue {
+        /// Hosts this grant covers: host · *.domain · 10.0.0.0/24 · https://host/path.
+        #[arg(long = "scope", required = true)]
+        scope: Vec<String>,
+        /// Carve-outs inside that scope.
+        #[arg(long = "exclude")]
+        exclude: Vec<String>,
+        /// Who authorized it (client contact, ticket, system).
+        #[arg(long)]
+        issuer: String,
+        /// Who it is issued to.
+        #[arg(long)]
+        subject: String,
+        /// Hours until it expires. A grant without an end is a standing
+        /// permission nobody remembers issuing.
+        #[arg(long, default_value = "72")]
+        hours: u64,
+        /// Strongest permitted action: read · enumerate · authenticate ·
+        /// probe-exploit · write · disruptive.
+        #[arg(long = "max-action", default_value = "probe-exploit")]
+        max_action: String,
+        /// Ceiling on effective_risk.
+        #[arg(long = "max-risk", default_value = "3.5")]
+        max_risk: f64,
+        /// lab · development · staging · production · ot-production.
+        #[arg(long, default_value = "production")]
+        environment: String,
+        /// Engagement reference (SOW, ticket).
+        #[arg(long, default_value = "")]
+        reference: String,
+    },
+    /// Verify a token and print what it grants.
+    Verify {
+        token: String,
+    },
+}
+
+fn handle_capability(cmd: CapCmd) -> anyhow::Result<()> {
+    use harness::capability::{key_from_env, Capability};
+    use harness::policy::{ActionKind, Environment};
+
+    let key = key_from_env().ok_or_else(|| {
+        anyhow::anyhow!("no signing key — set NEUROSPLOIT_CAPABILITY_KEY or NEUROSPLOIT_CAPABILITY_KEY_FILE")
+    })?;
+    match cmd {
+        CapCmd::Issue { scope, exclude, issuer, subject, hours, max_action, max_risk, environment, reference } => {
+            let env = Environment::parse(&environment)
+                .ok_or_else(|| anyhow::anyhow!("unknown environment '{environment}'"))?;
+            let action = match max_action.trim().to_lowercase().replace('_', "-").as_str() {
+                "read" => ActionKind::Read,
+                "enumerate" => ActionKind::Enumerate,
+                "authenticate" => ActionKind::Authenticate,
+                "probe-exploit" | "exploit" => ActionKind::ProbeExploit,
+                "write" => ActionKind::Write,
+                "disruptive" => ActionKind::Disruptive,
+                other => anyhow::bail!("unknown action '{other}'"),
+            };
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let cap = Capability {
+                id: format!("cap-{now:x}"),
+                issuer,
+                subject,
+                scope,
+                exclude,
+                environment: env,
+                max_action: action,
+                max_risk,
+                expires_at: now + hours * 3600,
+                not_before: 0,
+                reference,
+            };
+            println!("{}", cap.issue(&key));
+            eprintln!("  \x1b[2m{}\x1b[0m", cap.summary());
+        }
+        CapCmd::Verify { token } => match Capability::verify(&token, &key) {
+            Ok(c) => {
+                println!("  \x1b[32m🔏 verified\x1b[0m — {}", c.summary());
+                println!("{}", serde_json::to_string_pretty(&c).unwrap_or_default());
+            }
+            Err(e) => anyhow::bail!("{e}"),
+        },
+    }
+    Ok(())
+}
+
 fn parse_only(vals: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for v in vals {

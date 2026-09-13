@@ -146,7 +146,7 @@ struct LiveCheckpoint {
 /// the dispatch would have accepted (`/url`, `/q`, `/log`) into some
 /// near-neighbour would break working commands. A test keeps the two in sync.
 pub(crate) const ACCEPTED: &[&str] = &[
-    "/?", "/agents", "/attach", "/auth", "/burp", "/chain", "/changed", "/clear", "/config",
+    "/?", "/agents", "/attach", "/audit", "/auth", "/burp", "/cap", "/capability", "/chain", "/changed", "/clear", "/config",
     "/context", "/continue", "/creds", "/diff", "/exclude", "/exit", "/expand", "/feed",
     "/finding", "/findings", "/focus", "/forget", "/full", "/go", "/goal", "/graph", "/guardrail", "/guardrails", "/help",
     "/history", "/idle", "/inscope", "/instructions", "/integration", "/integrations", "/key", "/log",
@@ -165,7 +165,8 @@ const COMMANDS: &[&str] = &[
     "/repo", "/auth", "/creds", "/focus", "/objective", "/scope-out", "/attach", "/context", "/mcp", "/offline",
     "/votes", "/chain", "/recon", "/tempmail", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/only", "/theme", "/clear", "/run", "/stop", "/continue", "/runs", "/results", "/report",
     "/status", "/logs", "/diff", "/retest", "/validate", "/finding", "/expand", "/integrations",
-    "/memory", "/forget", "/graph", "/inscope", "/observe", "/guardrail", "/policy", "/quit",
+    "/memory", "/forget", "/graph", "/inscope", "/observe", "/guardrail", "/policy",
+    "/capability", "/audit", "/quit",
 ];
 
 /// rustyline helper: Tab-completes `/commands` and `@filesystem-paths`,
@@ -283,6 +284,10 @@ struct Session {
     out_of_scope: Option<String>,
     /// Authorization boundary + guardrails, enforced by the harness.
     policy: harness::scope::ScopePolicy,
+    /// Signed capability token for this engagement, when one was issued.
+    capability: Option<String>,
+    /// Risk ceilings, reasoning rules and proof requirements.
+    engagement: harness::policy::EngagementPolicy,
     attachments: Vec<String>,
     color: bool,
     /// Engagement scope from onboarding: web | infra | cloud | ai | skills.
@@ -317,6 +322,8 @@ impl Default for Session {
             objective: None,
             out_of_scope: None,
             policy: Default::default(),
+            capability: None,
+            engagement: Default::default(),
             attachments: Vec::new(),
             color: true,
             scope: "web",
@@ -395,7 +402,20 @@ impl Reader {
 // MutexGuard across `run().await` on purpose — run() mutates that history for
 // the whole async operation and no other task contends for it there.
 #[allow(clippy::await_holding_lock)]
-pub async fn repl(base: &Path) -> anyhow::Result<()> {
+/// Authorization handed to an interactive session at launch.
+///
+/// It is passed in rather than typed because a session that can widen its own
+/// grant is not constrained by one. `/capability` inside the REPL can install
+/// a token and narrow the scope; it cannot raise the ceiling this sets.
+#[derive(Debug, Default, Clone)]
+pub struct SessionAuth {
+    pub capability: Option<String>,
+    pub in_scope: Vec<String>,
+    pub environment: Option<String>,
+    pub policy: Option<String>,
+}
+
+pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
     let lib = agents::load(base);
     let backends = harness::installed_cli_backends();
     println!("\x1b[1m");
@@ -418,6 +438,43 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
     if resumed || past > 0 {
         println!("  ↻ resumed project session from {} — {} past run(s)", proj_dir().display(), past);
     }
+    // Authorization from the launcher, applied before anything can run.
+    if let Some(envname) = auth.environment.as_deref() {
+        match harness::policy::Environment::parse(envname) {
+            Some(e) => s.engagement.safety.environment = e,
+            None => println!("  \x1b[33m⚠ unknown environment '{envname}' — keeping {}\x1b[0m", s.engagement.safety.environment.as_str()),
+        }
+    }
+    if let Some(profile) = auth.policy.as_deref() {
+        s.engagement = match profile.trim().to_lowercase().as_str() {
+            "ot" | "ics" | "scada" => harness::policy::EngagementPolicy::ot(),
+            _ => harness::policy::EngagementPolicy::web(s.engagement.safety.environment),
+        };
+    }
+    for entry in &auth.in_scope {
+        s.policy.allow(entry);
+    }
+    if let Some(token) = auth.capability.as_deref() {
+        match harness::capability::key_from_env() {
+            None => println!("  \x1b[31m⛔ a capability token was supplied but no verification key is configured\x1b[0m — set NEUROSPLOIT_CAPABILITY_KEY. Not applied."),
+            Some(k) => match harness::capability::Capability::verify(token, &k) {
+                Ok(c) => {
+                    let (effective, dropped) = c.constrain(&s.policy);
+                    s.policy = effective;
+                    s.capability = Some(token.to_string());
+                    println!("  \x1b[32m🔏 capability verified\x1b[0m — {}", c.summary());
+                    if !dropped.is_empty() {
+                        println!("  \x1b[33m⚠ outside the grant, removed from scope:\x1b[0m {}", dropped.join(", "));
+                    }
+                }
+                Err(e) => {
+                    println!("  \x1b[31m⛔ {e}\x1b[0m");
+                    anyhow::bail!("capability token did not verify — refusing to start an unauthorized session");
+                }
+            },
+        }
+    }
+
     // A recovered interrupted run, carried in memory so `/continue` can relaunch
     // the engagement on the same target with these findings folded forward.
     let mut resumable: Option<(String, Vec<Finding>)> = None;
@@ -1048,13 +1105,26 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
                         // silently make the target itself out of scope.
                         if let Some(t) = s.target.clone() { s.policy.allow(&harness::scope::host_of(&t)); }
                     }
-                    let n = s.policy.allow(arg);
-                    println!("  +{n} in scope · {}", s.policy.summary());
+                    // Count what actually survived the grant, not what was
+                    // typed — reporting an entry as added when the ceiling
+                    // dropped it is the same lie the ceiling exists to prevent.
+                    let before = s.policy.hard.len();
+                    s.policy.allow(arg);
+                    let refused = reapply_grant(&mut s);
+                    if !refused.is_empty() {
+                        println!("  \x1b[33m⛔ outside the capability grant, not authorized:\x1b[0m {}", refused.join(", "));
+                    }
+                    let added = s.policy.hard.len().saturating_sub(before);
+                    println!("  +{added} in scope · {}", s.policy.summary());
                 }
             }
             "/observe" | "/observe-only" => {
                 if arg.trim().is_empty() { println!("  usage: /observe <host|*.domain> — discovery allowed there, interaction blocked"); }
-                else { let n = s.policy.observe_only(arg); println!("  +{n} observe-only · {}", s.policy.summary()); }
+                else {
+                    let n = s.policy.observe_only(arg);
+                    reapply_grant(&mut s);
+                    println!("  +{n} observe-only · {}", s.policy.summary());
+                }
             }
             "/guardrail" | "/guardrails" => {
                 let (k, v) = arg.split_once(char::is_whitespace).unwrap_or((arg, ""));
@@ -1083,6 +1153,68 @@ pub async fn repl(base: &Path) -> anyhow::Result<()> {
                         println!("  rate guard: {} req/min", if n == 0 { "unlimited".into() } else { n.to_string() });
                     }
                     other => println!("  unknown guardrail '{other}' — destructive · accounts · rate"),
+                }
+            }
+            "/capability" | "/cap" => {
+                if arg.trim().is_empty() {
+                    match &s.capability {
+                        None => println!("  no capability token — this engagement runs on local configuration alone.\n  \x1b[2m/capability <ns-cap.v1....> · verified with NEUROSPLOIT_CAPABILITY_KEY\x1b[0m"),
+                        Some(t) => match harness::capability::key_from_env() {
+                            None => println!("  \x1b[33m⚠ a token is set but no key is configured\x1b[0m — set NEUROSPLOIT_CAPABILITY_KEY. Claims (UNVERIFIED): {}",
+                                harness::capability::Capability::peek(t).map(|c| c.summary()).unwrap_or_else(|| "unreadable".into())),
+                            Some(k) => match harness::capability::Capability::verify(t, &k) {
+                                Ok(c) => println!("  \x1b[32m🔏 verified\x1b[0m — {}", c.summary()),
+                                Err(e) => println!("  \x1b[31m⛔ {e}\x1b[0m"),
+                            },
+                        },
+                    }
+                } else if arg.trim() == "clear" {
+                    s.capability = None;
+                    println!("  capability token cleared — back to local configuration");
+                } else {
+                    let token = arg.trim().to_string();
+                    match harness::capability::key_from_env() {
+                        None => println!("  \x1b[31m⛔ no verification key\x1b[0m — set NEUROSPLOIT_CAPABILITY_KEY (or _KEY_FILE). An unverifiable token is not authorization; not stored."),
+                        Some(k) => match harness::capability::Capability::verify(&token, &k) {
+                            Ok(c) => {
+                                let (effective, dropped) = c.constrain(&s.policy);
+                                if !dropped.is_empty() {
+                                    println!("  \x1b[33m⚠ outside the grant, removed from scope:\x1b[0m {}", dropped.join(", "));
+                                }
+                                s.policy = effective;
+                                s.capability = Some(token);
+                                println!("  \x1b[32m🔏 verified\x1b[0m — {}", c.summary());
+                                println!("  scope now: {}", s.policy.summary());
+                            }
+                            Err(e) => println!("  \x1b[31m⛔ {e}\x1b[0m — token not stored"),
+                        },
+                    }
+                }
+            }
+            "/audit" => {
+                // The trail of the most recent run, plus the chain check that
+                // makes it evidence rather than a log file.
+                let h = history.lock().unwrap();
+                let path = h.last().map(|r| std::path::PathBuf::from(&r.workdir).join("audit.jsonl"))
+                    .unwrap_or_else(|| proj_dir().join("audit.jsonl"));
+                let log = harness::audit::AuditLog::open(&path);
+                let records = log.read_all();
+                if records.is_empty() {
+                    println!("  no audit records yet ({})", path.display());
+                } else {
+                    let n: usize = arg.trim().parse().unwrap_or(15);
+                    println!("  ── audit trail · {} record(s) · {} ──", records.len(), path.display());
+                    for r in records.iter().rev().take(n).rev() {
+                        let decision = if r.policy_decision.starts_with("deny") { format!("\x1b[31m{}\x1b[0m", r.policy_decision) }
+                            else if r.policy_decision.starts_with("confirm") { format!("\x1b[33m{}\x1b[0m", r.policy_decision) }
+                            else { format!("\x1b[2m{}\x1b[0m", r.policy_decision) };
+                        println!("  #{:<3} {} {:<18} {:<26} {}", r.seq, r.timestamp, trunc(&r.action, 18), trunc(&r.target, 26), decision);
+                        if !r.result.is_empty() { println!("       \x1b[2m{}\x1b[0m", trunc(&r.result, 100)); }
+                    }
+                    match log.verify() {
+                        Ok(n) => println!("  \x1b[32m✓ hash chain intact\x1b[0m across {n} record(s)"),
+                        Err(e) => println!("  \x1b[31m⛔ chain broken: {e}\x1b[0m"),
+                    }
                 }
             }
             "/memory" => memory_cmd(&s, arg),
@@ -1300,6 +1432,8 @@ async fn run(base: &Path, s: &Session, history: &mut Vec<RunRecord>) {
     cfg.objective = s.objective.clone();
     cfg.out_of_scope = s.out_of_scope.clone();
     cfg.scope = s.policy.clone();
+    cfg.capability = s.capability.clone();
+    cfg.policy = s.engagement.clone();
     cfg.auth = s.auth.clone();
     cfg.pinned = s.pinned.clone();
     // Multiple /auth identities → prepend the access-control (IDOR/BOLA/BFLA) directive.
@@ -1376,6 +1510,8 @@ async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
     cfg.objective = s.objective.clone();
     cfg.out_of_scope = s.out_of_scope.clone();
     cfg.scope = s.policy.clone();
+    cfg.capability = s.capability.clone();
+    cfg.policy = s.engagement.clone();
     cfg.auth = s.auth.clone();
     cfg.pinned = s.pinned.clone();
     if matches!(mode_e, crate::Mode::Grey) { cfg.repo = s.repo.clone(); }
@@ -1524,6 +1660,22 @@ fn merge_findings(prior: Vec<Finding>, mut fresh: Vec<Finding>) -> Vec<Finding> 
         if !seen.contains(&key(&p)) { fresh.push(p); }
     }
     fresh
+}
+
+/// Re-apply the capability ceiling after the session changed its own scope.
+///
+/// Without this, `/inscope` could widen the boundary past the grant — the one
+/// thing a capability token exists to prevent. The run itself would still be
+/// constrained (the pipeline re-applies the grant), but `/policy` would show a
+/// boundary that is not real, and a tool that misreports its own limits is
+/// worse than one with none.
+fn reapply_grant(s: &mut Session) -> Vec<String> {
+    let Some(token) = s.capability.clone() else { return Vec::new() };
+    let Some(key) = harness::capability::key_from_env() else { return Vec::new() };
+    let Ok(cap) = harness::capability::Capability::verify(&token, &key) else { return Vec::new() };
+    let (effective, dropped) = cap.constrain(&s.policy);
+    s.policy = effective;
+    dropped
 }
 
 /// `/memory` — inspect what the harness has learned, or search it.
@@ -1976,6 +2128,8 @@ fn help() {
     h("/observe <host>",    "observe-only: discovery allowed there, interaction blocked");
     h("/guardrail k v",     "soft scope: destructive on|off · accounts <n|off> · rate <req/min>");
     h("/policy",            "show the enforced scope + guardrails");
+    h("/capability <token>","signed grant (ns-cap.v1...) — verified, and it CAPS the scope");
+    h("/audit [n]",         "the run's action trail + hash-chain verification");
     h("@path @dir @f:1-20", "attach a file/folder/line-range to context (Tab → menu)");
     h("/attach <path>",     "attach a file/folder to context");
     h("/context",           "list current attachments");
