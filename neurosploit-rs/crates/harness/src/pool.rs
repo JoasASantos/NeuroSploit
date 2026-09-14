@@ -183,6 +183,42 @@ impl ModelPool {
         self.paused.load(Ordering::Relaxed)
     }
 
+    /// Operator-initiated pause. Same parking machinery as exhaustion, but
+    /// nothing failed — a human asked the run to hold. In-flight calls finish;
+    /// the next one waits at the gate, so findings already made stay made.
+    pub fn pause_now(&self) {
+        self.paused.store(true, Ordering::Relaxed);
+    }
+
+    /// Wake a parked run, whichever way it was parked.
+    pub fn resume_now(&self) {
+        self.paused.store(false, Ordering::Relaxed);
+        self.resume.notify_waiters();
+    }
+
+    /// Wait here while the run is paused. Cancellation always wins — an
+    /// operator who pauses and then stops must not be held by their own pause.
+    async fn pause_gate(&self) {
+        if !self.is_paused() || self.is_cancelled() {
+            return;
+        }
+        if let Some(tx) = self.progress() {
+            let _ = tx.send("notify: ⏸ paused by operator — /continue to resume.".to_string()).await;
+        }
+        while self.paused.load(Ordering::Relaxed) && !self.is_cancelled() {
+            let notified = self.resume.notified();
+            tokio::select! {
+                _ = notified => {}
+                _ = tokio::time::sleep(Duration::from_millis(300)) => {}
+            }
+        }
+        if !self.is_cancelled() {
+            if let Some(tx) = self.progress() {
+                let _ = tx.send("notify: ▶ resumed by operator.".to_string()).await;
+            }
+        }
+    }
+
     /// Consecutive auth/quota failures needed to trip the circuit breaker and
     /// auto-pause the run. Low threshold: 3 consecutive failures on the same
     /// provider is enough signal that the token is dead.
@@ -278,7 +314,19 @@ impl ModelPool {
 
     /// Router-aware completion. `label` tags streamed activity (agent name).
     pub async fn complete_routed(&self, task: Task, label: &str, system: &str, user: &str) -> Result<(ModelRef, String)> {
+        // Every prompt leaves the process watermarked, so a transcript, a cached
+        // completion, or a corpus scraped from any of them still says which
+        // engine and which build wrote it. Off with NEUROSPLOIT_WATERMARK=off.
+        let watermarked;
+        let system = if crate::validation::watermarks_on() {
+            watermarked = crate::provenance::Provenance::process().watermark_prompt(system);
+            watermarked.as_str()
+        } else {
+            system
+        };
         let _permit = self.sem.acquire().await.expect("semaphore closed");
+        // Hold here if the operator paused. Before the permit is spent on work.
+        self.pause_gate().await;
         loop {
             if self.is_cancelled() {
                 return Err(anyhow!("cancelled"));

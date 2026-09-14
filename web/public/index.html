@@ -215,6 +215,31 @@
               <div class="field-help">Deeper recon finds more surface but costs more tokens.</div>
             </div>
           </div>
+
+          <div>
+            <div class="section-title">Reasoning budget</div>
+            <div class="section-desc">Optional. Left on <em>unlimited</em>, the run behaves exactly as it always has — full depth, no cap.</div>
+          </div>
+          <div class="field-row">
+            <div class="field-group"><label class="field-label" for="fieldBudget">Budget mode</label>
+              <select class="narrow" id="fieldBudget">
+                <option value="unlimited" selected>unlimited · full run (default)</option>
+                <option value="eco">eco · cover ground, reason only on strong signal</option>
+                <option value="balanced">balanced · investigate what looks suspicious</option>
+                <option value="aggressive">aggressive · multiple hypotheses, deep validation</option>
+              </select>
+              <div class="field-help">How compute is spent, not how much there is.</div>
+            </div>
+            <div class="field-group"><label class="field-label" for="fieldTokenLimit">Token limit</label><input class="narrow" id="fieldTokenLimit" type="number" min="0" step="10000" placeholder="none" /><div class="field-help">Hard ceiling for the run. Empty or 0 = none.</div></div>
+            <div class="field-group"><label class="field-label" for="fieldOrder">Order</label>
+              <select class="narrow" id="fieldOrder">
+                <option value="coverage-first" selected>coverage-first</option>
+                <option value="depth-first">depth-first</option>
+              </select>
+              <div class="field-help">Map everything first, or chase a lead as it appears.</div>
+            </div>
+            <div class="field-group"><label class="field-label" for="fieldSampleRoute">Sample / route</label><input class="narrow" id="fieldSampleRoute" type="number" min="1" max="50" value="3" /><div class="field-help">Requests per endpoint family (<code>/api/users/{id}</code> is sampled, not enumerated).</div></div>
+          </div>
         </div>
 
         <!-- Step 5 — Review -->
@@ -250,6 +275,9 @@
         <div class="run-actions">
           <button class="btn" id="btnOpenTerm3">❭_ Terminal</button>
           <a class="btn" id="btnOpenReport" target="_blank" hidden>Open report</a>
+          <button class="btn" id="btnPauseRun" title="Hold the run where it is — in-flight agents finish, nothing is lost">⏸ Pause</button>
+          <a class="btn" id="btnDownloadLog" download>Download log</a>
+          <button class="btn" id="btnReportNow" title="Write the report from what has been found so far">Report so far</button>
           <button class="btn btn-danger" id="btnStopRun">Stop</button>
           <button class="btn" id="btnBackToBoard">← New engagement</button>
         </div>

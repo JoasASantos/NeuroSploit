@@ -252,7 +252,19 @@ pub fn canary(prefix: &str) -> String {
     h ^= h >> 29;
     h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
     h ^= h >> 32;
-    format!("{prefix}{:012x}", h & 0xffff_ffff_ffff)
+    // Attribution rides along with the marker: a canary that resurfaces in a
+    // customer's logs, a corpus, or someone else's report should say whose
+    // engine minted it without anyone having to ask. See `crate::provenance`.
+    // Opt out with NEUROSPLOIT_WATERMARK=off where payload length is the
+    // constraint (a reflected field with a hard character limit).
+    let sigil = if watermarks_on() { crate::provenance::SIGIL } else { "" };
+    format!("{sigil}{prefix}{:012x}", h & 0xffff_ffff_ffff)
+}
+
+/// Watermarking is on unless the operator turned it off.
+pub fn watermarks_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("NEUROSPLOIT_WATERMARK").unwrap_or_default().trim().to_lowercase() != "off")
 }
 
 /// Did every repeat reproduce the same significant difference? One occurrence
@@ -1622,6 +1634,8 @@ mod tests {
         uniq.sort();
         uniq.dedup();
         assert_eq!(uniq.len(), batch.len(), "canaries must be unique even when minted back to back");
-        assert!(batch[0].starts_with("ns") && batch[0].len() > 8);
+        // The sigil leads so a marker found anywhere later extracts whole.
+        assert!(batch[0].starts_with(crate::provenance::SIGIL), "got {}", batch[0]);
+        assert!(batch[0].contains("ns") && batch[0].len() > 8);
     }
 }

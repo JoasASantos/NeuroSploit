@@ -274,7 +274,12 @@ a { color: var(--accent); text-decoration: none; }
 .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 .btn-danger { background: transparent; border-color: var(--sev-critical-fg); color: var(--sev-critical-fg); }
 .btn-danger:hover { background: var(--sev-critical-bg); }
+/* A paused run is a state to notice, not an error — the resume button wears
+   the warning hue so the run never looks quietly stalled. */
+.btn-warn { background: var(--sev-medium-bg); border-color: var(--sev-medium-fg); color: var(--sev-medium-fg); }
+.btn-warn:hover { background: var(--sev-medium-bg); filter: brightness(1.12); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
+a.btn:disabled, a.btn[aria-disabled="true"] { pointer-events: none; }
 .btn:focus-visible { outline-offset: 2px; }
 
 /* ============================================================ Wizard */

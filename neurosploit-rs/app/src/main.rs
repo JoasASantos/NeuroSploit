@@ -103,6 +103,26 @@ enum Cmd {
         /// dangerous industrial primitives removed).
         #[arg(long = "policy", default_value = "web")]
         policy: String,
+        /// How to spend reasoning: eco · balanced · aggressive · unlimited.
+        /// Omitted means unlimited — the full run, as before budgets existed.
+        #[arg(long = "budget")]
+        budget: Option<String>,
+        /// Hard ceiling on tokens for the run (0 = none). Independent of
+        /// --budget: one says how to spend, the other how much there is.
+        #[arg(long = "token-limit")]
+        token_limit: Option<u64>,
+        /// Cap on findings that receive deep reasoning.
+        #[arg(long = "deep-test-limit")]
+        deep_test_limit: Option<usize>,
+        /// Map the whole surface before investigating anything.
+        #[arg(long = "coverage-first")]
+        coverage_first: bool,
+        /// Investigate a promising lead as soon as it appears.
+        #[arg(long = "depth-first")]
+        depth_first: bool,
+        /// Requests per endpoint family (/api/users/{id} is sampled, not enumerated).
+        #[arg(long = "sample-per-route", default_value_t = 3)]
+        sample_per_route: usize,
         /// Open a Jira card per finding (needs the jira integration enabled).
         #[arg(long)]
         jira: bool,
@@ -125,6 +145,11 @@ enum Cmd {
     Capability {
         #[command(subcommand)]
         cmd: CapCmd,
+    },
+    /// Provenance: which build made an artifact, and does it still match.
+    Provenance {
+        #[command(subcommand)]
+        cmd: ProvCmd,
     },
     /// White-box: analyse a repository's source code for vulnerabilities.
     Whitebox {
@@ -452,7 +477,8 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Cmd::Capability { cmd } => handle_capability(cmd)?,
-        Cmd::Run { url, models, max_agents, vote_n, chain_depth, recon, offline, subscription, mcp, creds, focus, objective, out_of_scope, in_scope, environment, policy, jira, only, verbose } => {
+        Cmd::Provenance { cmd } => handle_provenance(cmd)?,
+        Cmd::Run { url, models, max_agents, vote_n, chain_depth, recon, offline, subscription, mcp, creds, focus, objective, out_of_scope, in_scope, environment, policy, budget, token_limit, deep_test_limit, coverage_first, depth_first, sample_per_route, jira, only, verbose } => {
             let url = if url.starts_with("http") { url } else { format!("https://{url}") };
             let mut cfg = RunConfig::new(&url);
             cfg.max_agents = max_agents;
@@ -467,6 +493,7 @@ async fn main() -> anyhow::Result<()> {
             cfg.out_of_scope = out_of_scope;
             cfg.pinned = parse_only(&only);
             apply_authorization(&mut cfg, &in_scope, cli.capability_token.clone(), &environment, &policy)?;
+            apply_budget(&mut cfg, budget.as_deref(), token_limit, deep_test_limit, coverage_first, depth_first, sample_per_route)?;
             if !models.is_empty() {
                 cfg.models = models;
             }
@@ -1028,6 +1055,24 @@ fn apply_authorization(
 }
 
 #[derive(Subcommand)]
+enum ProvCmd {
+    /// Print this build's fingerprint and the markers it mints.
+    Show,
+    /// Find NeuroSploit markers in a file — a report, a log, a response body.
+    /// Answers "did this come from us?" for a document that arrived from
+    /// somewhere else.
+    Scan {
+        /// File to search.
+        path: String,
+    },
+    /// Check a run's provenance.json against its findings.json.
+    Verify {
+        /// Run directory (the one holding provenance.json and findings.json).
+        dir: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum CapCmd {
     /// Mint a token. Requires the signing key (NEUROSPLOIT_CAPABILITY_KEY),
     /// which is what makes the grant attributable to whoever authorized it.
@@ -1066,6 +1111,84 @@ enum CapCmd {
     Verify {
         token: String,
     },
+}
+
+/// Signing key for run manifests. Separate from the capability key: one
+/// authorizes an engagement, the other attests to its output.
+fn provenance_key() -> Option<Vec<u8>> {
+    std::env::var("NEUROSPLOIT_PROVENANCE_KEY")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.into_bytes())
+}
+
+fn handle_provenance(cmd: ProvCmd) -> anyhow::Result<()> {
+    use harness::provenance::{Manifest, Provenance, SIGIL};
+    match cmd {
+        ProvCmd::Show => {
+            let p = Provenance::process();
+            println!("  \x1b[1mbuild\x1b[0m      {}", p.build);
+            println!("  \x1b[1mversion\x1b[0m    {}", p.version);
+            println!("  \x1b[1mcustomer\x1b[0m   {}", p.customer.clone().unwrap_or_else(|| "(none — set NEUROSPLOIT_CUSTOMER_ID for a per-customer build)".into()));
+            println!("  \x1b[1mtag\x1b[0m        {}", p.tag());
+            println!("  \x1b[1msample\x1b[0m     {}", p.marker("xss"));
+            println!("  \x1b[2msigil {SIGIL} — grep for it to find every trace at once\x1b[0m");
+            println!("  \x1b[2msigning:   {}\x1b[0m", if provenance_key().is_some() { "NEUROSPLOIT_PROVENANCE_KEY set — manifests are signed" } else { "no key — manifests name the build but cannot prove it" });
+        }
+        ProvCmd::Scan { path } => {
+            let text = std::fs::read_to_string(&path)
+                .map_err(|e| anyhow::anyhow!("cannot read {path}: {e}"))?;
+            let marks = Provenance::extract(&text);
+            if marks.is_empty() {
+                println!("  no NeuroSploit markers in {path}");
+                return Ok(());
+            }
+            println!("  {} marker(s) in {path}:", marks.len());
+            for m in &marks {
+                println!("    {m}");
+            }
+            // A marker carrying this build's fingerprint came from this binary;
+            // one that does not still came from NeuroSploit, just elsewhere.
+            let mine = marks.iter().filter(|m| m.contains(&Provenance::process().build[..6])).count();
+            println!("  \x1b[2m{mine} of them minted by this build ({}), the rest by another\x1b[0m", Provenance::process().build);
+        }
+        ProvCmd::Verify { dir } => {
+            let dir = std::path::Path::new(&dir);
+            let manifest: Manifest = serde_json::from_str(
+                &std::fs::read_to_string(dir.join("provenance.json"))
+                    .map_err(|e| anyhow::anyhow!("no provenance.json in {}: {e}", dir.display()))?,
+            )?;
+            let findings: Vec<harness::types::Finding> = serde_json::from_str(
+                &std::fs::read_to_string(dir.join("findings.json"))
+                    .map_err(|e| anyhow::anyhow!("no findings.json in {}: {e}", dir.display()))?,
+            )?;
+            println!("  engine   {} {} · build {}", manifest.engine, manifest.version, manifest.build);
+            println!("  run      {} · {} finding(s) claimed", manifest.run, manifest.findings);
+            match provenance_key() {
+                Some(k) => match manifest.verify(&k, &findings) {
+                    Ok(()) => println!("  \x1b[1;32m✓ signature valid and findings match the manifest\x1b[0m"),
+                    Err(e) => {
+                        println!("  \x1b[1;31m✗ {e}\x1b[0m");
+                        anyhow::bail!("provenance verification failed");
+                    }
+                },
+                None => {
+                    // Without the key the structure can still be checked, which
+                    // catches an edited finding set even though it cannot catch
+                    // a forged manifest. Say which of the two this is.
+                    let actual = harness::provenance::structural_signature(&findings);
+                    if actual == manifest.structure {
+                        println!("  \x1b[33m~ findings match the manifest's structure, but no NEUROSPLOIT_PROVENANCE_KEY is set — the manifest itself is unverified\x1b[0m");
+                    } else {
+                        println!("  \x1b[1;31m✗ findings do not match the manifest: {actual} vs {}\x1b[0m", manifest.structure);
+                        anyhow::bail!("provenance verification failed");
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn handle_capability(cmd: CapCmd) -> anyhow::Result<()> {
@@ -1113,6 +1236,47 @@ fn handle_capability(cmd: CapCmd) -> anyhow::Result<()> {
             Err(e) => anyhow::bail!("{e}"),
         },
     }
+    Ok(())
+}
+
+/// Translate the budget flags into a configuration.
+///
+/// Omitting them all leaves `Budget::default()`, which is unlimited — the run
+/// behaves exactly as it did before any of this existed. A budget is something
+/// an operator opts into, never a silent cap on a run they asked for in full.
+fn apply_budget(
+    cfg: &mut RunConfig,
+    mode: Option<&str>,
+    token_limit: Option<u64>,
+    deep_test_limit: Option<usize>,
+    coverage_first: bool,
+    depth_first: bool,
+    sample_per_route: usize,
+) -> anyhow::Result<()> {
+    use harness::budget::{Budget, Mode, Order};
+    if mode.is_none() && token_limit.is_none() && deep_test_limit.is_none() && !coverage_first && !depth_first {
+        cfg.budget.sample_per_route = sample_per_route.max(1);
+        return Ok(());
+    }
+    let m = match mode {
+        Some(s) => Mode::parse(s).ok_or_else(|| anyhow::anyhow!("unknown budget '{s}' — use eco, balanced, aggressive or unlimited"))?,
+        // A token ceiling with no strategy still needs one to spend under.
+        None => Mode::Balanced,
+    };
+    let mut b = Budget::with_mode(m);
+    if let Some(t) = token_limit {
+        b.token_limit = t;
+    }
+    if let Some(d) = deep_test_limit {
+        b.max_deep_tests = d;
+    }
+    if coverage_first && depth_first {
+        anyhow::bail!("--coverage-first and --depth-first are opposites; pick one");
+    }
+    b.order = if depth_first { Order::DepthFirst } else { Order::CoverageFirst };
+    b.sample_per_route = sample_per_route.max(1);
+    println!("  \x1b[2mbudget: {}\x1b[0m", b.summary());
+    cfg.budget = b;
     Ok(())
 }
 

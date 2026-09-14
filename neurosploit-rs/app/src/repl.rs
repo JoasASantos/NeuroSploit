@@ -153,7 +153,7 @@ pub(crate) const ACCEPTED: &[&str] = &[
     "/logs", "/mcp", "/memory", "/model", "/models", "/objective", "/objectives", "/observe",
     "/observe-only", "/offline",
     "/onboard", "/only", "/oos", "/outofscope", "/policy", "/providers", "/proxy", "/q", "/quit", "/recon",
-    "/repo", "/report", "/results", "/resume", "/retest", "/revalidate", "/run", "/runs",
+    "/pause", "/repo", "/report", "/results", "/resume", "/retest", "/revalidate", "/run", "/runs",
     "/scope", "/scope-out", "/show", "/status", "/stop", "/sub", "/subscription", "/target",
     "/temp-email", "/tempmail", "/theme", "/timeout", "/ua", "/url", "/useragent", "/validate",
     "/votes",
@@ -163,7 +163,7 @@ pub(crate) const ACCEPTED: &[&str] = &[
 const COMMANDS: &[&str] = &[
     "/help", "/onboard", "/show", "/config", "/providers", "/model", "/key", "/sub", "/target",
     "/repo", "/auth", "/creds", "/focus", "/objective", "/scope-out", "/attach", "/context", "/mcp", "/offline",
-    "/votes", "/chain", "/recon", "/tempmail", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/only", "/theme", "/clear", "/run", "/stop", "/continue", "/runs", "/results", "/report",
+    "/votes", "/chain", "/recon", "/tempmail", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/only", "/theme", "/clear", "/run", "/stop", "/pause", "/continue", "/runs", "/results", "/report",
     "/status", "/logs", "/diff", "/retest", "/validate", "/finding", "/expand", "/integrations",
     "/memory", "/forget", "/graph", "/inscope", "/observe", "/guardrail", "/policy",
     "/capability", "/audit", "/quit",
@@ -889,6 +889,19 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
                         }
                     }
                     _ => println!("  no active run."),
+                }
+            }
+            "/pause" | "/hold" => {
+                match active.as_ref() {
+                    Some(a) if !a.done.load(Ordering::Relaxed) => {
+                        if a.paused.load(Ordering::Relaxed) {
+                            println!("  run is already paused — /continue to resume.");
+                        } else {
+                            a.paused.store(true, Ordering::Relaxed);
+                            println!("  \x1b[1;33m⏸ pausing\x1b[0m — in-flight agents finish, then the run holds. Findings so far are kept. /continue to resume, /stop to finish early.");
+                        }
+                    }
+                    _ => println!("  no run in progress."),
                 }
             }
             "/continue" | "/resume" => {
@@ -2146,6 +2159,7 @@ fn help() {
     h("/status [n]",        "live progress + findings while running (or a past run #)");
     h("/logs [n]",          "recent activity feed of the running test (recon/tools/findings)");
     h("/stop",              "stop: [1] validate+report  [2] raw report now  [3] discard");
+    h("/pause",             "hold the run where it is — in-flight agents finish, nothing is lost");
     h("/continue",          "resume a paused (token/quota) OR a recovered interrupted run — carries findings forward");
     h("/results [n]",       "browse findings (target → vuln → detail; Esc = back)");
     h("/finding [n]",       "pick a finding and see its command + PoC + evidence");

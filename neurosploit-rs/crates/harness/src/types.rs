@@ -236,6 +236,11 @@ pub struct RunConfig {
     /// Engagement policy: risk ceilings, reasoning rules, proof requirements.
     #[serde(default)]
     pub policy: crate::policy::EngagementPolicy,
+    /// How much compute to spend and where. Defaults to unlimited, which is the
+    /// behaviour that existed before budgets — an operator who asks for nothing
+    /// gets the full run.
+    #[serde(default)]
+    pub budget: crate::budget::Budget,
 }
 
 fn default_vote() -> usize {
@@ -281,6 +286,7 @@ impl RunConfig {
             scope: Default::default(),
             capability: None,
             policy: Default::default(),
+            budget: Default::default(),
         }
     }
 }

@@ -214,7 +214,7 @@ impl Action {
 /// Bounded retry budget for one engagement.
 #[derive(Debug)]
 pub struct Rounds {
-    max_per_finding: usize,
+    pub max_per_finding: usize,
     spent: std::sync::Mutex<std::collections::HashMap<String, usize>>,
 }
 

@@ -529,7 +529,9 @@ function ingestLine(job, rawLine) {
   const low = line.toLowerCase();
   job.push({ type: 'log', line });
 
-  if (low.includes('token/quota exhausted') || low.includes('run is paused')) job.phase = 'paused (quota)';
+  if (low.includes('paused by operator')) job.phase = 'paused (operator)';
+  else if (low.includes('resumed by operator') || low.includes('▶ resumed')) job.phase = 'running';
+  else if (low.includes('token/quota exhausted') || low.includes('run is paused')) job.phase = 'paused (quota)';
   else if (low.includes('authentication failed') || low.includes('circuit breaker')) job.phase = 'paused (auth)';
   else if (low.startsWith('recon') || low.startsWith('ai-recon') || low.includes('recon round') || low.startsWith('probe:')) job.phase = 'recon';
   else if (low.includes('selected') && low.includes('agent')) {
@@ -588,6 +590,14 @@ function buildArgs(body) {
   if (body.focus) args.push('--focus', body.focus);
   if (body.objective) args.push('--objective', body.objective);
   if (body.outOfScope) args.push('--out-of-scope', body.outOfScope);
+  // Budget: omitted entirely means the full run, exactly as before budgets
+  // existed — the web console never caps a run the operator didn't cap.
+  if (body.budget && body.budget !== 'unlimited') args.push('--budget', body.budget);
+  if (body.tokenLimit) args.push('--token-limit', String(body.tokenLimit));
+  if (body.deepTestLimit) args.push('--deep-test-limit', String(body.deepTestLimit));
+  if (body.order === 'depth-first') args.push('--depth-first');
+  else if (body.order === 'coverage-first') args.push('--coverage-first');
+  if (body.samplePerRoute) args.push('--sample-per-route', String(body.samplePerRoute));
   // Authorization: the signed grant caps the scope, the extra in-scope entries
   // can only narrow within it, and the environment scales every risk score.
   for (const entry of body.inScope || []) args.push('--in-scope', entry);
@@ -650,6 +660,12 @@ function authArgs(body) {
   if (body.capability) args.push('--capability-token', body.capability);
   if (body.environment) args.push('--environment', body.environment);
   if (body.policyProfile) args.push('--policy', body.policyProfile);
+  if (body.budget && body.budget !== 'unlimited') args.push('--budget', body.budget);
+  if (body.tokenLimit) args.push('--token-limit', String(body.tokenLimit));
+  if (body.deepTestLimit) args.push('--deep-test-limit', String(body.deepTestLimit));
+  if (body.order === 'depth-first') args.push('--depth-first');
+  else if (body.order === 'coverage-first') args.push('--coverage-first');
+  if (body.samplePerRoute) args.push('--sample-per-route', String(body.samplePerRoute));
   return args;
 }
 
@@ -964,6 +980,36 @@ const server = http.createServer(async (req, res) => {
       }
       return sendJson(res, 200, { ok: true });
     }
+    // Pause / resume / report-where-it-stopped. All three are REPL commands,
+    // so they only exist on a REPL-backed job — a one-shot CLI subprocess has
+    // no stdin listener to take them.
+    m = p.match(/^\/api\/exploit\/([^/]+)\/(pause|continue|report)$/);
+    if (req.method === 'POST' && m) {
+      const job = jobs.get(m[1]);
+      if (!job) return sendJson(res, 404, { error: 'job not found' });
+      if (!job.repl || !job.child?.stdin?.writable) {
+        return sendJson(res, 409, { error: 'this job is not an interactive session — pause/continue/report need a REPL-backed run (run, whitebox or greybox)' });
+      }
+      const cmd = { pause: '/pause', continue: '/continue', report: '/report' }[m[2]];
+      job.child.stdin.write(cmd + '\n');
+      if (m[2] === 'pause') job.phase = 'paused (operator)';
+      else if (m[2] === 'continue' && job.phase.startsWith('paused')) job.phase = 'resuming';
+      return sendJson(res, 200, { ok: true, sent: cmd });
+    }
+
+    // The whole log, as text — for downloading or pasting into a ticket.
+    m = p.match(/^\/api\/exploit\/([^/]+)\/log$/);
+    if (req.method === 'GET' && m) {
+      const job = jobs.get(m[1]);
+      if (!job) return sendJson(res, 404, { error: 'job not found' });
+      const body = job.feed.filter((e) => e.type === 'log').map((e) => e.line).join('\n') + '\n';
+      res.writeHead(200, {
+        'content-type': 'text/plain; charset=utf-8',
+        'content-disposition': `attachment; filename="neurosploit-${job.runId || job.id}.log"`,
+      });
+      return res.end(body);
+    }
+
     m = p.match(/^\/api\/exploit\/([^/]+)\/input$/);
     if (req.method === 'POST' && m) {
       const job = jobs.get(m[1]);

@@ -609,13 +609,18 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
     if let Some(c) = &grant {
         let _ = tx.send(format!("notify: 🔏 capability verified — {}", c.summary())).await;
     }
+    // Bind the process to this engagement before the first prompt or marker is
+    // minted, so everything the run emits agrees on which run it came from.
+    let prov = crate::provenance::Provenance::bind_run(&run_id(&cfg));
+    let _ = tx.send(format!("notify: 🧬 provenance {} (build {})", prov.tag(), prov.build)).await;
     let _ = tx
         .send(format!(
-            "Loaded {} agents ({} vuln / {} recon / {} code / {} meta) · models: {} · vote_n={} · concurrency={}{}",
+            "Loaded {} agents ({} vuln / {} recon / {} code / {} meta) · models: {} · vote_n={} · concurrency={}{} · budget: {}",
             lib.total(), lib.vulns.len(), lib.recon.len(), lib.code.len(), lib.meta.len(),
             pool.candidates.iter().map(|m| m.label()).collect::<Vec<_>>().join(", "),
-            cfg.vote_n, cfg.concurrency,
+            effective_vote_n(&cfg), cfg.concurrency,
             if pool.mcp_config.is_some() { " · Playwright MCP ON" } else { "" },
+            cfg.budget.summary(),
         ))
         .await;
 
@@ -831,18 +836,18 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
     let transcript = transcript_of(&raw);
     let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
     let _ = tx.send(format!("{} candidate finding(s) (deduped) — validating by {}-model vote", candidates.len(), cfg.vote_n)).await;
-    if pool.candidates.len() == 1 && cfg.vote_n <= 1 {
+    if pool.candidates.len() == 1 && effective_vote_n(&cfg) <= 1 {
         let _ = tx.send("⚠ single-model panel with vote_n=1 — validation is weaker (same model validates its own findings). Consider --vote-n 2 or adding a second model for cross-validation.".into()).await;
     }
 
     // ---- 4. Validate by N-model voting ---------------------------------
-    let mut findings = validate(candidates, pool, VOTE_SYS, cfg.vote_n, &tx).await;
+    let mut findings = validate(candidates, pool, VOTE_SYS, effective_vote_n(&cfg), &tx).await;
 
     // ---- 5. Attack chaining: multi-round post-exploitation pivots ------
     let chained = attack_chain(pool, &cfg, &recon, &findings, &lib.chains, &tx).await;
     findings.extend(chained);
     findings = dedup_findings(findings);
-    let findings = refute_pass(findings, pool, cfg.vote_n, &tx).await;
+    let findings = refute_pass(findings, pool, effective_vote_n(&cfg), &tx).await;
     finish(cfg, lib, pool, recon, transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Empirical, String::new(), tx).await
 }
 
@@ -922,8 +927,8 @@ pub async fn run_whitebox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: S
     let transcript = transcript_of(&raw);
     let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
     let _ = tx.send(format!("{} candidate finding(s) (deduped) — validating", candidates.len())).await;
-    let findings = validate(candidates, pool, CODE_VOTE_SYS, cfg.vote_n, &tx).await;
-    let findings = refute_pass(findings, pool, cfg.vote_n, &tx).await;
+    let findings = validate(candidates, pool, CODE_VOTE_SYS, effective_vote_n(&cfg), &tx).await;
+    let findings = refute_pass(findings, pool, effective_vote_n(&cfg), &tx).await;
     finish(cfg, lib, pool, "{}".into(), transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Symbolic, context, tx).await
 }
 
@@ -1065,11 +1070,11 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
     let transcript = format!("{}\n{}", code_leads, transcript_of(&raw));
     let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
     let _ = tx.send(format!("{} candidate finding(s) (deduped) — validating", candidates.len())).await;
-    let mut findings = validate(candidates, pool, VOTE_SYS, cfg.vote_n, &tx).await;
+    let mut findings = validate(candidates, pool, VOTE_SYS, effective_vote_n(&cfg), &tx).await;
     let chained = attack_chain(pool, &cfg, &recon, &findings, &lib.chains, &tx).await;
     findings.extend(chained);
     findings = dedup_findings(findings);
-    let findings = refute_pass(findings, pool, cfg.vote_n, &tx).await;
+    let findings = refute_pass(findings, pool, effective_vote_n(&cfg), &tx).await;
     finish(cfg, lib, pool, recon, transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Either, context, tx).await
 }
 
@@ -1454,6 +1459,18 @@ async fn validate(candidates: Vec<Finding>, pool: &ModelPool, sys: &str, vote_n:
 /// Only gaps another request can close trigger a round: a missing baseline is
 /// one request away, a confirmed account behind an email gate is not, and
 /// retrying the second is how a budget disappears while nothing changes.
+/// How many voters actually convene.
+///
+/// The operator's `--vote-n` is the ceiling; a budget can only narrow it, never
+/// widen it. Unlimited — the default when no flag is passed — leaves it alone,
+/// so a run nobody budgeted behaves exactly as it always did.
+fn effective_vote_n(cfg: &RunConfig) -> usize {
+    match cfg.budget.mode {
+        crate::budget::Mode::Unlimited => cfg.vote_n,
+        m => cfg.vote_n.min(m.reviewers()).max(1),
+    }
+}
+
 async fn close_evidence_gaps(cfg: &RunConfig, findings: Vec<Finding>, tx: &Sender<String>) -> Vec<Finding> {
     if std::env::var("NEUROSPLOIT_UNCERTAINTY").unwrap_or_default() == "off" {
         return findings;
@@ -1461,7 +1478,16 @@ async fn close_evidence_gaps(cfg: &RunConfig, findings: Vec<Finding>, tx: &Sende
     let policy = effective_scope(cfg);
     let engine = crate::replay::ReplayEngine::new(policy.clone());
     let browser = crate::browser::BrowserProbe::new(policy);
-    let rounds = crate::uncertainty::Rounds::default();
+    // Evidence rounds are the most expensive thing per finding, so the budget
+    // sets how many there are. Unlimited keeps the default (2).
+    let rounds = match cfg.budget.mode {
+        crate::budget::Mode::Unlimited => crate::uncertainty::Rounds::default(),
+        m => crate::uncertainty::Rounds::with_max(m.evidence_rounds()),
+    };
+    if rounds.max_per_finding == 0 {
+        let _ = tx.send(format!("notify: evidence-gap closing skipped — budget {} allows 0 rounds", cfg.budget.mode.as_str())).await;
+        return findings;
+    }
     let mut out = Vec::with_capacity(findings.len());
     let mut closed = 0usize;
 
@@ -2077,6 +2103,19 @@ fn absorb(cfg: &RunConfig, recon: &str, findings: &[Finding]) -> Vec<String> {
     out
 }
 
+/// Key used to sign the run manifest.
+///
+/// Separate from the capability key on purpose: one authorizes a run, the other
+/// attests to its output, and an operator who can start engagements should not
+/// thereby be able to sign reports as the engine.
+fn provenance_key() -> Option<Vec<u8>> {
+    std::env::var("NEUROSPLOIT_PROVENANCE_KEY")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.into_bytes())
+}
+
 /// Write recon/exploit/findings/report as json+md for downstream reuse.
 fn persist(cfg: &RunConfig, recon: &str, transcript: &str, findings: &[Finding]) -> Vec<String> {
     let Some(dir) = &cfg.workdir else { return vec![] };
@@ -2096,7 +2135,28 @@ fn persist(cfg: &RunConfig, recon: &str, transcript: &str, findings: &[Finding])
     if !transcript.is_empty() {
         put("exploitation.md", format!("# Agent transcript — {}\n\n{}", cfg.target, transcript));
     }
-    put("findings.json", serde_json::to_string_pretty(findings).unwrap_or_else(|_| "[]".into()));
+    // Provenance: every finding carries the build that produced it, and a
+    // signed manifest ships beside them so the set can be checked later
+    // without trusting the filename it arrived under.
+    let prov = crate::provenance::Provenance::process();
+    let findings_json = match serde_json::to_value(findings) {
+        Ok(serde_json::Value::Array(mut items)) => {
+            for item in items.iter_mut() {
+                prov.stamp(item);
+            }
+            serde_json::to_string_pretty(&serde_json::Value::Array(items)).unwrap_or_else(|_| "[]".into())
+        }
+        _ => serde_json::to_string_pretty(findings).unwrap_or_else(|_| "[]".into()),
+    };
+    put("findings.json", findings_json);
+    let manifest = prov.manifest(&cfg.target, findings);
+    let manifest = match provenance_key() {
+        Some(k) => manifest.sign(&k),
+        // No key is not a failure: the manifest still names the build, it just
+        // cannot prove it. Saying so beats a signature nobody can verify.
+        None => manifest,
+    };
+    put("provenance.json", serde_json::to_string_pretty(&manifest).unwrap_or_default());
     put("findings.md", findings_md(&cfg.target, findings));
     let meta = cfg.workdir.as_deref().map(|d| report::read_meta(Path::new(d))).unwrap_or_default();
     let pocs: Vec<String> = std::fs::read_dir(dir.join("pocs"))
@@ -2680,11 +2740,11 @@ pub async fn run_host(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sende
     let transcript = transcript_of(&raw);
     let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
     let _ = tx.send(format!("{} candidate finding(s) (deduped) — validating", candidates.len())).await;
-    let mut findings = validate(candidates, pool, VOTE_SYS, cfg.vote_n, &tx).await;
+    let mut findings = validate(candidates, pool, VOTE_SYS, effective_vote_n(&cfg), &tx).await;
     let chained = attack_chain(pool, &cfg, &recon, &findings, &lib.chains, &tx).await;
     findings.extend(chained);
     findings = dedup_findings(findings);
-    let findings = refute_pass(findings, pool, cfg.vote_n, &tx).await;
+    let findings = refute_pass(findings, pool, effective_vote_n(&cfg), &tx).await;
     finish(cfg, lib, pool, recon, transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Empirical, String::new(), tx).await
 }
 
@@ -2899,11 +2959,11 @@ pub async fn run_ai(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<
     let transcript = transcript_of(&raw);
     let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
     let _ = tx.send(format!("{} AI candidate(s) — validating", candidates.len())).await;
-    let mut findings = validate(candidates, pool, VOTE_SYS, cfg.vote_n, &tx).await;
+    let mut findings = validate(candidates, pool, VOTE_SYS, effective_vote_n(&cfg), &tx).await;
     let chained = attack_chain(pool, &cfg, &recon, &findings, &lib.chains, &tx).await;
     findings.extend(chained);
     findings = dedup_findings(findings);
-    let findings = refute_pass(findings, pool, cfg.vote_n, &tx).await;
+    let findings = refute_pass(findings, pool, effective_vote_n(&cfg), &tx).await;
     finish(cfg, lib, pool, recon, transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Empirical, String::new(), tx).await
 }
 
@@ -2953,7 +3013,7 @@ pub async fn run_skills_audit(cfg: RunConfig, lib: &Library, pool: &ModelPool, t
         .await;
     let transcript = transcript_of(&raw);
     let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
-    let findings = validate(candidates, pool, CODE_VOTE_SYS, cfg.vote_n, &tx).await;
+    let findings = validate(candidates, pool, CODE_VOTE_SYS, effective_vote_n(&cfg), &tx).await;
     finish(cfg, lib, pool, "{}".into(), transcript, findings, agents, &mut rl, crate::grounding::GroundMode::Symbolic, context, tx).await
 }
 

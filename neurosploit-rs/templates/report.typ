@@ -53,7 +53,11 @@
 
 #set page(margin: 2cm, numbering: "1", footer: context [
   #set text(size: 8pt, fill: gray)
-  NeuroSploit v3.5.1 · #meta.target · confidential
+  NeuroSploit v4.0.0 · #meta.target · confidential
+  #h(1fr)
+  // Build+run identity, so a page that circulates on its own still says which
+  // engagement produced it.
+  #text(6.5pt, font: ("Menlo", "Courier New"))[#meta.at("provenance", default: "")]
   #h(1fr) #counter(page).display()
 ])
 #set text(font: ("Helvetica Neue", "Helvetica", "Arial"), size: 10pt)

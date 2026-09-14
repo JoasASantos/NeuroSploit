@@ -210,8 +210,11 @@ pub fn html_with_pocs(target: &str, findings: &[Finding], meta: &EngagementMeta,
          <h2>Executive Summary</h2><div class=summary-grid>{summary_grid}</div>\
          {vuln_summary}\
          <h2>Findings ({n})</h2>{body}\
-         <p class=footer>Authorized testing only. Confirmed findings passed multi-model voting, receipt grounding and adversarial refute; \"needs-review\" are flagged for a human.<br>NeuroSploit v4.0.0 · by <b>Joas A Santos</b> &amp; <b>Red Team Leaders</b></p></body></html>",
+         <p class=footer>Authorized testing only. Confirmed findings passed multi-model voting, receipt grounding and adversarial refute; \"needs-review\" are flagged for a human.<br>NeuroSploit v4.0.0 · by <b>Joas A Santos</b> &amp; <b>Red Team Leaders</b><br><span style=\"font-family:ui-monospace,monospace\">{provenance}</span></p></body></html>",
         t = esc(target), n = sorted.len(), body = body, summary_grid = summary_grid, vuln_summary = vuln_summary,
+        // Which build produced this document. A report that circulates without
+        // it is a report nobody can trace back to the run that made it.
+        provenance = esc(&crate::provenance::Provenance::process().tag()),
         asset = esc(if meta.asset.is_empty() { "unidentified web asset" } else { &meta.asset }),
         techrow = if meta.tech.is_empty() { String::new() } else { format!("<tr><td>Technology</td><td>{}</td></tr>", esc(&meta.tech.join(", "))) },
         serverrow = if meta.server.is_empty() { String::new() } else { format!("<tr><td>Server</td><td>{}</td></tr>", esc(&meta.server)) },
@@ -482,12 +485,13 @@ pub fn typst_report(target: &str, findings: &[Finding], dir: &Path) -> std::io::
 
     let mut data = String::new();
     data.push_str(&format!(
-        "#let meta = (target: {}, asset: {}, tech: {}, server: {}, run_id: {}, generated: {}, model: {}, exec: {}, conclusion: {}, accounts: {})\n",
+        "#let meta = (target: {}, asset: {}, tech: {}, server: {}, run_id: {}, generated: {}, model: {}, exec: {}, conclusion: {}, accounts: {}, provenance: {})\n",
         tq(target), tq(&asset), tq(&meta.tech.join(", ")), tq(&meta.server),
         tq(&run_id), tq("July 2026"), tq("multi-model"),
         tq(&strip_md(&exec_summary(target, &meta, &confirmed, &review))),
         tq(&strip_md(&conclusion(target, &meta, &confirmed, &review))),
         tq(&strip_md(&accounts)),
+        tq(&crate::provenance::Provenance::process().tag()),
     ));
     data.push_str("#let findings = (\n");
     for f in &sorted {

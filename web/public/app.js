@@ -442,6 +442,19 @@ state.authMode = 'api';
 // review (step 5)
 // ---------------------------------------------------------------------------
 
+/// What the budget controls add up to, in the operator's words. "unlimited"
+/// is spelled out rather than left blank, because the absence of a cap is the
+/// thing worth confirming before launching.
+function budgetSummary() {
+  const mode = $('#fieldBudget').value;
+  const limit = Number($('#fieldTokenLimit').value) || 0;
+  if (mode === 'unlimited' && !limit) return 'unlimited — full run, no cap';
+  const parts = [mode, $('#fieldOrder').value];
+  if (limit) parts.push(`${limit.toLocaleString()} tokens max`);
+  parts.push(`${$('#fieldSampleRoute').value}/route`);
+  return parts.join(' · ');
+}
+
 function renderReview() {
   const target = $('#fieldTarget').value.trim();
   const repo = $('#fieldRepo').value.trim();
@@ -457,6 +470,7 @@ function renderReview() {
     { k: 'Leads selected', v: `${state.selected.size} of ${allAgents().length}${state.selected.size === 0 ? ' — auto (recon-driven)' : ''}` },
     { k: 'Custom leads', v: String(state.customLeads.length) },
     { k: 'Votes / chain / recon', v: `${$('#fieldVotes').value} / ${$('#fieldChain').value} / ${$('#fieldRecon').value}` },
+    { k: 'Budget', v: budgetSummary() },
     { k: 'Target auth', v: state.auth.header ? 'header set' : (state.auth.roles.length ? `${state.auth.roles.length} role(s)` : 'none') },
   ];
   $('#reviewGrid').innerHTML = items.map((it) => `
@@ -495,6 +509,12 @@ async function startExploitation() {
     focus: focusParts.join('; ') || undefined,
     objective: $('#fieldObjective').value.trim() || undefined,
     outOfScope: $('#fieldOutOfScope').value.trim() || undefined,
+    // Budget is opt-in: 'unlimited' sends nothing, so a run nobody budgeted is
+    // the same full run it was before this control existed.
+    budget: $('#fieldBudget').value,
+    tokenLimit: Number($('#fieldTokenLimit').value) || undefined,
+    order: $('#fieldOrder').value,
+    samplePerRoute: Number($('#fieldSampleRoute').value) || undefined,
     auth: state.auth.header || undefined,
     roles: state.auth.roles.length ? state.auth.roles : undefined,
     creds: state.credsPath || undefined,
@@ -762,6 +782,7 @@ function applySnapshot(snap) {
     state.currentJob.pinnedAgents = snap.pinnedAgents;
     updatePinnedLine();
   }
+  if (state.currentJob) state.currentJob.phase = snap.phase;
   $('#progressLabel').textContent = `${snap.agentsDone} / ${snap.agents || '?'} agents`;
   $('#progressBar').classList.toggle('indeterminate', !snap.agents);
   if (snap.agents) $('#progressFill').style.width = `${Math.min(100, (snap.agentsDone / snap.agents) * 100)}%`;
@@ -769,12 +790,44 @@ function applySnapshot(snap) {
     $('#btnOpenReport').href = `/api/runs/${snap.runId}/asset/report.html`;
     show($('#btnOpenReport'), true);
   }
+  const paused = (snap.phase || '').startsWith('paused');
+  $('#btnPauseRun').textContent = paused ? '▶ Continue' : '⏸ Pause';
+  $('#btnPauseRun').classList.toggle('btn-warn', paused);
+  $('#btnPauseRun').disabled = !!snap.done || !snap.interactive;
+  $('#btnReportNow').disabled = !snap.interactive;
+  $('#btnDownloadLog').href = `/api/exploit/${snap.id}/log`;
   if (snap.done) $('#phaseDot').classList.add('static');
 }
 
 $('#btnStopRun').addEventListener('click', async () => {
   if (!state.currentJob) return;
   await api(`/api/exploit/${state.currentJob.id}/stop`, { method: 'POST' });
+});
+
+// Pause is a toggle against the run's own phase, so the button always says
+// what pressing it will do rather than what the run currently is.
+$('#btnPauseRun').addEventListener('click', async () => {
+  if (!state.currentJob) return;
+  const paused = (state.currentJob.phase || '').startsWith('paused');
+  const verb = paused ? 'continue' : 'pause';
+  try {
+    await api(`/api/exploit/${state.currentJob.id}/${verb}`, { method: 'POST' });
+    toast(paused ? 'Resuming the run.' : 'Pausing — in-flight agents finish first, findings are kept.', 'ok');
+  } catch (e) {
+    toast(e.message, 'error', 8000);
+  }
+});
+
+// Report from where it stopped: the REPL's /report writes from the evidence on
+// disk, so a run that is paused, stalled or simply long can be read now.
+$('#btnReportNow').addEventListener('click', async () => {
+  if (!state.currentJob) return;
+  try {
+    await api(`/api/exploit/${state.currentJob.id}/report`, { method: 'POST' });
+    toast('Building a report from what has been found so far — it appears above when written.', 'ok', 7000);
+  } catch (e) {
+    toast(e.message, 'error', 8000);
+  }
 });
 function leaveLiveJob() {
   localStorage.removeItem(ACTIVE_JOB_KEY);
