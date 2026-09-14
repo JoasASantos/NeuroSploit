@@ -25,6 +25,7 @@
 //!   the report; a 40MB response is not evidence, it is a liability.
 
 use crate::scope::ScopePolicy;
+use serde::{Deserialize, Serialize};
 use crate::validation::{Evidence, Exchange};
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -249,6 +250,197 @@ impl ReplayEngine {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Effect layers
+//
+// The engagement that motivated this recorded 25 accepted POSTs and concluded
+// "reset email flooding". Those are different facts at different layers, and
+// the pipeline had no way to say so: a request being accepted is not a state
+// change, and a state change is not a message leaving the building.
+//
+//   request_effect      the response: status, headers, latency, body delta
+//   application_effect  something changed inside: a record, a token, a queued job
+//   external_effect     something left: an email delivered, a webhook fired
+//
+// Each layer needs its own observation. The harness can measure the first
+// directly, the second with a read-back, and the third only through a channel
+// it controls (a mailbox it owns, an OOB callback). Anything it cannot observe
+// is recorded as NOT OBSERVED rather than inferred — which is exactly the line
+// the agent crossed.
+// ---------------------------------------------------------------------------
+
+/// Which layer an observation belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EffectLayer {
+    Request,
+    Application,
+    External,
+}
+
+impl EffectLayer {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EffectLayer::Request => "request_effect",
+            EffectLayer::Application => "application_effect",
+            EffectLayer::External => "external_effect",
+        }
+    }
+}
+
+/// What was seen at one layer — or that nothing was looked at.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EffectObservation {
+    pub layer: EffectLayer,
+    /// True only when the harness itself observed it.
+    pub observed: bool,
+    pub detail: String,
+    /// Evidence ledger ids, when the caller is building a claim set.
+    #[serde(default)]
+    pub evidence: Vec<String>,
+}
+
+impl EffectObservation {
+    pub fn seen(layer: EffectLayer, detail: impl Into<String>) -> Self {
+        EffectObservation { layer, observed: true, detail: detail.into(), evidence: Vec::new() }
+    }
+    /// Not observed, with the reason. "We did not look" and "we looked and saw
+    /// nothing" are both recorded here, and neither is evidence of absence of
+    /// the effect — only of its demonstration.
+    pub fn not_seen(layer: EffectLayer, why: impl Into<String>) -> Self {
+        EffectObservation { layer, observed: false, detail: why.into(), evidence: Vec::new() }
+    }
+}
+
+/// Everything observed about one interaction, layer by layer.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct EffectReport {
+    #[serde(default)]
+    pub observations: Vec<EffectObservation>,
+}
+
+impl EffectReport {
+    pub fn push(&mut self, o: EffectObservation) {
+        self.observations.push(o);
+    }
+    pub fn observed(&self, layer: EffectLayer) -> bool {
+        self.observations.iter().any(|o| o.layer == layer && o.observed)
+    }
+    /// The deepest layer actually demonstrated. This is what a severity or an
+    /// impact claim may be built on — and nothing deeper.
+    pub fn deepest_observed(&self) -> Option<EffectLayer> {
+        [EffectLayer::External, EffectLayer::Application, EffectLayer::Request]
+            .into_iter()
+            .find(|l| self.observed(*l))
+    }
+    /// One line per layer, for the evidence section of a report.
+    pub fn summary(&self) -> String {
+        let mut out = String::new();
+        for layer in [EffectLayer::Request, EffectLayer::Application, EffectLayer::External] {
+            let line = self
+                .observations
+                .iter()
+                .find(|o| o.layer == layer)
+                .map(|o| format!("{} {}", if o.observed { "observed:" } else { "NOT observed:" }, o.detail))
+                .unwrap_or_else(|| "not examined".to_string());
+            out.push_str(&format!("  {:<20} {line}\n", layer.as_str()));
+        }
+        out
+    }
+}
+
+impl ReplayEngine {
+    /// Re-run an interaction and record what it did at every layer the harness
+    /// can reach.
+    ///
+    /// `verify` is a read-back request that reveals an application effect (the
+    /// record as it now stands, the account's state, the audit endpoint).
+    /// `marker` is a value expected to appear there if the write took. Without
+    /// a verification request the application layer is honestly reported as
+    /// unexamined — the alternative, inferring it from a 200, is the mistake
+    /// this whole layering exists to prevent.
+    pub async fn observe_effects(
+        &self,
+        action: &ReqSpec,
+        verify: Option<&ReqSpec>,
+        marker: Option<&str>,
+    ) -> (EffectReport, Option<Exchange>) {
+        let mut report = EffectReport::default();
+
+        let before = match verify {
+            Some(v) => self.send(v).await.ok(),
+            None => None,
+        };
+
+        let acted = match self.send(action).await {
+            Ok(x) => x,
+            Err(e) => {
+                report.push(EffectObservation::not_seen(EffectLayer::Request, format!("the request could not be sent: {e}")));
+                report.push(EffectObservation::not_seen(EffectLayer::Application, "no request, so no application effect to look for"));
+                report.push(EffectObservation::not_seen(EffectLayer::External, "no request, so no external effect to look for"));
+                return (report, None);
+            }
+        };
+        report.push(EffectObservation::seen(
+            EffectLayer::Request,
+            format!("{} {} → {} · {} bytes · {} ms", acted.method, acted.url, acted.status, acted.len(), acted.elapsed_ms),
+        ));
+
+        match verify {
+            None => report.push(EffectObservation::not_seen(
+                EffectLayer::Application,
+                "no read-back was performed — a response status does not show whether state changed",
+            )),
+            Some(v) => match self.send(v).await {
+                Err(e) => report.push(EffectObservation::not_seen(EffectLayer::Application, format!("the read-back failed: {e}"))),
+                Ok(after) => {
+                    let marker_hit = marker.map(|m| after.body.contains(m) && !before.as_ref().map(|b| b.body.contains(m)).unwrap_or(false));
+                    match marker_hit {
+                        Some(true) => report.push(EffectObservation::seen(
+                            EffectLayer::Application,
+                            format!("the read-back now contains the injected value ({})", marker.unwrap_or("")),
+                        )),
+                        Some(false) => report.push(EffectObservation::not_seen(
+                            EffectLayer::Application,
+                            "the read-back does not contain the injected value — the request was accepted and the change was not persisted",
+                        )),
+                        None => {
+                            // No marker to look for: fall back to whether the
+                            // resource changed at all, which is weaker and says so.
+                            let changed = before
+                                .as_ref()
+                                .map(|b| b.status != after.status || b.body != after.body)
+                                .unwrap_or(false);
+                            if changed {
+                                report.push(EffectObservation::seen(
+                                    EffectLayer::Application,
+                                    format!("the resource differs after the request ({} → {}, {} → {} bytes)", before.as_ref().map(|b| b.status).unwrap_or(0), after.status, before.as_ref().map(|b| b.len()).unwrap_or(0), after.len()),
+                                ));
+                            } else {
+                                report.push(EffectObservation::not_seen(
+                                    EffectLayer::Application,
+                                    "the resource is unchanged after the request",
+                                ));
+                            }
+                        }
+                    }
+                }
+            },
+        }
+
+        // The harness has no mailbox and no callback listener of its own yet, so
+        // it cannot see this layer. Saying that plainly is the point: an
+        // unobserved external effect must never be inferred from an accepted
+        // request.
+        report.push(EffectObservation::not_seen(
+            EffectLayer::External,
+            "no channel the harness controls (mailbox, OOB callback) was watching — delivery of mail, notifications or downstream jobs was not observed",
+        ));
+
+        (report, Some(acted))
+    }
+}
+
 /// Rebuild a request spec from a recorded exchange.
 pub fn spec_of(x: &Exchange) -> ReqSpec {
     ReqSpec {
@@ -352,6 +544,59 @@ mod tests {
         }
         for m in ["GET", "HEAD", "OPTIONS", "get"] {
             assert!(!ReqSpec { method: m.into(), ..Default::default() }.is_mutating(), "{m}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod effect_tests {
+    use super::*;
+
+    #[test]
+    fn an_accepted_request_is_not_an_application_effect() {
+        let mut r = EffectReport::default();
+        r.push(EffectObservation::seen(EffectLayer::Request, "POST /reset → 302"));
+        r.push(EffectObservation::not_seen(EffectLayer::Application, "no read-back was performed"));
+        r.push(EffectObservation::not_seen(EffectLayer::External, "no mailbox watched"));
+        assert!(r.observed(EffectLayer::Request));
+        assert!(!r.observed(EffectLayer::Application));
+        // The deepest thing demonstrated is the request — an impact claim may
+        // be built on that and nothing further.
+        assert_eq!(r.deepest_observed(), Some(EffectLayer::Request));
+    }
+
+    #[test]
+    fn the_summary_says_not_observed_rather_than_staying_silent() {
+        let mut r = EffectReport::default();
+        r.push(EffectObservation::seen(EffectLayer::Request, "25 requests accepted"));
+        r.push(EffectObservation::not_seen(EffectLayer::External, "no mailbox watched"));
+        let s = r.summary();
+        assert!(s.contains("request_effect") && s.contains("observed:"));
+        assert!(s.contains("external_effect") && s.contains("NOT observed:"));
+        // A layer nobody looked at must not read as a clean result.
+        assert!(s.contains("application_effect") && s.contains("not examined"));
+    }
+
+    #[test]
+    fn the_deepest_observed_layer_is_the_ceiling_for_a_claim() {
+        let mut r = EffectReport::default();
+        r.push(EffectObservation::seen(EffectLayer::Request, "POST accepted"));
+        r.push(EffectObservation::seen(EffectLayer::Application, "read-back shows the new value"));
+        r.push(EffectObservation::not_seen(EffectLayer::External, "no delivery channel"));
+        assert_eq!(r.deepest_observed(), Some(EffectLayer::Application));
+        let empty = EffectReport::default();
+        assert_eq!(empty.deepest_observed(), None);
+    }
+
+    #[tokio::test]
+    async fn a_refused_request_reports_every_layer_as_unobserved() {
+        let mut p = ScopePolicy::for_target("https://app.example.com/");
+        p.soft.max_requests_per_minute = 0;
+        let engine = ReplayEngine::new(p);
+        let (report, exchange) = engine.observe_effects(&ReqSpec::get("https://other.test/x"), None, None).await;
+        assert!(exchange.is_none());
+        for l in [EffectLayer::Request, EffectLayer::Application, EffectLayer::External] {
+            assert!(!report.observed(l), "{l:?} must not be reported as observed when nothing was sent");
         }
     }
 }
