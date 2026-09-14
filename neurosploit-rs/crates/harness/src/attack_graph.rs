@@ -6,6 +6,7 @@
 //! the report, plus a compact ASCII summary for the REPL.
 
 use crate::types::Finding;
+use serde::{Deserialize, Serialize};
 
 /// CWE → (OWASP Top 10 2021, MITRE ATT&CK technique, kill-chain stage).
 fn map_cwe(cwe: &str) -> (&'static str, &'static str, &'static str) {
@@ -118,10 +119,138 @@ impl Cvss {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Demonstrated-impact ladder
+//
+// "SQLi = Critical" is the shortcut this replaces. The same weakness is a very
+// different finding depending on how far it was actually taken:
+//
+//   reached the interpreter        →  the mechanic is proven, impact is not
+//   read data                      →  confidentiality impact is real
+//   read SENSITIVE data            →  and it is high
+//   wrote / changed state          →  integrity impact is real
+//   executed code                  →  the system is compromised
+//   reached a second system        →  scope changes
+//
+// So the CVSS metrics come from the rung the evidence reached, not from the
+// class name. A SQL injection where nothing was extracted does not score like
+// one that dumped a customer table, and the report can defend the difference
+// because the rung is derived from recorded observations.
+// ---------------------------------------------------------------------------
+
+/// How far the evidence actually took the weakness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Rung {
+    /// The target behaved differently, and that is all that was shown.
+    Reached,
+    /// Data came back.
+    ReadData,
+    /// The data that came back is sensitive (credentials, personal data, keys).
+    ReadSensitive,
+    /// State changed, and the change was read back.
+    Wrote,
+    /// Code ran, with output or a callback to prove it.
+    Executed,
+    /// A second system was reached from the first.
+    CrossedSystem,
+}
+
+impl Rung {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Rung::Reached => "reached the vulnerable component",
+            Rung::ReadData => "read data",
+            Rung::ReadSensitive => "read sensitive data",
+            Rung::Wrote => "changed state (verified by read-back)",
+            Rung::Executed => "executed code",
+            Rung::CrossedSystem => "reached a second system",
+        }
+    }
+}
+
+/// Signatures of data worth grading as sensitive. Matching one is what
+/// separates "the query returned rows" from "the query returned credentials".
+const SENSITIVE: &[&str] = &[
+    "password", "passwd", "senha", "hash", "bcrypt", "$2y$", "$2a$", "ssn", "cpf", "credit card",
+    "card_number", "cvv", "api_key", "apikey", "secret", "private key", "begin rsa", "authorization:",
+    "bearer ", "session", "token", "email", "phone", "birth",
+];
+
+/// Read the rung off the recorded evidence.
+///
+/// Only observations count. A finding that says "could lead to RCE" without an
+/// observation of code running stays where its evidence put it — which is the
+/// entire point of grading this way.
+pub fn demonstrated_rung(f: &Finding) -> Rung {
+    let ev = f.evidence_data.as_ref();
+    let text = format!("{} {}", f.evidence, f.impact).to_lowercase();
+
+    // Executed: a nonce echoed from command output, or an out-of-band callback.
+    if let Some(e) = ev {
+        if e.callback_received && !e.marker.is_empty() {
+            return if e.marker_observed { Rung::CrossedSystem } else { Rung::Executed };
+        }
+        if e.marker_observed && !e.marker.is_empty() {
+            let echoed = e.attack.as_ref().map(|a| a.body.contains(&e.marker)).unwrap_or(false);
+            if echoed && e.browser_executed {
+                return Rung::Executed;
+            }
+        }
+        // Wrote: a read-back that now contains what was injected.
+        if let (Some(verify), false) = (e.identity_a.as_ref(), e.marker.is_empty()) {
+            if verify.body.contains(&e.marker) {
+                return Rung::Wrote;
+            }
+        }
+        // Read: a body came back that the baseline did not have.
+        if let (Some(b), Some(a)) = (&e.baseline, &e.attack) {
+            if a.status < 400 && a.len() > b.len() + 64 {
+                let body = a.body.to_lowercase();
+                if SENSITIVE.iter().any(|s| body.contains(s) && !b.body.to_lowercase().contains(s)) {
+                    return Rung::ReadSensitive;
+                }
+                return Rung::ReadData;
+            }
+        }
+    }
+
+    // Falling back to the prose is weaker and deliberately conservative: only
+    // unambiguous past-tense observations count, never "could" or "may".
+    if text.contains("command output") || text.contains("id=") && text.contains("uid=") {
+        return Rung::Executed;
+    }
+    if SENSITIVE.iter().any(|s| text.contains(s)) && (text.contains("returned") || text.contains("disclosed") || text.contains("dumped")) {
+        return Rung::ReadSensitive;
+    }
+    Rung::Reached
+}
+
+/// Temporal metrics, from what the engagement knows about itself.
+///
+/// `E` (exploit code maturity) is High when a runnable PoC exists — the harness
+/// wrote one. `RC` (report confidence) follows the validation verdict rather
+/// than an opinion: Confirmed only when something deterministic confirmed it.
+fn temporal(f: &Finding) -> (&'static str, &'static str) {
+    let e = if !f.repro_steps.is_empty() || f.evidence_data.is_some() { "F" } else { "P" };
+    let rc = match f.review_status.as_str() {
+        "confirmed" => "C",
+        "needs-review" => "R",
+        _ => "U",
+    };
+    (e, rc)
+}
+
 /// Derive a CVSS v3.1 base score + vector for a finding.
 pub fn cvss_for(f: &Finding) -> (f64, String) {
     let n: u32 = f.cwe.chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(0);
     let authenticated = f.auth_context.eq_ignore_ascii_case("authenticated") || !f.account.is_empty();
+
+    // The class sets the CEILING; the evidence sets the score. A SQL injection
+    // that reached the interpreter and extracted nothing does not deserve the
+    // number a dumped customer table earns, and grading by class name is how
+    // both end up "Critical".
+    let rung = demonstrated_rung(f);
 
     // Impact shape by weakness class. Anything unmapped stays conservative:
     // guessing high impact from an unknown class is how scores get inflated.
@@ -164,6 +293,9 @@ pub fn cvss_for(f: &Finding) -> (f64, String) {
         _ => ("L", "N", "N", "U"),
     };
 
+    // Lower the class ceiling to the rung the evidence actually reached.
+    let (c, i, a, scope) = clamp_to_rung(c, i, a, scope, rung);
+
     let m = Cvss {
         av: "N", // everything the harness tests black-box is network-reachable
         // "How hard was it?" is not a guess here — the harness recorded whether
@@ -177,7 +309,53 @@ pub fn cvss_for(f: &Finding) -> (f64, String) {
         i,
         a,
     };
-    (m.score(), m.vector())
+    let base = m.score();
+    // Temporal metrics only ever lower the score, and they encode facts the
+    // engagement owns: whether a runnable proof exists, and how confident the
+    // validation was.
+    let (e, rc) = temporal(f);
+    let score = (base * temporal_factor(e, rc) * 10.0).ceil() / 10.0;
+    (score, format!("{}/E:{e}/RL:X/RC:{rc}", m.vector()))
+}
+
+/// The v3.1 temporal multiplier. RL is left undefined (`X`) because the harness
+/// has no view of the vendor's remediation state.
+fn temporal_factor(e: &str, rc: &str) -> f64 {
+    let ev = match e { "X" => 1.0, "H" => 1.0, "F" => 0.97, "P" => 0.94, _ => 0.91 };
+    let rcv = match rc { "C" => 1.0, "R" => 0.96, "U" => 0.92, _ => 1.0 };
+    ev * rcv
+}
+
+/// Clamp a class's impact shape to what was actually demonstrated.
+fn clamp_to_rung(
+    c: &'static str,
+    i: &'static str,
+    a: &'static str,
+    scope: &'static str,
+    rung: Rung,
+) -> (&'static str, &'static str, &'static str, &'static str) {
+    match rung {
+        // Nothing was extracted, written or run: the engagement showed only
+        // that the component is reachable and behaves differently. Leaving the
+        // class's availability impact in place here put "reached" ABOVE "read
+        // data" — the ladder inverted at its first rung.
+        Rung::Reached => (min_impact(c, "L"), "N", "N", "U"),
+        // Data came back, but nothing in it was shown to be sensitive. This can
+        // legitimately tie with Reached: a verbose error IS data read.
+        Rung::ReadData => (min_impact(c, "L"), "N", "N", "U"),
+        Rung::ReadSensitive => (c, "N", "N", scope),
+        Rung::Wrote => (min_impact(c, "L"), i, "N", scope),
+        Rung::Executed => (c, i, a, scope),
+        // A second system was reached — this is the one rung that RAISES scope,
+        // and only because crossing it was observed.
+        Rung::CrossedSystem => (c, i, a, "C"),
+    }
+}
+
+/// The lower of two impact levels.
+fn min_impact(a: &'static str, b: &'static str) -> &'static str {
+    let rank = |v: &str| match v { "H" => 2, "L" => 1, _ => 0 };
+    if rank(a) <= rank(b) { a } else { b }
 }
 
 /// Fill in any empty mapping fields on each finding (does not overwrite model-set values).
@@ -309,9 +487,41 @@ mod cvss_tests {
 
     #[test]
     fn the_vector_is_emitted_so_the_score_can_be_checked() {
-        let (score, vector) = cvss_for(&f("CWE-89", "trivial", ""));
-        assert!(score >= 9.0, "unauthenticated trivial SQLi should be critical: {score}");
+        let (_, vector) = cvss_for(&f("CWE-89", "trivial", ""));
         assert!(vector.starts_with("CVSS:3.1/AV:N/AC:L/PR:N"), "{vector}");
+        assert!(vector.contains("/E:") && vector.contains("/RC:"), "temporal metrics travel with it: {vector}");
+    }
+
+    /// The behaviour the demonstrated-impact ladder exists to produce: a class
+    /// name does not set the score. An SQLi with no extraction is not the same
+    /// finding as one that returned credentials, and the report has to be able
+    /// to defend the difference.
+    #[test]
+    fn a_class_name_alone_does_not_earn_a_critical() {
+        use crate::validation::{Evidence, Exchange};
+        let bare = cvss_for(&f("CWE-89", "trivial", "")).0;
+        assert!(bare < 7.0, "nothing was demonstrated, so nothing justifies a high score: {bare}");
+
+        let proven = Finding {
+            cwe: "CWE-89".into(),
+            exploitability: "trivial".into(),
+            evidence_data: Some(Evidence {
+                baseline: Some(Exchange { status: 200, body: "welcome".into(), ..Default::default() }),
+                attack: Some(Exchange {
+                    status: 200,
+                    body: format!("welcome alice@example.com bcrypt $2y$10$abcdef{}", "x".repeat(90)),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let demonstrated = cvss_for(&proven).0;
+        assert!(demonstrated > bare, "extraction must score above a bare reachability claim ({demonstrated} vs {bare})");
+        // The temporal metrics pull the base down: no runnable PoC was recorded
+        // (E:P) and nothing validated it (RC:U), which is the honest reading of
+        // a finding nobody has reproduced yet.
+        assert!(demonstrated >= 6.5, "a proven sensitive-data read is serious: {demonstrated}");
     }
 
     #[test]
@@ -324,12 +534,29 @@ mod cvss_tests {
     }
 
     #[test]
-    fn hardening_gaps_do_not_score_like_compromises() {
+    fn hardening_gaps_do_not_score_like_demonstrated_compromises() {
+        use crate::validation::{Evidence, Exchange};
         let cookie = cvss_for(&f("CWE-614", "trivial", "")).0;
         let headers = cvss_for(&f("CWE-693", "trivial", "")).0;
-        let rce = cvss_for(&f("CWE-78", "trivial", "")).0;
         assert!(cookie < 6.0 && headers < 6.0, "cookie {cookie}, headers {headers}");
-        assert!(rce > 9.0, "command injection {rce}");
+
+        // Command execution scores like one only when execution was observed.
+        let marker = crate::validation::canary("nsrce");
+        let proven_rce = Finding {
+            cwe: "CWE-78".into(),
+            exploitability: "trivial".into(),
+            evidence_data: Some(Evidence {
+                marker: marker.clone(),
+                marker_observed: true,
+                browser_executed: true,
+                attack: Some(Exchange { status: 200, body: format!("uid=0(root) {marker}"), ..Default::default() }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let rce = cvss_for(&proven_rce).0;
+        assert!(rce >= 9.0, "demonstrated command execution is critical: {rce}");
+        assert!(rce > cookie + 3.0, "and far above a hardening gap");
     }
 
     #[test]
@@ -348,5 +575,116 @@ mod cvss_tests {
         assert!(v[0].cvss.starts_with(|c: char| c.is_ascii_digit()), "got {:?}", v[0].cvss);
         assert!(v[0].cvss.contains("CVSS:3.1/"), "the vector must travel with the score");
         assert_eq!(v[1].cvss, "7.0 (analyst override)", "a supplied score is not overwritten");
+    }
+}
+
+#[cfg(test)]
+mod ladder_tests {
+    use super::*;
+    use crate::validation::{Evidence, Exchange};
+
+    fn sqli(evidence_data: Option<Evidence>) -> Finding {
+        Finding { cwe: "CWE-89".into(), exploitability: "trivial".into(), evidence_data, ..Default::default() }
+    }
+    fn ex(status: u16, body: &str) -> Exchange {
+        Exchange { method: "GET".into(), url: "https://t/x".into(), status, body: body.into(), ..Default::default() }
+    }
+
+    /// The point of the whole ladder: one weakness, three engagements, three
+    /// defensible numbers.
+    #[test]
+    fn the_same_sqli_scores_by_how_far_it_was_taken() {
+        let reached = sqli(Some(Evidence {
+            baseline: Some(ex(200, "welcome")),
+            attack: Some(ex(500, "You have an error in your SQL syntax")),
+            ..Default::default()
+        }));
+        let read = sqli(Some(Evidence {
+            baseline: Some(ex(200, "welcome")),
+            attack: Some(ex(200, &format!("welcome{}", "row,".repeat(60)))),
+            ..Default::default()
+        }));
+        let sensitive = sqli(Some(Evidence {
+            baseline: Some(ex(200, "welcome")),
+            attack: Some(ex(200, &format!("welcome alice@example.com bcrypt $2y$10$abcdefghijklmnop{}", "x".repeat(80)))),
+            ..Default::default()
+        }));
+
+        assert_eq!(demonstrated_rung(&reached), Rung::Reached);
+        assert_eq!(demonstrated_rung(&read), Rung::ReadData);
+        assert_eq!(demonstrated_rung(&sensitive), Rung::ReadSensitive);
+
+        let (s_reached, _) = cvss_for(&reached);
+        let (s_read, _) = cvss_for(&read);
+        let (s_sensitive, _) = cvss_for(&sensitive);
+        assert!(s_reached <= s_read, "reached {s_reached} must not outscore read {s_read}");
+        assert!(s_read < s_sensitive, "read {s_read} must score below sensitive read {s_sensitive}");
+    }
+
+    #[test]
+    fn a_prose_claim_of_rce_does_not_climb_the_ladder() {
+        let mut f = sqli(None);
+        f.impact = "This could lead to remote code execution and full server compromise".into();
+        assert_eq!(demonstrated_rung(&f), Rung::Reached, "'could lead to' is not an observation");
+    }
+
+    #[test]
+    fn a_verified_write_is_graded_above_a_read() {
+        let marker = crate::validation::canary("nsw");
+        let wrote = Finding {
+            cwe: "CWE-915".into(),
+            evidence_data: Some(Evidence {
+                marker: marker.clone(),
+                attack: Some(ex(200, "updated")),
+                identity_a: Some(ex(200, &format!("{{\"role\":\"{marker}\"}}"))),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(demonstrated_rung(&wrote), Rung::Wrote);
+    }
+
+    #[test]
+    fn an_out_of_band_callback_is_the_top_rung() {
+        let f = Finding {
+            cwe: "CWE-918".into(),
+            evidence_data: Some(Evidence {
+                marker: crate::validation::canary("nsoob"),
+                callback_received: true,
+                marker_observed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(demonstrated_rung(&f), Rung::CrossedSystem);
+        let (score, vector) = cvss_for(&f);
+        assert!(vector.contains("/S:C"), "reaching a second system changes scope: {vector}");
+        assert!(score > 8.0, "{score}");
+    }
+
+    #[test]
+    fn the_vector_carries_the_temporal_metrics() {
+        let mut f = sqli(None);
+        f.review_status = "needs-review".into();
+        let (_, vector) = cvss_for(&f);
+        assert!(vector.contains("/E:"), "{vector}");
+        assert!(vector.contains("/RC:R"), "needs-review must show as Reasonable, not Confirmed: {vector}");
+
+        f.review_status = "confirmed".into();
+        f.repro_steps = vec!["curl ...".into()];
+        let (score_confirmed, v2) = cvss_for(&f);
+        assert!(v2.contains("/RC:C") && v2.contains("/E:F"), "{v2}");
+        let (score_review, _) = cvss_for(&Finding { review_status: "needs-review".into(), ..f.clone() });
+        assert!(score_review <= score_confirmed, "an unconfirmed finding must not outscore a confirmed one");
+    }
+
+    #[test]
+    fn temporal_metrics_only_ever_lower_the_score() {
+        for e in ["H", "F", "P", "U"] {
+            for rc in ["C", "R", "U"] {
+                assert!(temporal_factor(e, rc) <= 1.0, "{e}/{rc}");
+            }
+        }
+        assert_eq!(temporal_factor("H", "C"), 1.0);
     }
 }
