@@ -843,7 +843,7 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
     findings.extend(chained);
     findings = dedup_findings(findings);
     let findings = refute_pass(findings, pool, cfg.vote_n, &tx).await;
-    finish(cfg, lib, recon, transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Empirical, String::new(), tx).await
+    finish(cfg, lib, pool, recon, transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Empirical, String::new(), tx).await
 }
 
 /// White-box engagement: analyse a repository's source for vulnerabilities.
@@ -924,7 +924,7 @@ pub async fn run_whitebox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: S
     let _ = tx.send(format!("{} candidate finding(s) (deduped) — validating", candidates.len())).await;
     let findings = validate(candidates, pool, CODE_VOTE_SYS, cfg.vote_n, &tx).await;
     let findings = refute_pass(findings, pool, cfg.vote_n, &tx).await;
-    finish(cfg, lib, "{}".into(), transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Symbolic, context, tx).await
+    finish(cfg, lib, pool, "{}".into(), transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Symbolic, context, tx).await
 }
 
 /// Greybox engagement: review the source code AND exploit the running app in one
@@ -1070,7 +1070,7 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
     findings.extend(chained);
     findings = dedup_findings(findings);
     let findings = refute_pass(findings, pool, cfg.vote_n, &tx).await;
-    finish(cfg, lib, recon, transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Either, context, tx).await
+    finish(cfg, lib, pool, recon, transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Either, context, tx).await
 }
 
 const CHAIN_SYS: &str = "You are a post-exploitation & attack-chaining specialist. You are given ONE confirmed foothold plus any loot already gathered. DECIDE the most promising directions to expand from THIS foothold and pursue them with real tools: post-exploitation (loot credentials/tokens/keys/config/source), credential reuse, privilege escalation (horizontal AND vertical), lateral movement to adjacent services/hosts, data exfiltration, and reaching NEW attack surface the foothold exposes (e.g. SSRF→cloud metadata creds→IAM, SQLi→DB dump→credential reuse→admin, arbitrary file read→secrets→RCE, IDOR→account takeover, auth bypass→internal APIs). PROVE each escalated step with a real tool receipt. Report ONLY NEW findings beyond the input, plus any new loot you discovered (creds, tokens, hosts, internal endpoints) so later stages can reuse it. Authorized engagement; never destructive/DoS.";
@@ -1449,6 +1449,69 @@ async fn validate(candidates: Vec<Finding>, pool: &ModelPool, sys: &str, vote_n:
     flagged
 }
 
+/// Run the Evidence Prosecutor over findings that carry claims.
+///
+/// It cannot drop anything — it returns a narrowed claim set, and the decision
+/// table downstream does the rest. Findings without claims get a ledger built
+/// from whatever they recorded, so the back catalogue is judged too instead of
+/// silently skipped.
+async fn prosecute(findings: Vec<Finding>, pool: &ModelPool, tx: &Sender<String>) -> Vec<Finding> {
+    if findings.is_empty() || std::env::var("NEUROSPLOIT_PROSECUTOR").unwrap_or_default() == "off" {
+        return findings;
+    }
+    let mut out = Vec::with_capacity(findings.len());
+    let mut narrowed = 0usize;
+    for mut f in findings {
+        let mut set = match f.claims.clone() {
+            Some(s) => s,
+            None => crate::claims::ClaimSet {
+                mechanic: crate::claims::Claim {
+                    claim: f.title.clone(),
+                    status: Some(crate::claims::ClaimStatus::Proven),
+                    evidence: Vec::new(),
+                },
+                impact: crate::claims::Claim { claim: f.impact.clone(), status: None, evidence: Vec::new() },
+                ledger: crate::prosecutor::ledger_from_finding(&f),
+                ..Default::default()
+            },
+        };
+        if set.ledger.items.is_empty() {
+            out.push(f);
+            continue;
+        }
+        // Every claim must cite the ledger it was built from; a reconstructed
+        // set has no citations yet, so seed the mechanic with what exists.
+        if set.mechanic.evidence.is_empty() {
+            set.mechanic.evidence = set.ledger.items.iter().map(|e| e.id.clone()).collect();
+        }
+        let case = crate::prosecutor::case_file(&f, &set);
+        let verdict = match pool.complete_routed(Task::Validate, "prosecutor", crate::prosecutor::PROSECUTOR_SYS, &case).await {
+            Ok((_, text)) => crate::prosecutor::parse_verdict(&text),
+            Err(_) => None,
+        };
+        if let Some(v) = verdict.filter(|v| v.coherent()) {
+            if crate::prosecutor::apply(&mut set, &v) {
+                narrowed += 1;
+                let _ = tx.send(format!(
+                    "prosecutor narrowed '{}' → {}",
+                    trunc_title(&f.title),
+                    trunc_title(&v.effective_claim(&f.title))
+                )).await;
+            }
+        }
+        f.claims = Some(set);
+        out.push(f);
+    }
+    if narrowed > 0 {
+        let _ = tx.send(format!("evidence prosecutor: {narrowed} finding(s) narrowed to what the ledger supports")).await;
+    }
+    out
+}
+
+fn trunc_title(s: &str) -> String {
+    s.chars().take(64).collect()
+}
+
 /// Assemble the claim set from an agent's reply.
 ///
 /// The ledger arrives as a sibling of `claims` (agents produce it as one list
@@ -1517,7 +1580,7 @@ async fn refute_pass(findings: Vec<Finding>, pool: &ModelPool, vote_n: usize, tx
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn finish(cfg: RunConfig, _lib: &Library, recon: String, transcript: String, mut findings: Vec<Finding>,
+async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String, transcript: String, mut findings: Vec<Finding>,
                 selected: Vec<Agent>, rl: &mut RlState, gmode: crate::grounding::GroundMode, source_ctx: String,
                 tx: Sender<String>) -> RunOutput {
     use crate::grounding::GroundMode;
@@ -1654,6 +1717,11 @@ async fn finish(cfg: RunConfig, _lib: &Library, recon: String, transcript: Strin
     // the run's trail rather than borrowing one from a particular entry point.
     let audit = audit_log(&cfg);
     let cap_id = capability_id(&cfg);
+
+    // The prosecutor runs first: it shrinks each claim to what the ledger
+    // supports, so the adjudication below is deciding about a statement that is
+    // already honest rather than about a story.
+    findings = prosecute(findings, pool, &tx).await;
 
     // Claim adjudication, before anything reads the prose. Findings that
     // arrived with separable claims get their outcome from the decision table
@@ -2530,7 +2598,7 @@ pub async fn run_host(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sende
     findings.extend(chained);
     findings = dedup_findings(findings);
     let findings = refute_pass(findings, pool, cfg.vote_n, &tx).await;
-    finish(cfg, lib, recon, transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Empirical, String::new(), tx).await
+    finish(cfg, lib, pool, recon, transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Empirical, String::new(), tx).await
 }
 
 /// AI-red-team doctrine prepended to every AI/LLM/agent test prompt.
@@ -2702,7 +2770,7 @@ pub async fn run_ai(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<
     let mut rl = cfg.rl_path.as_ref().map(|p| RlState::load(Path::new(p))).unwrap_or_default();
     if cfg.offline {
         let _ = tx.send("offline: no AI exploitation performed".into()).await;
-        return finish(cfg, lib, recon, String::new(), vec![], agents, &mut rl, crate::grounding::GroundMode::Empirical, String::new(), tx).await;
+        return finish(cfg, lib, pool, recon, String::new(), vec![], agents, &mut rl, crate::grounding::GroundMode::Empirical, String::new(), tx).await;
     }
     let cap = if cfg.max_agents > 0 { cfg.max_agents.min(agents.len()) } else { agents.len() };
     let selected: Vec<Agent> = agents.into_iter().take(cap).collect();
@@ -2749,7 +2817,7 @@ pub async fn run_ai(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<
     findings.extend(chained);
     findings = dedup_findings(findings);
     let findings = refute_pass(findings, pool, cfg.vote_n, &tx).await;
-    finish(cfg, lib, recon, transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Empirical, String::new(), tx).await
+    finish(cfg, lib, pool, recon, transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Empirical, String::new(), tx).await
 }
 
 /// White-box Skills/plugin audit: read the skill .md file or a folder of them and
@@ -2768,7 +2836,7 @@ pub async fn run_skills_audit(cfg: RunConfig, lib: &Library, pool: &ModelPool, t
     let mut rl = cfg.rl_path.as_ref().map(|p| RlState::load(Path::new(p))).unwrap_or_default();
     if cfg.offline || context.is_empty() {
         let _ = tx.send("offline or empty skills input — nothing audited".into()).await;
-        return finish(cfg, lib, "{}".into(), String::new(), vec![], agents, &mut rl, crate::grounding::GroundMode::Symbolic, String::new(), tx).await;
+        return finish(cfg, lib, pool, "{}".into(), String::new(), vec![], agents, &mut rl, crate::grounding::GroundMode::Symbolic, String::new(), tx).await;
     }
     let directives = operator_directives(&cfg);
     let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(agents.iter().cloned())
@@ -2799,7 +2867,7 @@ pub async fn run_skills_audit(cfg: RunConfig, lib: &Library, pool: &ModelPool, t
     let transcript = transcript_of(&raw);
     let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
     let findings = validate(candidates, pool, CODE_VOTE_SYS, cfg.vote_n, &tx).await;
-    finish(cfg, lib, "{}".into(), transcript, findings, agents, &mut rl, crate::grounding::GroundMode::Symbolic, context, tx).await
+    finish(cfg, lib, pool, "{}".into(), transcript, findings, agents, &mut rl, crate::grounding::GroundMode::Symbolic, context, tx).await
 }
 
 #[cfg(test)]
