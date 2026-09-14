@@ -25,6 +25,25 @@ fn map_cwe(cwe: &str) -> (&'static str, &'static str, &'static str) {
         502 => ("A08:2021-Software-Data-Integrity", "T1059", "execution"),
         327 | 328 | 916 | 326 | 330 => ("A02:2021-Cryptographic-Failures", "T1600", "credential-access"),
         200 | 209 | 538 | 540 | 532 => ("A05:2021-Security-Misconfiguration", "T1592", "recon"),
+        // Enumeration and side channels are DISCOVERY, not initial access. The
+        // fallback arm below was sending these to initial-access, which put 23
+        // of 24 findings from a real engagement into one stage and flattened
+        // the kill chain into a star.
+        203 | 204 | 208 => ("A01:2021-Broken-Access-Control", "T1589", "discovery"),
+        // Missing throttling enables credential attacks; it is not access.
+        307 | 770 | 799 => ("A07:2021-Auth-Failures", "T1110", "credential-access"),
+        // Password policy.
+        521 | 261 | 262 | 263 => ("A07:2021-Auth-Failures", "T1110.001", "credential-access"),
+        // Missing hardening headers are a configuration observation.
+        693 | 1021 | 1018 => ("A05:2021-Security-Misconfiguration", "T1592", "recon"),
+        // Cookie flags expose session material.
+        614 | 1004 | 1275 => ("A05:2021-Security-Misconfiguration", "T1539", "credential-access"),
+        // CORS reads across origins.
+        942 | 346 | 1385 => ("A05:2021-Security-Misconfiguration", "T1190", "initial-access"),
+        // Mass assignment writes state.
+        915 | 913 => ("A08:2021-Software-Data-Integrity", "T1565", "impact"),
+        // Session fixation.
+        384 => ("A07:2021-Auth-Failures", "T1539", "credential-access"),
         601 => ("A01:2021-Broken-Access-Control", "T1566", "initial-access"),
         352 => ("A01:2021-Broken-Access-Control", "T1189", "execution"),
         434 => ("A04:2021-Insecure-Design", "T1505.003", "execution"),
@@ -374,6 +393,33 @@ pub fn enrich(findings: &mut [Finding]) {
             if score > 0.0 { f.cvss = format!("{score:.1} ({vector})"); }
         }
     }
+}
+
+/// Recompute the kill-chain stage from the CWE, overwriting what is there.
+///
+/// `enrich` only fills empty fields, which is right during a run — an agent's
+/// own judgement should survive. On a REBUILD it is wrong: a finished run's
+/// stages were written by an older mapping, and the whole point of rebuilding
+/// is to apply the current one. A real engagement had 23 of 24 findings sitting
+/// in `initial-access` because the old fallback put them there, and no rebuild
+/// could fix it.
+pub fn remap_stages(findings: &mut [Finding]) -> usize {
+    let mut changed = 0;
+    for f in findings.iter_mut() {
+        if f.cwe.is_empty() {
+            continue;
+        }
+        let (owasp, mitre, stage) = map_cwe(&f.cwe);
+        if f.stage != stage {
+            f.stage = stage.into();
+            changed += 1;
+        }
+        // OWASP and MITRE travel with the stage; leaving them stale would make
+        // the report internally inconsistent.
+        f.owasp = owasp.into();
+        f.mitre = mitre.into();
+    }
+    changed
 }
 
 const STAGE_ORDER: &[&str] = &[

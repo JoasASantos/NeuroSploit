@@ -797,6 +797,11 @@ pub fn rebuild(dir: &Path) -> std::io::Result<PathBuf> {
     // new CWE→technique entry) would otherwise keep reprinting the gap forever,
     // and the whole point of rebuilding is to get the current report.
     crate::attack_graph::enrich(&mut findings);
+    // A rebuild applies the CURRENT mappings, including ones that did not exist
+    // when the run finished.
+    crate::attack_graph::remap_stages(&mut findings);
+    crate::chain::repair(&mut findings);
+    crate::chain::apply_links(&mut findings);
     let _ = std::fs::write(dir.join("findings.json"), serde_json::to_string_pretty(&findings).unwrap_or_default());
     let status: serde_json::Value = std::fs::read_to_string(dir.join("status.json"))
         .ok()

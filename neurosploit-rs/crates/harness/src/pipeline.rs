@@ -1681,6 +1681,13 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
     stamp_attribution(&mut findings);
     // Map findings to OWASP / MITRE / kill-chain stage for the attack graph.
     crate::attack_graph::enrich(&mut findings);
+    // Chain them to each other. An agent sees one vulnerability and cannot link
+    // to findings it never saw, which is why `chains_from` came back empty on
+    // every finding of a real engagement; here the whole set is visible at once.
+    let chained = crate::chain::apply_links(&mut findings);
+    if chained > 0 {
+        let _ = tx.send(format!("attack paths: {chained} finding(s) linked to what enables them")).await;
+    }
     // Collect proof screenshots into evidence/<finding-id>-N.png so the report
     // can embed each image beside its vulnerability.
     if let Some(dir) = cfg.workdir.as_deref() {
