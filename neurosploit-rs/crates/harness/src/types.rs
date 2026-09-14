@@ -87,6 +87,11 @@ pub struct Finding {
     /// between a report that can be verified and one that has to be believed.
     #[serde(default)]
     pub repro_steps: Vec<String>,
+    /// The finding decomposed into separable claims (mechanic vs impact) with
+    /// an evidence ledger behind each. When present, `crate::claims` decides
+    /// the outcome in code instead of a judge reading prose.
+    #[serde(default)]
+    pub claims: Option<crate::claims::ClaimSet>,
     /// Structured artifacts for the deterministic validation engine: the
     /// baseline/attack pair, repeats, markers, identity pair. Agents that
     /// follow the evidence contract emit this alongside the finding, and
@@ -126,6 +131,7 @@ impl Default for Finding {
             screenshots: Vec::new(),
             location: String::new(),
             repro_steps: Vec::new(),
+            claims: None,
             evidence_data: None,
         }
     }

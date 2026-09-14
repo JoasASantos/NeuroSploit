@@ -57,6 +57,7 @@ fn operator_directives(cfg: &RunConfig) -> String {
     // after the run is asking for something that no longer exists.
     if crate::validation::Mode::from_env() != crate::validation::Mode::Off {
         s.push_str(&crate::validation::evidence_contract());
+        s.push_str(&crate::claims::claim_contract());
     }
     let recalled = memory_directives(cfg);
     if !recalled.is_empty() {
@@ -1405,6 +1406,14 @@ async fn validate(candidates: Vec<Finding>, pool: &ModelPool, sys: &str, vote_n:
                     f.review_status = "needs-review".into();
                     f.review_reason = if total == 0 { "validator unavailable".into() }
                         else { format!("below vote quorum ({yes}/{total})") };
+                } else if f.claims.is_some() {
+                    // A finding that arrived with structured claims was already
+                    // judged by `crate::claims` before the vote. The voter is
+                    // reading prose; it must not be able to delete a finding
+                    // whose mechanic the evidence supports.
+                    f.review_status = "needs-review".into();
+                    f.review_reason = format!("voter rejected the narrative, mechanic retained: {}", f.review_reason.trim());
+                    f.confidence = f.confidence.min(0.5);
                 } else if grounded_receipt(&f) {
                     // Unanimously rejected, but the MECHANISM was demonstrated —
                     // a real engagement rejected "no rate limiting on the reset
@@ -1438,6 +1447,22 @@ async fn validate(candidates: Vec<Finding>, pool: &ModelPool, sys: &str, vote_n:
     // Include no-evidence flagged findings so the human loop sees them.
     flagged.extend(validated.into_iter().filter(|f| f.validated || f.review_status == "needs-review"));
     flagged
+}
+
+/// Assemble the claim set from an agent's reply.
+///
+/// The ledger arrives as a sibling of `claims` (agents produce it as one list
+/// rather than nesting it), so it is folded in here — a claim set without its
+/// ledger cannot resolve a single citation, and every claim would read as
+/// unsupported.
+fn parse_claims(o: &serde_json::Map<String, serde_json::Value>) -> Option<crate::claims::ClaimSet> {
+    let mut set: crate::claims::ClaimSet = o.get("claims").and_then(|v| serde_json::from_value(v.clone()).ok())?;
+    if set.ledger.items.is_empty() {
+        if let Some(items) = o.get("evidence_ledger").and_then(|v| serde_json::from_value(v.clone()).ok()) {
+            set.ledger = crate::claims::EvidenceLedger { items };
+        }
+    }
+    Some(set)
 }
 
 /// Does this finding carry evidence a reader could check, independent of the
@@ -1629,6 +1654,46 @@ async fn finish(cfg: RunConfig, _lib: &Library, recon: String, transcript: Strin
     // the run's trail rather than borrowing one from a particular entry point.
     let audit = audit_log(&cfg);
     let cap_id = capability_id(&cfg);
+
+    // Claim adjudication, before anything reads the prose. Findings that
+    // arrived with separable claims get their outcome from the decision table
+    // in `crate::claims` — and an overstated impact is rewritten down to what
+    // the ledger supports instead of deleting the observation underneath it.
+    {
+        let mut rewritten = 0usize;
+        let mut dropped: Vec<String> = Vec::new();
+        let mut kept: Vec<Finding> = Vec::new();
+        for mut f in std::mem::take(&mut findings) {
+            let Some(set) = f.claims.clone() else { kept.push(f); continue };
+            let decision = crate::claims::decide(&set);
+            if decision.discards() && !crate::claims::still_security_relevant(&set) {
+                dropped.push(format!("{} ({})", f.title, decision.code()));
+                continue;
+            }
+            if decision.discards() {
+                // The narrative failed but the mechanic survives on its own —
+                // retain and rewrite rather than lose a real observation.
+                let salvage = crate::claims::Decision::DowngradeUnprovenImpact(decision.reason().to_string());
+                crate::claims::rewrite(&mut f, &set, &salvage);
+                rewritten += 1;
+            } else {
+                let before = f.title.clone();
+                crate::claims::rewrite(&mut f, &set, &decision);
+                if f.title != before {
+                    rewritten += 1;
+                }
+            }
+            kept.push(f);
+        }
+        findings = kept;
+        if rewritten > 0 || !dropped.is_empty() {
+            let _ = tx.send(format!(
+                "claim adjudication: {rewritten} finding(s) rewritten to what the evidence supports, {} dropped{}",
+                dropped.len(),
+                if dropped.is_empty() { String::new() } else { format!(" ({})", dropped.join("; ")) }
+            )).await;
+        }
+    }
 
     // Deterministic validation. The votes above are models checking models; this
     // pass asks whether the recorded artifacts actually demonstrate the class.
@@ -2043,6 +2108,7 @@ fn extract_findings(text: &str, agent: &str) -> Vec<Finding> {
                 // dutifully fills it in and a parser that throws it away — the
                 // whole validation engine would sit idle on live runs.
                 evidence_data: o.get("evidence_data").and_then(|v| serde_json::from_value(v.clone()).ok()),
+                claims: parse_claims(o),
                 impact: s(o, "impact"),
                 remediation: s(o, "remediation"),
                 confidence: conf(o.get("confidence")),
