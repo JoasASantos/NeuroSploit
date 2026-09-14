@@ -240,6 +240,43 @@
             </div>
             <div class="field-group"><label class="field-label" for="fieldSampleRoute">Sample / route</label><input class="narrow" id="fieldSampleRoute" type="number" min="1" max="50" value="3" /><div class="field-help">Requests per endpoint family (<code>/api/users/{id}</code> is sampled, not enumerated).</div></div>
           </div>
+
+          <div>
+            <div class="section-title">Tooling &amp; assurance</div>
+            <div class="section-desc">Optional. Route through a proxy, run in a container, re-check every PoC, and frame findings against a compliance framework.</div>
+          </div>
+          <div class="field-row">
+            <div class="field-group"><label class="field-label" for="fieldIntercept">Intercepting proxy</label>
+              <select class="narrow" id="fieldIntercept">
+                <option value="off" selected>off · direct</option>
+                <option value="own">own interceptor (record + passive discovery)</option>
+                <option value="burp">Burp Suite</option>
+                <option value="caido">Caido</option>
+                <option value="zap">OWASP ZAP</option>
+                <option value="mitmproxy">mitmproxy</option>
+                <option value="own+burp">own + Burp</option>
+                <option value="own+caido">own + Caido</option>
+              </select>
+              <div class="field-help">The harness and agent commands route through it. Full HTTPS interception needs one of the tools (own tunnels TLS).</div>
+            </div>
+            <div class="field-group"><label class="field-label" for="fieldSandbox">Sandbox</label>
+              <select class="narrow" id="fieldSandbox">
+                <option value="" selected>host (no container)</option>
+                <option value="default">Kali container (kalilinux/kali-rolling)</option>
+              </select>
+              <div class="field-help">Runs attack commands off the host, with the Kali toolbox. Needs docker or podman.</div>
+            </div>
+            <div class="field-group"><label class="field-label">PoC re-validation</label>
+              <div class="check-row"><input type="checkbox" id="fieldRevalidatePoc" /> <label for="fieldRevalidatePoc">Re-run every PoC; demote what no longer reproduces</label></div>
+            </div>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Compliance mapping</label>
+            <div class="check-row"><input type="checkbox" id="fieldCompPci" value="pci-dss" /> <label for="fieldCompPci">PCI-DSS v4.0</label></div>
+            <div class="check-row"><input type="checkbox" id="fieldCompHipaa" value="hipaa" /> <label for="fieldCompHipaa">HIPAA Security Rule</label></div>
+            <div class="check-row"><input type="checkbox" id="fieldCompSoc2" value="soc2" /> <label for="fieldCompSoc2">SOC 2 (Trust Services Criteria)</label></div>
+            <div class="field-help">Maps confirmed findings onto control requirements in the report. Indicates gaps for an assessor — never a compliance verdict.</div>
+          </div>
         </div>
 
         <!-- Step 5 — Review -->

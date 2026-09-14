@@ -53,6 +53,14 @@ impl ReqSpec {
         self.identity = who.to_string();
         self
     }
+    /// Set the request body, if the finding recorded a payload separately from
+    /// the recorded exchange (which stores only the response body).
+    pub fn with_body(mut self, body: &str) -> Self {
+        if !body.trim().is_empty() {
+            self.body = body.to_string();
+        }
+        self
+    }
     /// Verbs that change state. Replay refuses these by default: re-running a
     /// destructive request to "confirm" it means doing the damage twice.
     pub fn is_mutating(&self) -> bool {

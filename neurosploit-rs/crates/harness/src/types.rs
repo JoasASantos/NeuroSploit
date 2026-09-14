@@ -256,6 +256,23 @@ pub struct RunConfig {
     /// or `webhook:<url>:<number>`.
     #[serde(default)]
     pub sms: Option<String>,
+    /// Intercepting proxy for the run: `burp`·`caido`·`zap`·`mitmproxy`·`own`·
+    /// `own+burp`·`http://host:port`. Empty = direct. Both the harness and the
+    /// agents' child commands route through it.
+    #[serde(default)]
+    pub intercept: Option<String>,
+    /// Run agent commands inside a container instead of on the host. `""` uses
+    /// the default Kali image; a value overrides the image. None = host.
+    #[serde(default)]
+    pub sandbox: Option<String>,
+    /// Re-run each finding's PoC after validation and demote any that no longer
+    /// reproduce. Off by default (adds requests); the web/CLI can turn it on.
+    #[serde(default)]
+    pub revalidate_poc: bool,
+    /// Compliance frameworks to map findings onto in the report:
+    /// `pci-dss`·`hipaa`·`soc2`.
+    #[serde(default)]
+    pub compliance: Vec<String>,
     /// How much compute to spend and where. Defaults to unlimited, which is the
     /// behaviour that existed before budgets — an operator who asks for nothing
     /// gets the full run.
@@ -312,6 +329,10 @@ impl RunConfig {
             oob_http: None,
             oob_dns: None,
             sms: None,
+            intercept: None,
+            sandbox: None,
+            revalidate_poc: false,
+            compliance: Vec::new(),
         }
     }
 }

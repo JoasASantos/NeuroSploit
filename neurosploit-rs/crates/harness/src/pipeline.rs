@@ -738,6 +738,64 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
             }
         }
     }
+
+    // Intercepting proxy. Whether it is Burp, an own recording interceptor, or
+    // both, the effect is one env var the reqwest client already honours, plus
+    // the same var exported to agent child commands — so the whole engagement
+    // flows through one point the operator can watch and replay.
+    if let Some(spec) = cfg.intercept.as_deref().filter(|s| !s.trim().is_empty()) {
+        match crate::proxy::ProxyConfig::parse(spec) {
+            Ok(pc) => {
+                if pc.own_interceptor {
+                    let jsonl = cfg.workdir.as_deref().map(|d| format!("{}/flows.jsonl", d.trim_end_matches('/')));
+                    let upstream = pc.upstream.as_ref().map(|t| t.proxy_url());
+                    let mut interceptor = crate::proxy::Interceptor::new(upstream);
+                    if let Some(j) = jsonl { interceptor = interceptor.logging_to(j); }
+                    match interceptor.listen(pc.bind).await {
+                        Ok(()) => { let _ = tx.send(format!("notify: 🕵 {}", pc.summary())).await; }
+                        Err(e) => { let _ = tx.send(format!("notify: ⚠ own interceptor did not bind ({e}) — routing direct")).await; }
+                    }
+                } else if let Some(t) = &pc.upstream {
+                    // A bare tool: warn if it is not actually listening rather
+                    // than failing every request three minutes in.
+                    if !t.is_listening().await {
+                        let _ = tx.send(format!("notify: ⚠ {} is configured but nothing is listening at {} — start it or requests will fail", t.name(), t.proxy_url())).await;
+                    } else {
+                        let _ = tx.send(format!("notify: 🕵 {}", pc.summary())).await;
+                    }
+                }
+                if let Some(url) = pc.client_proxy_url() {
+                    // The reqwest client (probe + replay) reads this; child
+                    // commands get it through the process environment.
+                    std::env::set_var("NEUROSPLOIT_PROXY", &url);
+                    for (k, v) in pc.env() { std::env::set_var(k, v); }
+                }
+            }
+            Err(e) => { let _ = tx.send(format!("notify: ⚠ intercept: {e} — routing direct")).await; }
+        }
+    }
+
+    // Sandbox: run the engagement's tool commands inside a container instead of
+    // on the host. Ensured up-front so a missing runtime is reported before any
+    // work, and never silently downgraded to host execution.
+    if let Some(image) = cfg.sandbox.as_deref() {
+        let mut sc = crate::sandbox::SandboxConfig::default();
+        if !image.trim().is_empty() { sc = sc.with_image(image); }
+        if let Some(w) = cfg.workdir.as_deref() { sc = sc.mounting(w); }
+        let proxy_env: Vec<(String,String)> = std::env::var("NEUROSPLOIT_PROXY").ok()
+            .filter(|v| !v.is_empty())
+            .map(|p| vec![("HTTP_PROXY".into(), p.clone()), ("HTTPS_PROXY".into(), p)])
+            .unwrap_or_default();
+        sc = sc.with_env(proxy_env);
+        match crate::sandbox::Sandbox::new(sc) {
+            Ok(sb) => match sb.ensure().await {
+                Ok(msg) => { let _ = tx.send(format!("notify: 📦 {msg}")).await; }
+                Err(e) => { let _ = tx.send(format!("notify: ⚠ sandbox: {e}")).await; }
+            },
+            Err(e) => { let _ = tx.send(format!("notify: ⚠ {e}")).await; }
+        }
+    }
+
     let _ = tx
         .send(format!(
             "Loaded {} agents ({} vuln / {} recon / {} code / {} meta) · models: {} · vote_n={} · concurrency={}{} · budget: {}",
@@ -2037,6 +2095,32 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
         )).await;
     }
 
+    // PoC re-validation: re-run each finding's recorded proof and demote any
+    // that no longer reproduces. This is the harness checking its own work — a
+    // bug that was hotfixed between discovery and reporting, or a "proof" that
+    // was a fluke, is caught here rather than by the client.
+    if cfg.revalidate_poc {
+        let validator = crate::poc::PocValidator::new(effective_scope(&cfg));
+        let results = validator.validate_all(&findings).await;
+        let _ = tx.send(format!("notify: 🔁 {}", crate::poc::summary(&results))).await;
+        let by_id: std::collections::HashMap<&str, &crate::poc::PocResult> = results.iter().map(|r| (r.finding_id.as_str(), r)).collect();
+        for f in findings.iter_mut() {
+            if let Some(r) = by_id.get(f.id.as_str()) {
+                crate::poc::apply(f, r);
+                if r.reproduction.demotes() {
+                    audit.append(
+                        crate::audit::AuditRecord::new("poc-validator", "poc-revalidation", &f.endpoint)
+                            .hypothesis(&f.id)
+                            .decision(&format!("{}: {}", r.reproduction.as_str(), r.detail))
+                            .tool("poc-validator")
+                            .capability(&cap_id)
+                            .result(&f.title),
+                    );
+                }
+            }
+        }
+    }
+
     // Scope audit: anything proven against a host outside the authorization
     // boundary is quarantined, not shipped. A finding on an unauthorized asset
     // is an incident to disclose, not a deliverable.
@@ -2283,11 +2367,23 @@ fn persist(cfg: &RunConfig, recon: &str, transcript: &str, findings: &[Finding])
     };
     put("provenance.json", serde_json::to_string_pretty(&manifest).unwrap_or_default());
     put("findings.md", findings_md(&cfg.target, findings));
+    // Compliance mapping, one file per requested framework. Confirmed findings
+    // only — a lead is not a control gap.
+    for fw_name in &cfg.compliance {
+        if let Some(fw) = crate::compliance::Framework::parse(fw_name) {
+            let report = crate::compliance::map_findings(findings, fw, true);
+            put(&format!("compliance-{}.md", fw.as_str()), report.to_markdown());
+        }
+    }
     let meta = cfg.workdir.as_deref().map(|d| report::read_meta(Path::new(d))).unwrap_or_default();
     let pocs: Vec<String> = std::fs::read_dir(dir.join("pocs"))
         .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect())
         .unwrap_or_default();
-    put("report.html", report::html_with_pocs(&cfg.target, findings, &meta, &pocs));
+    let mut report_html = report::html_with_pocs(&cfg.target, findings, &meta, &pocs);
+    if !cfg.compliance.is_empty() {
+        report_html = report::with_compliance(report_html, findings, &cfg.compliance);
+    }
+    put("report.html", report_html);
     written
 }
 

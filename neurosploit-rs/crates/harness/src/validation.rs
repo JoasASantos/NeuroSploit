@@ -977,6 +977,14 @@ pub fn validators() -> Vec<Box<dyn CweValidator>> {
         Box::new(MassAssignmentValidator),
         Box::new(CsrfValidator),
         Box::new(ExposureValidator),
+        Box::new(VerboseErrorValidator),
+        Box::new(CleartextValidator),
+        Box::new(CrlfValidator),
+        Box::new(HttpMethodValidator),
+        Box::new(GraphqlIntrospectionValidator),
+        Box::new(ExposedFileValidator),
+        Box::new(HostHeaderValidator),
+        Box::new(CacheableSecretValidator),
     ]
 }
 
@@ -1026,6 +1034,26 @@ pub fn validator_for(f: &Finding) -> Option<Box<dyn CweValidator>> {
         ("cross-site request forgery", || Box::new(CsrfValidator)),
         ("directory listing", || Box::new(ExposureValidator)),
         ("information disclosure", || Box::new(ExposureValidator)),
+        ("stack trace", || Box::new(VerboseErrorValidator)),
+        ("verbose error", || Box::new(VerboseErrorValidator)),
+        ("error message", || Box::new(VerboseErrorValidator)),
+        ("cleartext", || Box::new(CleartextValidator)),
+        ("hsts", || Box::new(CleartextValidator)),
+        ("strict-transport", || Box::new(CleartextValidator)),
+        ("crlf", || Box::new(CrlfValidator)),
+        ("response splitting", || Box::new(CrlfValidator)),
+        ("http method", || Box::new(HttpMethodValidator)),
+        ("trace method", || Box::new(HttpMethodValidator)),
+        ("cross-site tracing", || Box::new(HttpMethodValidator)),
+        ("graphql", || Box::new(GraphqlIntrospectionValidator)),
+        ("introspection", || Box::new(GraphqlIntrospectionValidator)),
+        ("exposed file", || Box::new(ExposedFileValidator)),
+        (".git", || Box::new(ExposedFileValidator)),
+        (".env", || Box::new(ExposedFileValidator)),
+        ("backup file", || Box::new(ExposedFileValidator)),
+        ("host header", || Box::new(HostHeaderValidator)),
+        ("web cache", || Box::new(CacheableSecretValidator)),
+        ("cacheable", || Box::new(CacheableSecretValidator)),
     ];
     by_title.iter().find(|(k, _)| t.contains(k)).map(|(_, mk)| mk())
 }
@@ -1158,6 +1186,265 @@ pub fn evidence_contract() -> String {
     s.push_str("  Anything else is reported as needs-review. Record the baseline request, the attack request, and any marker the harness gave you.\n");
     s
 }
+
+// ===========================================================================
+// Additional deterministic validators
+//
+// Everything below is provable from the captured exchange alone — a header
+// that is present or absent, a payload reflected into a place it changes
+// meaning, an error the baseline did not produce. No model is consulted, and
+// none of these confirm on suspicion: each names exactly what it saw.
+// ===========================================================================
+
+/// CWE-209 — a response leaking a stack trace, a framework error, or an
+/// internal path. Deterministic because the leak is *in the body*: the
+/// signature is there or it is not, and the baseline is used to make sure it
+/// was the payload that surfaced it rather than a page that always shows it.
+pub struct VerboseErrorValidator;
+impl CweValidator for VerboseErrorValidator {
+    fn name(&self) -> &'static str { "verbose-error" }
+    fn cwes(&self) -> &'static [&'static str] { &["209", "211", "550"] }
+    fn evidence_required(&self) -> &'static [&'static str] {
+        &["a response body carrying a stack trace / framework error / internal path"]
+    }
+    fn validate(&self, _f: &Finding, ev: &Evidence) -> Verdict {
+        let Some(a) = ev.attack.as_ref().or(ev.baseline.as_ref()) else {
+            return Verdict::NeedsReview("no response captured".into());
+        };
+        let markers = [
+            "traceback (most recent call last)", "stack trace:", "at java.", "at org.springframework",
+            "system.web.", "microsoft .net", "org.hibernate", "psql:", "ora-0", "sqlstate[",
+            "you have an error in your sql syntax", "warning: ", "fatal error:", "exception in thread",
+            "/var/www/", "/home/", "c:\\\\inetpub", "line ", "undefinederror", ".rb:", ".py\", line",
+        ];
+        let body = a.body.to_lowercase();
+        let hit = markers.iter().find(|m| body.contains(**m));
+        let Some(sig) = hit else {
+            return Verdict::NeedsReview("no error/trace signature in the captured body".into());
+        };
+        // If the baseline already shows the same signature it is a static
+        // page, not a leak the payload caused.
+        if let Some(b) = &ev.baseline {
+            if b.body.to_lowercase().contains(*sig) {
+                return Verdict::Rejected(format!("`{sig}` is present in the baseline too — not payload-induced"));
+            }
+        }
+        Verdict::Confirmed(format!("the response leaks `{sig}` — an internal error surfaced to the client"))
+    }
+}
+
+/// CWE-319 — sensitive interaction over cleartext, or a site that never sets
+/// HSTS. Two provable shapes: the endpoint itself is `http://`, or an HTTPS
+/// response omits Strict-Transport-Security entirely.
+pub struct CleartextValidator;
+impl CweValidator for CleartextValidator {
+    fn name(&self) -> &'static str { "cleartext" }
+    fn cwes(&self) -> &'static [&'static str] { &["319", "311", "523"] }
+    fn evidence_required(&self) -> &'static [&'static str] {
+        &["an http:// endpoint carrying credentials/data, OR an https response with no HSTS"]
+    }
+    fn validate(&self, _f: &Finding, ev: &Evidence) -> Verdict {
+        let Some(a) = ev.attack.as_ref().or(ev.baseline.as_ref()) else {
+            return Verdict::NeedsReview("no response captured".into());
+        };
+        if a.url.starts_with("http://") {
+            return Verdict::Confirmed(format!("{} is served over cleartext HTTP", a.url));
+        }
+        if a.url.starts_with("https://") && a.header("strict-transport-security").is_empty() {
+            // Absent HSTS is real but low: it is an SSL-strip *precondition*,
+            // not a demonstrated interception. Report, do not inflate.
+            return Verdict::Confirmed("HTTPS response sets no Strict-Transport-Security header — vulnerable to SSL-strip on the first request".into());
+        }
+        Verdict::Rejected("served over HTTPS with HSTS present".into())
+    }
+}
+
+/// CWE-113 — CRLF injection / HTTP response splitting. Proven when a payload
+/// containing an encoded CR/LF ends up as a *real* header separator in the
+/// response: a header the baseline did not have, whose name or value came from
+/// the payload.
+pub struct CrlfValidator;
+impl CweValidator for CrlfValidator {
+    fn name(&self) -> &'static str { "crlf" }
+    fn cwes(&self) -> &'static [&'static str] { &["113", "93"] }
+    fn evidence_required(&self) -> &'static [&'static str] {
+        &["a marker injected via CR/LF appearing as a response HEADER (not the body)"]
+    }
+    fn validate(&self, f: &Finding, ev: &Evidence) -> Verdict {
+        let Some(a) = &ev.attack else {
+            return Verdict::NeedsReview("no attack response captured".into());
+        };
+        let marker = if !ev.marker.is_empty() { ev.marker.clone() } else { f.payload.clone() };
+        let token = marker.rsplit(|c| c == ':' || c == '=' || c == '\n' || c == '\r').next().unwrap_or("").trim().to_lowercase();
+        if token.len() < 4 {
+            return Verdict::NeedsReview("no distinctive CRLF marker to look for".into());
+        }
+        let in_header = a.headers.iter().any(|(k, v)| k.to_lowercase().contains(&token) || v.to_lowercase().contains(&token));
+        let in_baseline_header = ev.baseline.as_ref().map(|b| b.headers.iter().any(|(k, v)| k.to_lowercase().contains(&token) || v.to_lowercase().contains(&token))).unwrap_or(false);
+        if in_header && !in_baseline_header {
+            return Verdict::Confirmed(format!("the CRLF payload surfaced as a response header carrying `{token}` — the header stream was split"));
+        }
+        if a.body.to_lowercase().contains(&token) {
+            return Verdict::Rejected("the marker landed in the BODY, not a header — that is reflection, not response splitting".into());
+        }
+        Verdict::NeedsReview("the injected CR/LF marker did not become a response header".into())
+    }
+}
+
+/// CWE-650 / CWE-16 — dangerous HTTP methods enabled. Proven from an `Allow`
+/// header (an OPTIONS response) or a TRACE that echoes the request: both are
+/// facts in the response, not inferences.
+pub struct HttpMethodValidator;
+impl CweValidator for HttpMethodValidator {
+    fn name(&self) -> &'static str { "http-methods" }
+    fn cwes(&self) -> &'static [&'static str] { &["650"] }
+    fn evidence_required(&self) -> &'static [&'static str] {
+        &["an Allow header advertising PUT/DELETE/TRACE, or a TRACE that echoed the request"]
+    }
+    fn validate(&self, _f: &Finding, ev: &Evidence) -> Verdict {
+        let Some(a) = ev.attack.as_ref().or(ev.baseline.as_ref()) else {
+            return Verdict::NeedsReview("no response captured".into());
+        };
+        let allow = a.header("allow").to_uppercase();
+        let dangerous: Vec<&str> = ["PUT", "DELETE", "TRACE", "CONNECT", "PATCH"].iter().copied().filter(|m| allow.contains(*m)).collect();
+        if a.method.eq_ignore_ascii_case("TRACE") && a.status == 200 && a.body.to_lowercase().contains("trace") {
+            return Verdict::Confirmed("TRACE is enabled and echoed the request — Cross-Site Tracing is possible".into());
+        }
+        if !dangerous.is_empty() {
+            return Verdict::Confirmed(format!("the server advertises dangerous methods: {}", dangerous.join(", ")));
+        }
+        Verdict::Rejected("no dangerous methods advertised in Allow, and TRACE was not reflected".into())
+    }
+}
+
+/// CWE-16 / A05 — GraphQL introspection left enabled. Proven when an
+/// introspection query returns the schema (`__schema` with types) rather than
+/// an error.
+pub struct GraphqlIntrospectionValidator;
+impl CweValidator for GraphqlIntrospectionValidator {
+    fn name(&self) -> &'static str { "graphql-introspection" }
+    fn cwes(&self) -> &'static [&'static str] { &["16", "1230"] }
+    fn evidence_required(&self) -> &'static [&'static str] {
+        &["an introspection query response containing __schema and its types"]
+    }
+    fn validate(&self, _f: &Finding, ev: &Evidence) -> Verdict {
+        let Some(a) = &ev.attack else {
+            return Verdict::NeedsReview("no introspection response captured".into());
+        };
+        let body = a.body.to_lowercase();
+        if body.contains("\"__schema\"") && (body.contains("\"types\"") || body.contains("querytype")) {
+            return Verdict::Confirmed("the introspection query returned the schema — the API's full type graph is exposed".into());
+        }
+        if body.contains("introspection") && (body.contains("disabled") || body.contains("not allowed")) {
+            return Verdict::Rejected("introspection is explicitly disabled".into());
+        }
+        Verdict::NeedsReview("the response did not contain a schema — introspection may be off".into())
+    }
+}
+
+/// CWE-548 / A05 — a secret or config file left readable at a well-known path.
+/// Confirmed when a request for `.git/config`, `.env`, `wp-config.php.bak` and
+/// friends returns the file's actual content, not a 404 or the app's HTML.
+pub struct ExposedFileValidator;
+impl CweValidator for ExposedFileValidator {
+    fn name(&self) -> &'static str { "exposed-file" }
+    fn cwes(&self) -> &'static [&'static str] { &["530"] }
+    fn evidence_required(&self) -> &'static [&'static str] {
+        &["a sensitive file path returning file content (200 + matching signature), not the app page"]
+    }
+    fn validate(&self, _f: &Finding, ev: &Evidence) -> Verdict {
+        let Some(a) = ev.attack.as_ref().or(ev.baseline.as_ref()) else {
+            return Verdict::NeedsReview("no response captured".into());
+        };
+        if a.status != 200 {
+            return Verdict::Rejected(format!("the path returned HTTP {} — not served", a.status));
+        }
+        let url = a.url.to_lowercase();
+        let body = &a.body;
+        let signature = if url.contains(".git/config") { body.contains("[core]") || body.contains("[remote") }
+            else if url.contains(".env") { body.contains('=') && (body.to_uppercase().contains("KEY") || body.to_uppercase().contains("SECRET") || body.to_uppercase().contains("PASSWORD") || body.to_uppercase().contains("DB_")) }
+            else if url.ends_with(".sql") || url.contains("dump") { body.to_lowercase().contains("insert into") || body.to_lowercase().contains("create table") }
+            else if url.contains("wp-config") { body.contains("DB_PASSWORD") || body.contains("define(") }
+            else if url.contains(".htpasswd") { body.contains(':') && body.lines().next().map(|l| l.contains('$')).unwrap_or(false) }
+            else if url.contains(".aws") || url.contains("credentials") { body.contains("aws_access_key_id") || body.contains("aws_secret") }
+            else { false };
+        // The app's own HTML returned under a bogus path is the classic false
+        // positive — a 200 that is actually the SPA, not the file.
+        let looks_like_html = body.trim_start().to_lowercase().starts_with("<!doctype") || body.trim_start().to_lowercase().starts_with("<html");
+        if signature && !looks_like_html {
+            return Verdict::Confirmed("the sensitive file is readable and its content matches the expected signature".into());
+        }
+        if looks_like_html {
+            return Verdict::Rejected("the path returned the application's HTML page, not the file — likely a catch-all route".into());
+        }
+        Verdict::NeedsReview("the response did not match the file's expected signature".into())
+    }
+}
+
+/// CWE-113/CWE-644 — Host header injection reflected into a link or a redirect.
+/// Confirmed when an attacker-supplied Host value comes back in the response's
+/// Location header or an absolute link in the body.
+pub struct HostHeaderValidator;
+impl CweValidator for HostHeaderValidator {
+    fn name(&self) -> &'static str { "host-header" }
+    fn cwes(&self) -> &'static [&'static str] { &["644"] }
+    fn evidence_required(&self) -> &'static [&'static str] {
+        &["an attacker Host value reflected into Location or an absolute URL in the body"]
+    }
+    fn validate(&self, _f: &Finding, ev: &Evidence) -> Verdict {
+        let Some(a) = &ev.attack else {
+            return Verdict::NeedsReview("no attack response captured".into());
+        };
+        let injected = a.request_header("host");
+        if injected.is_empty() {
+            return Verdict::NeedsReview("no Host header was recorded on the attack request".into());
+        }
+        let inj = injected.to_lowercase();
+        // Only meaningful if the injected Host is NOT the legitimate one.
+        let legit_host = a.url.split("://").nth(1).and_then(|r| r.split('/').next()).unwrap_or("").to_lowercase();
+        if inj == legit_host {
+            return Verdict::Rejected("the Host header carried the legitimate host — nothing was injected".into());
+        }
+        let location = a.header("location").to_lowercase();
+        if location.contains(&inj) {
+            return Verdict::Confirmed(format!("the injected Host `{injected}` was reflected into the Location redirect — password-reset poisoning / cache poisoning is possible"));
+        }
+        if a.body.to_lowercase().contains(&format!("//{inj}")) || a.body.to_lowercase().contains(&format!("https://{inj}")) {
+            return Verdict::Confirmed(format!("the injected Host `{injected}` was reflected into an absolute link in the body"));
+        }
+        Verdict::Rejected("the injected Host was not reflected into a link or redirect".into())
+    }
+}
+
+/// CWE-525 / CWE-524 — a sensitive, authenticated response left cacheable. The
+/// combination that matters: a response carrying private data (identity set)
+/// whose Cache-Control does not forbid storage.
+pub struct CacheableSecretValidator;
+impl CweValidator for CacheableSecretValidator {
+    fn name(&self) -> &'static str { "cacheable-private" }
+    fn cwes(&self) -> &'static [&'static str] { &["525", "524"] }
+    fn evidence_required(&self) -> &'static [&'static str] {
+        &["an authenticated response with private data and a Cache-Control that permits storing it"]
+    }
+    fn validate(&self, _f: &Finding, ev: &Evidence) -> Verdict {
+        let Some(a) = ev.attack.as_ref().or(ev.identity_a.as_ref()) else {
+            return Verdict::NeedsReview("no authenticated response captured".into());
+        };
+        let authed = !a.request_header("authorization").is_empty() || !a.request_header("cookie").is_empty() || !a.identity.is_empty();
+        if !authed {
+            return Verdict::NeedsReview("the response was not shown to be authenticated — cacheability is only a risk for private data".into());
+        }
+        let cc = a.header("cache-control").to_lowercase();
+        if cc.contains("no-store") || cc.contains("private") && cc.contains("no-cache") {
+            return Verdict::Rejected(format!("Cache-Control forbids shared storage: `{cc}`"));
+        }
+        if cc.is_empty() || cc.contains("public") || (cc.contains("max-age") && !cc.contains("no-store")) {
+            return Verdict::Confirmed(format!("an authenticated response is cacheable (Cache-Control: `{}`) — a shared cache could serve one user's data to another", if cc.is_empty() { "absent" } else { &cc }));
+        }
+        Verdict::NeedsReview(format!("Cache-Control `{cc}` is ambiguous for a private response"))
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -1638,4 +1925,112 @@ mod tests {
         assert!(batch[0].starts_with(crate::provenance::SIGIL), "got {}", batch[0]);
         assert!(batch[0].contains("ns") && batch[0].len() > 8);
     }
+
+    #[test]
+    fn verbose_error_needs_a_trace_the_baseline_lacks() {
+        let base = ex(200, "welcome");
+        let mut atk = ex(500, "Traceback (most recent call last):\n  File \"/var/www/app.py\", line 42");
+        atk.url = "https://t.test/x".into();
+        let ev = Evidence { baseline: Some(base), attack: Some(atk), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-209", "stack trace leak"), Some(&ev)), Verdict::Confirmed(_)));
+
+        // Same trace present in the baseline = static page, not a leak.
+        let ev2 = Evidence {
+            baseline: Some(ex(200, "Traceback (most recent call last): docs")),
+            attack: Some(ex(200, "Traceback (most recent call last): docs")),
+            ..Default::default()
+        };
+        assert!(matches!(judge(&f("CWE-209", "error"), Some(&ev2)), Verdict::Rejected(_)));
+    }
+
+    #[test]
+    fn cleartext_flags_http_and_missing_hsts() {
+        let mut http = ex(200, "login");
+        http.url = "http://t.test/login".into();
+        let ev = Evidence { attack: Some(http), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-319", "cleartext"), Some(&ev)), Verdict::Confirmed(_)));
+
+        let with_hsts = exh(200, "ok", &[("strict-transport-security", "max-age=63072000")]);
+        let ev2 = Evidence { attack: Some(with_hsts), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-319", "cleartext"), Some(&ev2)), Verdict::Rejected(_)));
+    }
+
+    #[test]
+    fn crlf_confirms_only_when_the_marker_becomes_a_header() {
+        let base = exh(200, "ok", &[]);
+        let atk = exh(200, "ok", &[("x-injected", "nscrlf7788")]);
+        let ev = Evidence { marker: "nscrlf7788".into(), baseline: Some(base), attack: Some(atk), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-113", "response splitting"), Some(&ev)), Verdict::Confirmed(_)));
+
+        // Marker only in the body = reflection, not splitting.
+        let atk2 = exh(200, "echoed nscrlf7788 here", &[]);
+        let ev2 = Evidence { marker: "nscrlf7788".into(), attack: Some(atk2), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-113", "response splitting"), Some(&ev2)), Verdict::Rejected(_)));
+    }
+
+    #[test]
+    fn http_methods_read_the_allow_header() {
+        let opt = exh(200, "", &[("allow", "GET, POST, PUT, DELETE")]);
+        let ev = Evidence { attack: Some(opt), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-650", "dangerous http method"), Some(&ev)), Verdict::Confirmed(_)));
+
+        let safe = exh(200, "", &[("allow", "GET, HEAD, OPTIONS")]);
+        let ev2 = Evidence { attack: Some(safe), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-650", "http method"), Some(&ev2)), Verdict::Rejected(_)));
+    }
+
+    #[test]
+    fn graphql_introspection_needs_a_schema() {
+        let atk = ex(200, r#"{"data":{"__schema":{"types":[{"name":"Query"}]}}}"#);
+        let ev = Evidence { attack: Some(atk), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-16", "graphql introspection"), Some(&ev)), Verdict::Confirmed(_)));
+
+        let off = ex(400, r#"{"errors":[{"message":"introspection is disabled"}]}"#);
+        let ev2 = Evidence { attack: Some(off), ..Default::default() };
+        assert!(matches!(judge(&f("x", "graphql introspection"), Some(&ev2)), Verdict::Rejected(_)));
+    }
+
+    #[test]
+    fn exposed_file_rejects_the_apps_own_html() {
+        let mut git = ex(200, "[core]\n\trepositoryformatversion = 0\n[remote \"origin\"]");
+        git.url = "https://t.test/.git/config".into();
+        let ev = Evidence { attack: Some(git), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-530", "backup .git config"), Some(&ev)), Verdict::Confirmed(_)));
+
+        // 200 that is actually the SPA — the classic false positive.
+        let mut spa = ex(200, "<!doctype html><html><body>app</body></html>");
+        spa.url = "https://t.test/.env".into();
+        let ev2 = Evidence { attack: Some(spa), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-530", ".env exposed"), Some(&ev2)), Verdict::Rejected(_)));
+    }
+
+    #[test]
+    fn host_header_needs_reflection_of_an_injected_host() {
+        let mut atk = exh(302, "", &[("location", "https://evil.test/reset?token=abc")]);
+        atk.url = "https://t.test/reset".into();
+        atk.request_headers.insert("host".into(), "evil.test".into());
+        let ev = Evidence { attack: Some(atk), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-644", "host header injection"), Some(&ev)), Verdict::Confirmed(_)));
+
+        // Legit host, no injection.
+        let mut ok = exh(302, "", &[("location", "https://t.test/home")]);
+        ok.url = "https://t.test/reset".into();
+        ok.request_headers.insert("host".into(), "t.test".into());
+        let ev2 = Evidence { attack: Some(ok), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-644", "host header"), Some(&ev2)), Verdict::Rejected(_)));
+    }
+
+    #[test]
+    fn cacheable_private_needs_both_auth_and_a_permissive_cache_control() {
+        let mut atk = exh(200, "{\"balance\":4200}", &[("cache-control", "public, max-age=600")]);
+        atk.request_headers.insert("authorization".into(), "Bearer x".into());
+        let ev = Evidence { attack: Some(atk), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-525", "cacheable private data"), Some(&ev)), Verdict::Confirmed(_)));
+
+        let mut nostore = exh(200, "{\"balance\":4200}", &[("cache-control", "no-store")]);
+        nostore.request_headers.insert("authorization".into(), "Bearer x".into());
+        let ev2 = Evidence { attack: Some(nostore), ..Default::default() };
+        assert!(matches!(judge(&f("CWE-525", "cacheable"), Some(&ev2)), Verdict::Rejected(_)));
+    }
+
 }

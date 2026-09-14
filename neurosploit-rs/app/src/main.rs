@@ -69,6 +69,14 @@ struct Cli {
     /// Inbound SMS: twilio:<sid>:<token>:<number> or webhook:<url>:<number>.
     #[arg(long = "sms", global = true)]
     sms: Option<String>,
+    /// Intercepting proxy: burp · caido · zap · mitmproxy · own · own+burp ·
+    /// http://host:port. Routes the harness AND agent commands through it.
+    #[arg(long = "intercept", global = true)]
+    intercept: Option<String>,
+    /// Run agent commands inside a container instead of on the host. Bare flag
+    /// uses the Kali image; give a value to override (e.g. --sandbox my/img).
+    #[arg(long = "sandbox", global = true, num_args = 0..=1, default_missing_value = "")]
+    sandbox: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -143,6 +151,14 @@ enum Cmd {
         /// Requests per endpoint family (/api/users/{id} is sampled, not enumerated).
         #[arg(long = "sample-per-route", default_value_t = 3)]
         sample_per_route: usize,
+        /// Re-run each finding's PoC after validation; demote any that no
+        /// longer reproduces.
+        #[arg(long = "revalidate-poc")]
+        revalidate_poc: bool,
+        /// Map findings onto compliance controls in the report: pci-dss, hipaa,
+        /// soc2 (repeatable or comma-separated).
+        #[arg(long = "compliance")]
+        compliance: Vec<String>,
         /// Open a Jira card per finding (needs the jira integration enabled).
         #[arg(long)]
         jira: bool,
@@ -160,6 +176,35 @@ enum Cmd {
     Rebuild {
         /// Run id (`ns-…`) or a path to the run directory.
         run: String,
+    },
+    /// Compliance mapping: re-frame a finished run's findings against PCI-DSS,
+    /// HIPAA or SOC 2 controls.
+    Compliance {
+        /// Run id (`ns-…`) or path to the run directory.
+        run: String,
+        /// Frameworks: pci-dss · hipaa · soc2 (repeatable/comma-separated; all if omitted).
+        #[arg(long = "framework")]
+        framework: Vec<String>,
+        /// Include unconfirmed findings (leads) too. Off by default.
+        #[arg(long = "include-leads")]
+        include_leads: bool,
+    },
+    /// Re-validate a finished run's PoCs: re-run each finding's recorded proof
+    /// and report which still reproduce.
+    Poc {
+        /// Run id (`ns-…`) or path to the run directory.
+        run: String,
+        /// Re-runs per finding (a single send can be a fluke).
+        #[arg(long = "repeats", default_value_t = 2)]
+        repeats: usize,
+        /// Write the demoted findings back to findings.json.
+        #[arg(long = "apply")]
+        apply: bool,
+    },
+    /// Manage the Kali sandbox container (up · exec · down).
+    Sandbox {
+        #[command(subcommand)]
+        cmd: SandboxCmd,
     },
     /// Issue or inspect a signed capability token (the engagement's authorization).
     Capability {
@@ -524,12 +569,15 @@ async fn main() -> anyhow::Result<()> {
                 Err(e) => anyhow::bail!("rebuild failed: {e}"),
             }
         }
+        Cmd::Compliance { run, framework, include_leads } => handle_compliance(&base, &run, &framework, include_leads)?,
+        Cmd::Poc { run, repeats, apply } => handle_poc(&base, &run, repeats, apply).await?,
+        Cmd::Sandbox { cmd } => handle_sandbox(cmd).await?,
         Cmd::Capability { cmd } => handle_capability(cmd)?,
         Cmd::Provenance { cmd } => handle_provenance(cmd)?,
         Cmd::Internal { graph, scaffold, from, expand, mermaid, save } => {
             handle_internal(graph.as_deref(), scaffold.as_deref(), &from, expand, mermaid, save.as_deref())?
         }
-        Cmd::Run { url, models, max_agents, vote_n, chain_depth, recon, offline, subscription, mcp, creds, focus, objective, out_of_scope, in_scope, environment, policy, budget, token_limit, deep_test_limit, coverage_first, depth_first, sample_per_route, jira, only, verbose } => {
+        Cmd::Run { url, models, max_agents, vote_n, chain_depth, recon, offline, subscription, mcp, creds, focus, objective, out_of_scope, in_scope, environment, policy, budget, token_limit, deep_test_limit, coverage_first, depth_first, sample_per_route, revalidate_poc, compliance, jira, only, verbose } => {
             let url = if url.starts_with("http") { url } else { format!("https://{url}") };
             let mut cfg = RunConfig::new(&url);
             cfg.max_agents = max_agents;
@@ -546,6 +594,10 @@ async fn main() -> anyhow::Result<()> {
             apply_authorization(&mut cfg, &in_scope, cli.capability_token.clone(), &environment, &policy)?;
             apply_budget(&mut cfg, budget.as_deref(), token_limit, deep_test_limit, coverage_first, depth_first, sample_per_route)?;
             apply_network(&mut cfg, &cli)?;
+            cfg.intercept = cli.intercept.clone();
+            cfg.sandbox = cli.sandbox.clone();
+            cfg.revalidate_poc = revalidate_poc;
+            cfg.compliance = revalidate_split(&compliance);
             if !models.is_empty() {
                 cfg.models = models;
             }
@@ -1107,6 +1159,32 @@ fn apply_authorization(
 }
 
 #[derive(Subcommand)]
+enum SandboxCmd {
+    /// Pull the image and start the container.
+    Up {
+        /// Image (default kalilinux/kali-rolling).
+        #[arg(long)]
+        image: Option<String>,
+        /// Host path mounted at /work.
+        #[arg(long)]
+        mount: Option<String>,
+    },
+    /// Run a command inside the container.
+    Exec {
+        /// The command line to run.
+        command: Vec<String>,
+        #[arg(long)]
+        image: Option<String>,
+    },
+    /// Install packages inside the container (e.g. sqlmap ffuf nuclei).
+    Install {
+        packages: Vec<String>,
+    },
+    /// Stop and remove the container.
+    Down,
+}
+
+#[derive(Subcommand)]
 enum ProvCmd {
     /// Print this build's fingerprint and the markers it mints.
     Show,
@@ -1235,6 +1313,121 @@ fn handle_internal(
     if let Some(path) = save {
         std::fs::write(path, serde_json::to_string_pretty(&g)?)?;
         println!("  saved {path}");
+    }
+    Ok(())
+}
+
+fn resolve_run(base: &std::path::Path, run: &str) -> anyhow::Result<std::path::PathBuf> {
+    let dir = std::path::PathBuf::from(run);
+    let dir = if dir.is_dir() { dir } else { base.join("runs").join(run) };
+    if !dir.is_dir() {
+        anyhow::bail!("no such run directory: {}", dir.display());
+    }
+    Ok(dir)
+}
+
+fn load_findings(dir: &std::path::Path) -> anyhow::Result<Vec<harness::types::Finding>> {
+    let text = std::fs::read_to_string(dir.join("findings.json"))
+        .map_err(|e| anyhow::anyhow!("no findings.json in {}: {e}", dir.display()))?;
+    Ok(serde_json::from_str(&text)?)
+}
+
+fn handle_compliance(base: &std::path::Path, run: &str, frameworks: &[String], include_leads: bool) -> anyhow::Result<()> {
+    use harness::compliance::{map_findings, Framework};
+    let dir = resolve_run(base, run)?;
+    let findings = load_findings(&dir)?;
+    let wanted: Vec<Framework> = if frameworks.is_empty() {
+        Framework::all().to_vec()
+    } else {
+        frameworks.iter().flat_map(|v| v.split([',', ';'])).filter_map(|f| Framework::parse(f.trim())).collect()
+    };
+    if wanted.is_empty() {
+        anyhow::bail!("no recognised framework — use pci-dss, hipaa or soc2");
+    }
+    for fw in wanted {
+        let report = map_findings(&findings, fw, !include_leads);
+        let md = report.to_markdown();
+        let out = dir.join(format!("compliance-{}.md", fw.as_str()));
+        std::fs::write(&out, &md)?;
+        println!("\n{}", md);
+        println!("  \x1b[2msaved → {}\x1b[0m", out.display());
+    }
+    Ok(())
+}
+
+async fn handle_poc(base: &std::path::Path, run: &str, repeats: usize, apply: bool) -> anyhow::Result<()> {
+    let dir = resolve_run(base, run)?;
+    let mut findings = load_findings(&dir)?;
+    // Scope the replay to the hosts the findings are on — a re-validation run
+    // must not reach past where the engagement was authorized.
+    let target = findings.iter().map(|f| harness::scope::host_of(&f.endpoint)).find(|h| !h.is_empty()).unwrap_or_default();
+    let policy = harness::scope::ScopePolicy::for_target(&format!("https://{target}"));
+    let validator = harness::poc::PocValidator::new(policy).with_repeats(repeats);
+    println!("  re-validating {} finding(s)…", findings.len());
+    let results = validator.validate_all(&findings).await;
+    for r in &results {
+        let color = match r.reproduction {
+            harness::poc::Reproduction::Reproduced => "1;32",
+            harness::poc::Reproduction::Gone => "1;31",
+            harness::poc::Reproduction::Changed => "1;33",
+            harness::poc::Reproduction::Unverifiable => "2",
+        };
+        println!("  \x1b[{color}m{:<13}\x1b[0m {}", r.reproduction.as_str(), r.detail);
+    }
+    println!("\n  {}", harness::poc::summary(&results));
+    if apply {
+        let by_id: std::collections::HashMap<&str, &harness::poc::PocResult> = results.iter().map(|r| (r.finding_id.as_str(), r)).collect();
+        for f in findings.iter_mut() {
+            if let Some(r) = by_id.get(f.id.as_str()) {
+                harness::poc::apply(f, r);
+            }
+        }
+        std::fs::write(dir.join("findings.json"), serde_json::to_string_pretty(&findings)?)?;
+        println!("  \x1b[2mwrote demotions back to findings.json — run `neurosploit rebuild {run}` to refresh the report\x1b[0m");
+    }
+    Ok(())
+}
+
+async fn handle_sandbox(cmd: SandboxCmd) -> anyhow::Result<()> {
+    use harness::sandbox::{Sandbox, SandboxConfig};
+    let mk = |image: Option<String>, mount: Option<String>| -> anyhow::Result<Sandbox> {
+        let mut sc = SandboxConfig::default();
+        if let Some(i) = image { sc = sc.with_image(&i); }
+        if let Some(m) = mount { sc = sc.mounting(&m); }
+        Sandbox::new(sc).map_err(|e| anyhow::anyhow!(e))
+    };
+    match cmd {
+        SandboxCmd::Up { image, mount } => {
+            let sb = mk(image, mount)?;
+            println!("  {} runtime", sb.runtime().bin());
+            match sb.ensure().await {
+                Ok(msg) => println!("  \x1b[1;32m✓\x1b[0m {msg}"),
+                Err(e) => anyhow::bail!(e),
+            }
+        }
+        SandboxCmd::Exec { command, image } => {
+            let sb = mk(image, None)?;
+            let line = command.join(" ");
+            if line.trim().is_empty() { anyhow::bail!("nothing to run"); }
+            let r = sb.exec(&line).await.map_err(|e| anyhow::anyhow!(e))?;
+            print!("{}", r.stdout);
+            eprint!("{}", r.stderr);
+            if r.timed_out { anyhow::bail!("command timed out"); }
+            std::process::exit(r.code);
+        }
+        SandboxCmd::Install { packages } => {
+            if packages.is_empty() { anyhow::bail!("name at least one package"); }
+            let sb = mk(None, None)?;
+            let refs: Vec<&str> = packages.iter().map(|s| s.as_str()).collect();
+            println!("  installing {} in the sandbox…", refs.join(", "));
+            let r = sb.install(&refs).await.map_err(|e| anyhow::anyhow!(e))?;
+            if r.ok() { println!("  \x1b[1;32m✓ installed\x1b[0m"); } else { eprintln!("{}", r.stderr); anyhow::bail!("install failed"); }
+        }
+        SandboxCmd::Down => {
+            let sb = mk(None, None)?;
+            sb.teardown().await;
+            println!("  container removed");
+        }
     }
     Ok(())
 }
@@ -1430,6 +1623,15 @@ fn apply_network(cfg: &mut RunConfig, cli: &Cli) -> anyhow::Result<()> {
     cfg.oob_dns = oob_dns;
     cfg.sms = sms;
     Ok(())
+}
+
+/// Split comma/semicolon-joined framework names into a flat, lowercased list.
+fn revalidate_split(vals: &[String]) -> Vec<String> {
+    vals.iter()
+        .flat_map(|v| v.split([',', ';']))
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn parse_only(vals: &[String]) -> Vec<String> {

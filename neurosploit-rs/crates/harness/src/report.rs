@@ -60,6 +60,38 @@ pub fn html(target: &str, findings: &[Finding], meta: &EngagementMeta) -> String
 
 /// As [`html`], but told which scripts exist in the run's `pocs/` directory so
 /// each finding can link the ones it cites.
+/// Render a compliance-mapping section (one table per framework) and splice it
+/// into a finished report just before `</body>`. Kept separate from
+/// `html_with_pocs` so the base report has no notion of compliance and callers
+/// opt in only when frameworks were requested.
+pub fn with_compliance(html: String, findings: &[Finding], frameworks: &[String]) -> String {
+    let mut section = String::new();
+    for name in frameworks {
+        let Some(fw) = crate::compliance::Framework::parse(name) else { continue };
+        let r = crate::compliance::map_findings(findings, fw, true);
+        section.push_str(&format!(
+            "<h2>Compliance — {}</h2><p class=m style=\"font-style:italic\">{}</p>",
+            esc(&r.framework_title), esc(&r.disclaimer())
+        ));
+        if r.controls_with_gaps.is_empty() {
+            section.push_str("<p>No confirmed finding mapped to a control in this framework. This is not evidence of compliance — only that this engagement found no gap here.</p>");
+            continue;
+        }
+        section.push_str("<table class=fieldgrid><tr><th>Control</th><th>Requirement</th><th>Severity</th><th>Findings</th></tr>");
+        for g in &r.controls_with_gaps {
+            section.push_str(&format!(
+                "<tr><td><b>{}</b></td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                esc(&g.control.id), esc(&g.control.requirement), esc(&g.max_severity), g.finding_ids.len()
+            ));
+        }
+        section.push_str("</table>");
+    }
+    if section.is_empty() {
+        return html;
+    }
+    html.replacen("<p class=footer>", &format!("{section}<p class=footer>"), 1)
+}
+
 pub fn html_with_pocs(target: &str, findings: &[Finding], meta: &EngagementMeta, available_pocs: &[String]) -> String {
     let available_pocs = available_pocs.to_vec();
     let mut sorted = findings.to_vec();

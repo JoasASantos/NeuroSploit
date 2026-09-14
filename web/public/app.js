@@ -473,6 +473,10 @@ function renderReview() {
     { k: 'Budget', v: budgetSummary() },
     { k: 'Egress', v: state.authz.transport || 'direct' },
     { k: 'Out-of-band', v: state.authz.oobDomain ? `*.${state.authz.oobDomain}` : 'none — blind classes stay leads' },
+    { k: 'Intercept', v: $('#fieldIntercept').value === 'off' ? 'direct' : $('#fieldIntercept').value },
+    { k: 'Sandbox', v: $('#fieldSandbox').value ? 'Kali container' : 'host' },
+    { k: 'PoC re-validation', v: $('#fieldRevalidatePoc').checked ? 'on' : 'off' },
+    { k: 'Compliance', v: (['fieldCompPci', 'fieldCompHipaa', 'fieldCompSoc2'].map((id) => $(`#${id}`).checked && $(`#${id}`).value).filter(Boolean).join(', ')) || 'none' },
     { k: 'Target auth', v: state.auth.header ? 'header set' : (state.auth.roles.length ? `${state.auth.roles.length} role(s)` : 'none') },
   ];
   $('#reviewGrid').innerHTML = items.map((it) => `
@@ -514,6 +518,10 @@ async function startExploitation() {
     // Budget is opt-in: 'unlimited' sends nothing, so a run nobody budgeted is
     // the same full run it was before this control existed.
     budget: $('#fieldBudget').value,
+    intercept: $('#fieldIntercept').value,
+    sandbox: $('#fieldSandbox').value || undefined,
+    revalidatePoc: $('#fieldRevalidatePoc').checked,
+    compliance: ['fieldCompPci', 'fieldCompHipaa', 'fieldCompSoc2'].map((id) => $(`#${id}`).checked && $(`#${id}`).value).filter(Boolean),
     tokenLimit: Number($('#fieldTokenLimit').value) || undefined,
     order: $('#fieldOrder').value,
     samplePerRoute: Number($('#fieldSampleRoute').value) || undefined,

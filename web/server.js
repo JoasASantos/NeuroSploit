@@ -603,6 +603,10 @@ function buildArgs(body) {
   if (body.oobHttp) args.push('--oob-http', body.oobHttp);
   if (body.oobDns) args.push('--oob-dns', body.oobDns);
   if (body.sms) args.push('--sms', body.sms);
+  if (body.intercept && body.intercept !== 'off') args.push('--intercept', body.intercept);
+  if (body.sandbox) args.push('--sandbox', body.sandbox === 'default' ? '' : body.sandbox);
+  if (body.revalidatePoc) args.push('--revalidate-poc');
+  for (const fw of body.compliance || []) args.push('--compliance', fw);
   // Authorization: the signed grant caps the scope, the extra in-scope entries
   // can only narrow within it, and the environment scales every risk score.
   for (const entry of body.inScope || []) args.push('--in-scope', entry);
@@ -672,6 +676,10 @@ function authArgs(body) {
   if (body.oobHttp) args.push('--oob-http', body.oobHttp);
   if (body.oobDns) args.push('--oob-dns', body.oobDns);
   if (body.sms) args.push('--sms', body.sms);
+  if (body.intercept && body.intercept !== 'off') args.push('--intercept', body.intercept);
+  if (body.sandbox) args.push('--sandbox', body.sandbox === 'default' ? '' : body.sandbox);
+  if (body.revalidatePoc) args.push('--revalidate-poc');
+  for (const fw of body.compliance || []) args.push('--compliance', fw);
   if (body.budget && body.budget !== 'unlimited') args.push('--budget', body.budget);
   if (body.tokenLimit) args.push('--token-limit', String(body.tokenLimit));
   if (body.deepTestLimit) args.push('--deep-test-limit', String(body.deepTestLimit));

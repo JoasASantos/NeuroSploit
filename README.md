@@ -563,6 +563,59 @@ messages. A rate-limit claim then counts *delivered messages carrying distinct
 codes* — not HTTP 200s, which is what makes the finding survive a vendor's
 review.
 
+### Intercepting proxy — own it, or plug into the tool
+
+The engagement flows through one point the operator can watch and replay:
+
+```bash
+--intercept burp            # route straight through Burp / Caido / ZAP / mitmproxy
+--intercept own             # the harness's own recording interceptor (passive discovery)
+--intercept own+burp        # record here, forward to Burp for full HTTPS interception
+```
+
+The own interceptor records plaintext HTTP in full and tunnels HTTPS honestly
+(host, timing, bytes — no fake CA). Flows land in `flows.jsonl`; distinct hosts
+become passive-discovery leads. Both the harness and the agents' child commands
+route through it.
+
+### Sandbox — run the dangerous half off the host
+
+```bash
+--sandbox                       # Kali container (kalilinux/kali-rolling)
+--sandbox my/custom-image       # or your own
+neurosploit sandbox up|exec|install|down
+```
+
+No host network, no mounted docker socket, `no-new-privileges`. The workdir is
+mounted so evidence comes back; the proxy/transport route is inherited. A
+missing runtime is an **explicit** error — never a silent fallback to running
+attack payloads on the host.
+
+### PoC re-validation — the harness checking its own work
+
+```bash
+--revalidate-poc                       # during a run
+neurosploit poc <run> --repeats 3 --apply   # on a finished run
+```
+
+Re-runs each finding's recorded proof and sorts the result into **reproduced ·
+changed · gone · unverifiable**. The last two are kept apart on purpose: a PoC
+that *could not be tested* (out of scope now, state-changing, nothing recorded)
+is never reported as one that *failed*. State-changing requests are never
+re-run to "confirm" them.
+
+### Compliance mapping — PCI-DSS · HIPAA · SOC 2
+
+```bash
+neurosploit run <t> --compliance pci-dss,hipaa,soc2    # section in the report
+neurosploit compliance <run> --framework soc2          # on a finished run
+```
+
+Maps confirmed findings onto control requirements (PCI-DSS 6.2.4, HIPAA
+§164.312(e), SOC 2 CC7.1, …). It **indicates gaps for an assessor** — never a
+compliance verdict, and the disclaimer that says so is rendered on top,
+non-negotiably. Absence of a finding is never presented as compliance.
+
 ### Internal network & Active Directory — the engagement as a graph
 
 An internal result is a path, not a list. `Asset → Exposure → Weakness →
@@ -660,6 +713,10 @@ git clone https://github.com/digininja/DVWA /tmp/DVWA
 | `--deep-test-limit N` | Cap on findings that get deep reasoning. |
 | `--coverage-first` / `--depth-first` | Map everything first, or chase a lead as it appears. |
 | `--sample-per-route N` | Requests per endpoint family — `/api/users/{id}` is sampled, not enumerated. |
+| `--intercept <spec>` | Route through Burp/Caido/ZAP/mitmproxy, an own recording interceptor, or both (`own+burp`). |
+| `--sandbox [image]` | Run agent commands in a Kali container (docker/podman) instead of on the host. |
+| `--revalidate-poc` | Re-run every PoC after validation; demote any that no longer reproduces. |
+| `--compliance pci-dss,hipaa,soc2` | Map findings onto compliance controls in the report. |
 | `-v, --verbose` | Log each agent as it launches, recon, and votes. |
 
 ### Authentication — run via API key *or* subscription

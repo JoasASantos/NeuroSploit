@@ -24,8 +24,8 @@ The tools compared: [Strix](https://github.com/usestrix/strix) (Apache 2.0),
 | Black-box | ✅ | ⚠️ needs source | ✅ | ✅ |
 | White-box | ✅ SAST+DAST | ✅ core design | ⚠️ | ✅ + grey-box |
 | Browser validation | ✅ built-in | ✅ | ✅ | ✅ Playwright, XSS proven by execution |
-| Intercepting proxy | ✅ Caido | — | ✅ Burp | ⚠️ upstream proxy only |
-| Container isolation | ✅ | ✅ ephemeral Docker | ✅ | ❌ **runs on the host** |
+| Intercepting proxy | ✅ Caido | — | ✅ Burp | ✅ own interceptor + Burp/Caido/ZAP/mitmproxy |
+| Container isolation | ✅ | ✅ ephemeral Docker | ✅ | ✅ Kali docker/podman (no host net, no socket) |
 | Exploit-only reporting | ✅ "working PoCs" | ✅ "no exploit, no report" | ✅ | ⚠️ **different rule — see below** |
 | CVSS | tag on the finding | not scored | ✅ | ✅ **evidence-graded, computed not guessed** |
 | Multi-model adversarial vote | — | — | — | ✅ |
@@ -36,6 +36,9 @@ The tools compared: [Strix](https://github.com/usestrix/strix) (Apache 2.0),
 | Self-hosted OOB channel (blind SSRF/XXE/RCE) | via tools | — | ✅ Burp | ✅ own DNS+HTTP listeners |
 | Fail-closed egress (VPN/bastion/tunnel) | — | — | — | ✅ |
 | WAF-aware inference (block ≠ "not vulnerable") | — | — | — | ✅ |
+| PoC re-validation (re-run, demote what's gone) | — | — | — | ✅ |
+| Compliance mapping (PCI-DSS/HIPAA/SOC 2) | SOC2/ISO/PCI report shapes | — | ✅ | ✅ control-level, disclaimer enforced |
+| Deterministic per-CWE validators | — | — | — | ✅ 27 classes |
 | FAIR loss quantification | — | — | — | ✅ |
 | Provenance / watermarking | — | — | — | ✅ |
 | Published benchmark results | dir exists, empty | — | marketing | ❌ **none, including this one** |
@@ -109,15 +112,18 @@ stopped". Long engagements die of token exhaustion more often than of bugs.
 
 ## Where NeuroSploit is behind — honestly
 
-**1. No container isolation.** Strix and Shannon run each scan in an ephemeral
-container. NeuroSploit runs on the operator's host. For a tool that executes
-attacker-supplied-shaped payloads this is the largest single gap in the
-comparison, and the next thing worth building.
+**1. Container isolation is new and shallow.** NeuroSploit now runs commands in
+a Kali docker/podman container (no host network, no mounted socket,
+`no-new-privileges`), which closes the headline gap — but Strix and Shannon
+have run this way from day one and have found the sharp edges. Ours is young.
+And wiring *every* agent-authored command through the container (versus the
+harness's own tool commands) is still partial.
 
-**2. No real intercepting proxy.** Strix ships Caido integration; Penligent
-drives Burp. NeuroSploit can route through an upstream proxy — and now through
-a VPN, bastion, or Cloudflare tunnel, fail-closed — but it does not own the
-request/response stream, which limits replay fidelity and passive discovery.
+**2. TLS interception delegates to the tools.** The own interceptor records
+plaintext HTTP fully and tunnels HTTPS honestly (host, timing, byte counts) —
+for decrypted HTTPS it chains to Burp/Caido/ZAP/mitmproxy, which own the CA
+machinery. That is a deliberate honesty split, not a full re-implementation of
+what those tools do.
 
 **3. Nobody has run it against a benchmark.** Strix has an empty `benchmarks/`
 directory, Shannon publishes none, and neither does this project. Until
