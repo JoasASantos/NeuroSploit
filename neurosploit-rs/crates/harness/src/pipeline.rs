@@ -371,6 +371,7 @@ fn engagement_ops(cfg: &RunConfig) -> String {
     };
     let oob = oob_ops(cfg);
     let sms = sms_ops(cfg);
+    let waf = WAF_OPS;
     format!(
         "ENGAGEMENT OPS — TEST ACCOUNTS & VAULT:\n\
          - CREDENTIAL VAULT: whenever you create a test account or generate any credential, APPEND one JSON line to \
@@ -385,7 +386,7 @@ fn engagement_ops(cfg: &RunConfig) -> String {
            explicit about which findings needed a login. In black-box, record in `how`/evidence exactly what you did \
            to create the user.\n\
          - {temp}\n\
-         {oob}{sms}\n"
+         {oob}{sms}{waf}\n"
     )
 }
 
@@ -407,6 +408,13 @@ fn oob_ops(cfg: &RunConfig) -> String {
         token_prefix = crate::provenance::SIGIL.to_lowercase()
     )
 }
+
+/// What an agent must do when the edge answers instead of the application.
+///
+/// Both failure directions are named explicitly, because agents make both: a
+/// 403 from a WAF read as "not vulnerable" (the expensive one), and a block
+/// page echoing the payload read as reflection (the embarrassing one).
+const WAF_OPS: &str = "- WAF / EDGE: if a response came from a CDN or WAF rather than the application (vendor headers plus block-page      wording, a challenge, or HTTP 429), the application NEVER SAW your request. Never record that as 'tested, not      vulnerable' — record that the control could not be reached, and say which probes were blocked. A payload echoed      back by a block page is the EDGE reflecting it, not the application: it is not XSS evidence. On a 429 or a browser      challenge, pace the requests and retry — that is not a verdict on the payload.\n";
 
 /// Inbound SMS instructions, when a number is configured.
 fn sms_ops(cfg: &RunConfig) -> String {

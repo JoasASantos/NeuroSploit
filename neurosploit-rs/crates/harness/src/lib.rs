@@ -40,6 +40,7 @@ pub mod transport;
 pub mod types;
 pub mod uncertainty;
 pub mod validation;
+pub mod waf;
 
 pub use agents::{Agent, Library};
 pub use models::{

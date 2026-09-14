@@ -33,6 +33,9 @@ The tools compared: [Strix](https://github.com/usestrix/strix) (Apache 2.0),
 | Hash-chained audit trail | — | — | — | ✅ |
 | OT/SCADA/ICS safety policy | — | — | — | ✅ |
 | Internal network / AD attack graph | — | — | — | ✅ |
+| Self-hosted OOB channel (blind SSRF/XXE/RCE) | via tools | — | ✅ Burp | ✅ own DNS+HTTP listeners |
+| Fail-closed egress (VPN/bastion/tunnel) | — | — | — | ✅ |
+| WAF-aware inference (block ≠ "not vulnerable") | — | — | — | ✅ |
 | FAIR loss quantification | — | — | — | ✅ |
 | Provenance / watermarking | — | — | — | ✅ |
 | Published benchmark results | dir exists, empty | — | marketing | ❌ **none, including this one** |
@@ -112,9 +115,9 @@ attacker-supplied-shaped payloads this is the largest single gap in the
 comparison, and the next thing worth building.
 
 **2. No real intercepting proxy.** Strix ships Caido integration; Penligent
-drives Burp. NeuroSploit can route through an upstream proxy but does not own
-the request/response stream, which limits replay fidelity and passive
-discovery.
+drives Burp. NeuroSploit can route through an upstream proxy — and now through
+a VPN, bastion, or Cloudflare tunnel, fail-closed — but it does not own the
+request/response stream, which limits replay fidelity and passive discovery.
 
 **3. Nobody has run it against a benchmark.** Strix has an empty `benchmarks/`
 directory, Shannon publishes none, and neither does this project. Until
@@ -164,9 +167,9 @@ a comparison of intentions.
 |---|---|
 | Agents / skills | 446 (255 vulnerability, plus recon, code, infra, AI, chains, meta) |
 | Deterministic validators | 22 CWE classes with evidence preconditions |
-| Rust modules | 32 |
+| Rust modules | 37 |
 | Rust LOC | ~24k |
-| Tests | 260, all passing |
+| Tests | 296, all passing |
 
 ## Next, to make this a real benchmark
 
