@@ -1449,6 +1449,80 @@ async fn validate(candidates: Vec<Finding>, pool: &ModelPool, sys: &str, vote_n:
     flagged
 }
 
+/// One bounded collection round per undecided finding.
+///
+/// Only gaps another request can close trigger a round: a missing baseline is
+/// one request away, a confirmed account behind an email gate is not, and
+/// retrying the second is how a budget disappears while nothing changes.
+async fn close_evidence_gaps(cfg: &RunConfig, findings: Vec<Finding>, tx: &Sender<String>) -> Vec<Finding> {
+    if std::env::var("NEUROSPLOIT_UNCERTAINTY").unwrap_or_default() == "off" {
+        return findings;
+    }
+    let policy = effective_scope(cfg);
+    let engine = crate::replay::ReplayEngine::new(policy.clone());
+    let browser = crate::browser::BrowserProbe::new(policy);
+    let rounds = crate::uncertainty::Rounds::default();
+    let mut out = Vec::with_capacity(findings.len());
+    let mut closed = 0usize;
+
+    for mut f in findings {
+        let mut assessment = crate::uncertainty::assess(&f);
+        while assessment.wants_more_evidence(0.5) && rounds.take(&f.id) {
+            let actions = crate::uncertainty::next_actions(&assessment);
+            let mut fresh = crate::validation::Evidence::default();
+            let mut acted = false;
+            for action in actions {
+                match action {
+                    crate::uncertainty::Action::CaptureBaseline | crate::uncertainty::Action::Repeat => {
+                        let Some(attack) = f.evidence_data.as_ref().and_then(|e| e.attack.clone()) else { continue };
+                        let spec = crate::replay::spec_of(&attack);
+                        let (mut repeats, _) = engine.repeat(&spec, 2).await;
+                        if !repeats.is_empty() {
+                            fresh.repeats.append(&mut repeats);
+                            acted = true;
+                        }
+                    }
+                    crate::uncertainty::Action::RunBrowser => {
+                        let marker = f
+                            .evidence_data
+                            .as_ref()
+                            .map(|e| e.marker.clone())
+                            .filter(|m| !m.is_empty())
+                            .unwrap_or_else(|| crate::validation::canary("nsxss"));
+                        let r = browser.confirm_execution(&f.endpoint, &marker, None).await;
+                        if r.available {
+                            fresh.marker = marker;
+                            fresh.browser_executed = r.proves_execution();
+                            fresh.marker_observed = r.marker_observed;
+                            fresh.notes.extend(r.notes);
+                            acted = true;
+                        }
+                    }
+                    // A second identity needs credentials the harness was not
+                    // given, and an OOB channel needs infrastructure it does not
+                    // own yet. Both are recorded as gaps rather than attempted.
+                    _ => {}
+                }
+            }
+            if !acted {
+                break;
+            }
+            crate::uncertainty::merge_evidence(&mut f, fresh);
+            let after = crate::uncertainty::assess(&f);
+            if after.uncertainty < assessment.uncertainty {
+                closed += 1;
+            }
+            assessment = after;
+        }
+        crate::uncertainty::note_gaps(&mut f, &assessment);
+        out.push(f);
+    }
+    if closed > 0 {
+        let _ = tx.send(format!("uncertainty engine: {closed} finding(s) decided after collecting more evidence")).await;
+    }
+    out
+}
+
 /// Run the Evidence Prosecutor over findings that carry claims.
 ///
 /// It cannot drop anything — it returns a narrowed claim set, and the decision
@@ -1769,6 +1843,12 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
             )).await;
         }
     }
+
+    // Uncertainty loop: before judging, ask whether the evidence is thin for a
+    // reason the harness can still fix. A `needs-review` verdict hands a human
+    // the same thin evidence and asks them to do the collecting — the wrong
+    // party, since the harness still has the target and the tooling.
+    findings = close_evidence_gaps(&cfg, findings, &tx).await;
 
     // Deterministic validation. The votes above are models checking models; this
     // pass asks whether the recorded artifacts actually demonstrate the class.

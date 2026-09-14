@@ -32,6 +32,7 @@ pub mod report;
 pub mod rl;
 pub mod scope;
 pub mod types;
+pub mod uncertainty;
 pub mod validation;
 
 pub use agents::{Agent, Library};
@@ -54,4 +55,5 @@ pub use prosecutor::{ProsecutorVerdict, PROSECUTOR_SYS};
 pub use replay::{ReplayEngine, ReqSpec};
 pub use scope::{Action as ScopeAction, Decision as ScopeDecision, ScopePolicy};
 pub use types::{Finding, RunConfig};
+pub use uncertainty::{assess as assess_uncertainty, Assessment, Gap, Rounds};
 pub use validation::{judge as judge_finding, CweValidator, Evidence, Verdict};
