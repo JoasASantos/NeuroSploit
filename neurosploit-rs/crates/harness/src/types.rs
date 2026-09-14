@@ -236,6 +236,26 @@ pub struct RunConfig {
     /// Engagement policy: risk ceilings, reasoning rules, proof requirements.
     #[serde(default)]
     pub policy: crate::policy::EngagementPolicy,
+    /// Egress route (`direct`, `socks5://…`, `openvpn:…`, `ssh://user@host`,
+    /// `cloudflared://host:port`). An internal target with no transport is
+    /// refused rather than tested against whatever network this host is on.
+    #[serde(default)]
+    pub transport: Option<String>,
+    /// Out-of-band interaction domain (a wildcard pointed at our listeners).
+    /// Without it the blind classes — SSRF, XXE, blind RCE — cannot be proven,
+    /// only suspected.
+    #[serde(default)]
+    pub oob_domain: Option<String>,
+    /// Where the OOB HTTP listener binds.
+    #[serde(default)]
+    pub oob_http: Option<String>,
+    /// Where the OOB DNS listener binds, when the DNS channel is delegated.
+    #[serde(default)]
+    pub oob_dns: Option<String>,
+    /// Inbound SMS for OTP and rate-limit work: `twilio:<sid>:<token>:<number>`
+    /// or `webhook:<url>:<number>`.
+    #[serde(default)]
+    pub sms: Option<String>,
     /// How much compute to spend and where. Defaults to unlimited, which is the
     /// behaviour that existed before budgets — an operator who asks for nothing
     /// gets the full run.
@@ -287,6 +307,11 @@ impl RunConfig {
             capability: None,
             policy: Default::default(),
             budget: Default::default(),
+            transport: None,
+            oob_domain: None,
+            oob_http: None,
+            oob_dns: None,
+            sms: None,
         }
     }
 }

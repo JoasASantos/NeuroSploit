@@ -598,6 +598,11 @@ function buildArgs(body) {
   if (body.order === 'depth-first') args.push('--depth-first');
   else if (body.order === 'coverage-first') args.push('--coverage-first');
   if (body.samplePerRoute) args.push('--sample-per-route', String(body.samplePerRoute));
+  if (body.transport && body.transport !== 'direct') args.push('--transport', body.transport);
+  if (body.oobDomain) args.push('--oob-domain', body.oobDomain);
+  if (body.oobHttp) args.push('--oob-http', body.oobHttp);
+  if (body.oobDns) args.push('--oob-dns', body.oobDns);
+  if (body.sms) args.push('--sms', body.sms);
   // Authorization: the signed grant caps the scope, the extra in-scope entries
   // can only narrow within it, and the environment scales every risk score.
   for (const entry of body.inScope || []) args.push('--in-scope', entry);
@@ -660,6 +665,13 @@ function authArgs(body) {
   if (body.capability) args.push('--capability-token', body.capability);
   if (body.environment) args.push('--environment', body.environment);
   if (body.policyProfile) args.push('--policy', body.policyProfile);
+  // Egress and the OOB channel are launcher-level, like the grant: a session
+  // must not be able to re-route its own traffic once it is running.
+  if (body.transport && body.transport !== 'direct') args.push('--transport', body.transport);
+  if (body.oobDomain) args.push('--oob-domain', body.oobDomain);
+  if (body.oobHttp) args.push('--oob-http', body.oobHttp);
+  if (body.oobDns) args.push('--oob-dns', body.oobDns);
+  if (body.sms) args.push('--sms', body.sms);
   if (body.budget && body.budget !== 'unlimited') args.push('--budget', body.budget);
   if (body.tokenLimit) args.push('--token-limit', String(body.tokenLimit));
   if (body.deepTestLimit) args.push('--deep-test-limit', String(body.deepTestLimit));

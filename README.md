@@ -525,6 +525,44 @@ neurosploit provenance scan report.pdf.txt  # is this ours? which build?
 neurosploit provenance verify runs/ns-…     # manifest vs findings
 ```
 
+### Egress — how traffic reaches the target
+
+Internal engagements happen *through* something, and the dangerous failure is
+the silent one: with the VPN down, `10.20.0.15` is a machine on the operator's
+own network, and the scan succeeds against the wrong host. So egress is
+**fail-closed** — an internal target with no transport is refused before a
+single request leaves.
+
+```bash
+--transport socks5://127.0.0.1:1080
+--transport openvpn:/path/client.ovpn
+--transport ssh://red@bastion.corp                  # dynamic SOCKS forward
+--transport ssh://red@bastion.corp?forward=10.0.0.5:445   # one authorized host
+--transport cloudflared://db.internal.corp:5432
+```
+
+The route is also **verified** once it is up (the apparent source address has
+to change), and child processes inherit it.
+
+### Out-of-band channel & inbound SMS
+
+Blind SSRF, XXE, blind RCE and JNDI produce no visible response — so the
+harness runs its own Collaborator:
+
+```bash
+--oob-domain oob.yourdomain.com --oob-http 0.0.0.0:8080 --oob-dns 0.0.0.0:5353
+```
+
+Tokens carry the `JOASNSCOPE` sigil, callbacks are correlated by token, and the
+two levels of proof are kept apart in code: an **HTTP callback proves egress**,
+a **DNS query proves only that a resolver saw the name**. With no channel
+configured, agents are told explicitly that blind classes can only be leads.
+
+`--sms twilio:<sid>:<token>:<number>` (or `webhook:<url>:<number>`) receives OTP
+messages. A rate-limit claim then counts *delivered messages carrying distinct
+codes* — not HTTP 200s, which is what makes the finding survive a vendor's
+review.
+
 ### Internal network & Active Directory — the engagement as a graph
 
 An internal result is a path, not a list. `Asset → Exposure → Weakness →

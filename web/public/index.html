@@ -460,6 +460,38 @@
             <div class="field-help">OT blocks writes, disruptive actions, fuzzing and exploit payloads over industrial protocols, and caps the rate at ~1 req/s.</div>
           </div>
         </div>
+
+        <div class="section-title" style="margin-top:18px;">Egress &amp; out-of-band</div>
+        <div class="field-group">
+          <label class="field-label" for="transportSpec">Transport (how traffic reaches the target)</label>
+          <input id="transportSpec" type="text" placeholder="direct · socks5://127.0.0.1:1080 · openvpn:/path/client.ovpn · ssh://red@bastion.corp?forward=10.0.0.5:445 · cloudflared://db.internal:5432" spellcheck="false" />
+          <div class="field-help">
+            An <strong>internal</strong> target with no transport is <strong>refused</strong>, not tested — with the VPN down,
+            <code>10.20.0.15</code> belongs to whatever network this host is on, which is not the client's.
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field-group">
+            <label class="field-label" for="oobDomain">Out-of-band domain</label>
+            <input id="oobDomain" type="text" placeholder="oob.yourdomain.com" spellcheck="false" />
+            <div class="field-help">A wildcard pointed at this host. Without it blind SSRF/XXE/RCE can only be reported as leads — never confirmed.</div>
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="oobHttp">OOB HTTP listener</label>
+            <input id="oobHttp" type="text" placeholder="0.0.0.0:8080" spellcheck="false" />
+            <div class="field-help">Where callbacks land. An HTTP callback proves egress; a DNS query alone does not.</div>
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="oobDns">OOB DNS listener</label>
+            <input id="oobDns" type="text" placeholder="0.0.0.0:5353" spellcheck="false" />
+            <div class="field-help">Only if the zone is delegated here (NS record).</div>
+          </div>
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="smsSpec">Inbound SMS (OTP &amp; rate-limit work)</label>
+          <input id="smsSpec" type="text" placeholder="twilio:&lt;sid&gt;:&lt;token&gt;:+15550101  ·  webhook:https://…/inbox:+15550101" spellcheck="false" />
+          <div class="field-help">A throttling claim counts <strong>delivered messages carrying distinct codes</strong>, not HTTP 200s.</div>
+        </div>
       </div>
       <div class="modal-panel" data-mpanel="creds" hidden>
         <div class="field-group">

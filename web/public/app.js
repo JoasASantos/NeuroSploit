@@ -28,7 +28,7 @@ const state = {
   auth: { header: '', roles: [] },
   credsPath: '',
   // Engagement authorization: the grant, plus settings that may only narrow it.
-  authz: { capability: '', inScope: '', environment: 'production', policyProfile: 'web' },
+  authz: { capability: '', inScope: '', environment: 'production', policyProfile: 'web', transport: '', oobDomain: '', oobHttp: '', oobDns: '', sms: '' },
   keys: [],
   runs: [],
   currentJob: null,
@@ -471,6 +471,8 @@ function renderReview() {
     { k: 'Custom leads', v: String(state.customLeads.length) },
     { k: 'Votes / chain / recon', v: `${$('#fieldVotes').value} / ${$('#fieldChain').value} / ${$('#fieldRecon').value}` },
     { k: 'Budget', v: budgetSummary() },
+    { k: 'Egress', v: state.authz.transport || 'direct' },
+    { k: 'Out-of-band', v: state.authz.oobDomain ? `*.${state.authz.oobDomain}` : 'none — blind classes stay leads' },
     { k: 'Target auth', v: state.auth.header ? 'header set' : (state.auth.roles.length ? `${state.auth.roles.length} role(s)` : 'none') },
   ];
   $('#reviewGrid').innerHTML = items.map((it) => `
@@ -522,6 +524,11 @@ async function startExploitation() {
     inScope: state.authz.inScope.split(/[,;\s]+/).filter(Boolean),
     environment: state.authz.environment,
     policyProfile: state.authz.policyProfile,
+    transport: state.authz.transport || undefined,
+    oobDomain: state.authz.oobDomain || undefined,
+    oobHttp: state.authz.oobHttp || undefined,
+    oobDns: state.authz.oobDns || undefined,
+    sms: state.authz.sms || undefined,
   };
 
   $('#btnLaunch').disabled = true;
@@ -1711,6 +1718,11 @@ $('#capToken').addEventListener('input', (e) => {
 $('#inScope').addEventListener('input', (e) => { state.authz.inScope = e.target.value; });
 $('#envSelect').addEventListener('change', (e) => { state.authz.environment = e.target.value; });
 $('#policySelect').addEventListener('change', (e) => { state.authz.policyProfile = e.target.value; });
+// Egress and OOB live with authorization, not with run settings: they decide
+// WHICH network is being tested, which is an authorization question.
+for (const [id, key] of [['transportSpec', 'transport'], ['oobDomain', 'oobDomain'], ['oobHttp', 'oobHttp'], ['oobDns', 'oobDns'], ['smsSpec', 'sms']]) {
+  $(`#${id}`).addEventListener('input', (e) => { state.authz[key] = e.target.value.trim(); });
+}
 
 function renderRoleList() {
   const root = $('#roleList');

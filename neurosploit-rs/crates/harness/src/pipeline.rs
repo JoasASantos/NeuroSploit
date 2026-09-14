@@ -22,6 +22,24 @@ pub struct RunOutput {
     pub artifacts: Vec<String>,
 }
 
+/// A run that stopped before it started.
+///
+/// Returned when the egress or the authorization boundary refuses the target.
+/// Deliberately an empty result rather than an error value: the caller reports
+/// it the same way it reports any other run, and an empty findings list is the
+/// honest answer to "what did you find" when nothing was ever tested.
+fn aborted(cfg: &RunConfig) -> RunOutput {
+    RunOutput {
+        target: cfg.target.clone(),
+        findings: vec![],
+        agents_ran: vec![],
+        candidates: 0,
+        recon: String::new(),
+        workdir: cfg.workdir.clone().unwrap_or_default(),
+        artifacts: vec![],
+    }
+}
+
 const RECON_SYS: &str = "You are an elite web recon specialist on an AUTHORIZED engagement. Actively fetch the target with your tools and map the REAL attack surface in DEPTH — do not ask for permission, proceed:\n\
 - Crawl pages, forms and parameters; record every input, header, cookie and redirect.\n\
 - DOWNLOAD the linked JavaScript bundles (curl each script) and ANALYZE them: extract API endpoints/routes, hidden/undocumented parameters, GraphQL operations, secrets / API keys / tokens, cloud & third-party URLs, feature flags, and `sourceMappingURL` references (fetch source maps if exposed to recover original source).\n\
@@ -351,6 +369,8 @@ fn engagement_ops(cfg: &RunConfig) -> String {
         "DISPOSABLE EMAIL (disabled): if registration REQUIRES an email confirmation you cannot receive, stop and \
          report it as a blocker (do not attempt to bypass it). "
     };
+    let oob = oob_ops(cfg);
+    let sms = sms_ops(cfg);
     format!(
         "ENGAGEMENT OPS — TEST ACCOUNTS & VAULT:\n\
          - CREDENTIAL VAULT: whenever you create a test account or generate any credential, APPEND one JSON line to \
@@ -364,8 +384,41 @@ fn engagement_ops(cfg: &RunConfig) -> String {
            or \"unauthenticated\" (proven with no session), and `account` to which user/role you used. In grey-box, be \
            explicit about which findings needed a login. In black-box, record in `how`/evidence exactly what you did \
            to create the user.\n\
-         - {temp}\n\n"
+         - {temp}\n\
+         {oob}{sms}\n"
     )
+}
+
+/// The out-of-band channel's instructions, when one is configured.
+///
+/// Blind classes are the ones agents most often assert and least often prove.
+/// Handing them a domain we control turns "the parameter might be fetched
+/// server-side" into a callback with a source address on it — and the
+/// instruction is explicit that a DNS query alone is the weaker claim, because
+/// that is the overclaim this channel otherwise invites.
+fn oob_ops(cfg: &RunConfig) -> String {
+    let Some(domain) = cfg.oob_domain.as_deref().filter(|d| d.contains('.')) else {
+        return "- OUT-OF-BAND (not configured): you cannot prove blind SSRF/XXE/RCE. Report such a candidate as a LEAD                 with the evidence you do have — never as a confirmed finding.\n"
+            .to_string();
+    };
+    let token = crate::provenance::Provenance::process().marker("oob").to_lowercase();
+    format!(
+        "- OUT-OF-BAND CHANNEL (enabled): a listener answers for *.{domain}. Build payload hostnames as          `<token>.{domain}` where <token> starts with `{token_prefix}` — use a DIFFERENT token per probe so a          callback is attributable to one payload (example: `{token}`). Report the token you used in the finding's          `payload` field and the callback details in `evidence`. An HTTP callback proves the target connected out;          a DNS query alone proves only that a resolver saw the name — say which one you observed, and never write          'the server fetched my URL' on the strength of a DNS query.\n",
+        token_prefix = crate::provenance::SIGIL.to_lowercase()
+    )
+}
+
+/// Inbound SMS instructions, when a number is configured.
+fn sms_ops(cfg: &RunConfig) -> String {
+    match cfg.sms.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(spec) => {
+            let number = spec.rsplit(':').next().unwrap_or("");
+            format!(
+                "- INBOUND SMS (enabled): {number} receives messages for OTP and phone-verification flows. For a                  rate-limit claim, count DELIVERED messages carrying DISTINCT codes — not HTTP 200s. An endpoint that                  accepts twenty requests and sends one message is not unthrottled.\n"
+            )
+        }
+        None => String::new(),
+    }
 }
 /// Resolve the vault directory + this run's file stem. Prefer `.neurosploit/vault`
 /// (persistent project store) set by the app; fall back to the run workdir. Returns
@@ -613,6 +666,70 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
     // minted, so everything the run emits agrees on which run it came from.
     let prov = crate::provenance::Provenance::bind_run(&run_id(&cfg));
     let _ = tx.send(format!("notify: 🧬 provenance {} (build {})", prov.tag(), prov.build)).await;
+
+    // Egress, fail-closed. An internal target with the VPN down belongs to
+    // whatever network this host is on — not the client's — so the run stops
+    // here rather than producing a confident report about the wrong machines.
+    let transport = match cfg.transport.as_deref() {
+        Some(spec) => match crate::transport::Egress::parse(spec) {
+            Ok(e) => crate::transport::Transport::new(e),
+            Err(e) => {
+                let _ = tx.send(format!("notify: ✗ transport: {e}")).await;
+                return aborted(&cfg);
+            }
+        },
+        None => crate::transport::Transport::direct(),
+    };
+    if let Err(e) = transport.admits(&cfg.target) {
+        let _ = tx.send(format!("notify: ⛔ {e}")).await;
+        return aborted(&cfg);
+    }
+    if !matches!(transport.egress, crate::transport::Egress::Direct) {
+        match transport.connect().await {
+            Ok(label) => {
+                let _ = tx.send(format!("notify: 🔌 egress via {label}")).await;
+                match transport.verify(None).await {
+                    Ok(ip) => {
+                        let _ = tx.send(format!("notify: egress address {ip}")).await;
+                    }
+                    Err(e) => {
+                        let _ = tx.send(format!("notify: ⛔ {e}")).await;
+                        return aborted(&cfg);
+                    }
+                }
+            }
+            Err(e) => {
+                let _ = tx.send(format!("notify: ⛔ transport failed to come up: {e}")).await;
+                return aborted(&cfg);
+            }
+        }
+    }
+
+    // Out-of-band channel. Optional, but without it the blind classes can only
+    // ever be leads — which the prompt says explicitly rather than letting an
+    // agent assert a callback it had no way to receive.
+    if let Some(domain) = cfg.oob_domain.as_deref().filter(|d| d.contains('.')) {
+        let http: std::net::SocketAddr = cfg
+            .oob_http
+            .as_deref()
+            .unwrap_or("0.0.0.0:8080")
+            .parse()
+            .unwrap_or_else(|_| "0.0.0.0:8080".parse().unwrap());
+        let dns = cfg.oob_dns.as_deref().and_then(|d| d.parse().ok());
+        let collab = crate::oob::Collaborator::self_hosted(domain, http, dns);
+        match collab.listen().await {
+            Ok(()) => {
+                let note = collab.preflight().await.unwrap_or_else(|e| e);
+                let _ = tx.send(format!("notify: 📡 {note}")).await;
+            }
+            Err(e) => {
+                // A listener that did not bind would turn every blind class
+                // into a silent false negative, so say so loudly and carry on
+                // with the channel marked unavailable.
+                let _ = tx.send(format!("notify: ⚠ OOB listener did not start ({e}) — blind classes stay leads")).await;
+            }
+        }
+    }
     let _ = tx
         .send(format!(
             "Loaded {} agents ({} vuln / {} recon / {} code / {} meta) · models: {} · vote_n={} · concurrency={}{} · budget: {}",

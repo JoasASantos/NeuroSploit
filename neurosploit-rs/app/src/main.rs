@@ -49,6 +49,26 @@ struct Cli {
     /// Policy profile for an interactive session: web · ot.
     #[arg(long = "session-policy", global = true)]
     session_policy: Option<String>,
+    /// Egress: direct · socks5://host:port · http://host:port ·
+    /// openvpn:/path.ovpn · ssh://user@bastion[?forward=host:port] ·
+    /// cloudflared://host:port. An internal target with no transport is refused
+    /// rather than tested against whatever network this host is on. Global, so
+    /// an interactive session cannot change its own route mid-engagement.
+    #[arg(long = "transport", global = true)]
+    transport: Option<String>,
+    /// Out-of-band domain (a wildcard pointed at this host). Without it the
+    /// blind classes — SSRF, XXE, blind RCE — can only be reported as leads.
+    #[arg(long = "oob-domain", global = true)]
+    oob_domain: Option<String>,
+    /// Where the OOB HTTP listener binds (default 0.0.0.0:8080).
+    #[arg(long = "oob-http", global = true)]
+    oob_http: Option<String>,
+    /// Where the OOB DNS listener binds, when the zone is delegated to us.
+    #[arg(long = "oob-dns", global = true)]
+    oob_dns: Option<String>,
+    /// Inbound SMS: twilio:<sid>:<token>:<number> or webhook:<url>:<number>.
+    #[arg(long = "sms", global = true)]
+    sms: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -464,6 +484,11 @@ async fn main() -> anyhow::Result<()> {
                 in_scope: cli.session_in_scope.clone(),
                 environment: cli.session_environment.clone(),
                 policy: cli.session_policy.clone(),
+                transport: cli.transport.clone(),
+                oob_domain: cli.oob_domain.clone(),
+                oob_http: cli.oob_http.clone(),
+                oob_dns: cli.oob_dns.clone(),
+                sms: cli.sms.clone(),
             };
             repl::repl(&base, auth).await?;
             return Ok(());
@@ -520,6 +545,7 @@ async fn main() -> anyhow::Result<()> {
             cfg.pinned = parse_only(&only);
             apply_authorization(&mut cfg, &in_scope, cli.capability_token.clone(), &environment, &policy)?;
             apply_budget(&mut cfg, budget.as_deref(), token_limit, deep_test_limit, coverage_first, depth_first, sample_per_route)?;
+            apply_network(&mut cfg, &cli)?;
             if !models.is_empty() {
                 cfg.models = models;
             }
@@ -1367,6 +1393,42 @@ fn apply_budget(
     b.sample_per_route = sample_per_route.max(1);
     println!("  \x1b[2mbudget: {}\x1b[0m", b.summary());
     cfg.budget = b;
+    Ok(())
+}
+
+/// Egress route, out-of-band channel and inbound SMS.
+///
+/// The transport spec is parsed here rather than at run time so a typo fails
+/// on the command line instead of three minutes into an engagement.
+fn apply_network(cfg: &mut RunConfig, cli: &Cli) -> anyhow::Result<()> {
+    let (transport, oob_domain, oob_http, oob_dns, sms) = (
+        cli.transport.clone(),
+        cli.oob_domain.clone(),
+        cli.oob_http.clone(),
+        cli.oob_dns.clone(),
+        cli.sms.clone(),
+    );
+    if let Some(spec) = transport {
+        let egress = harness::transport::Egress::parse(&spec).map_err(|e| anyhow::anyhow!(e))?;
+        println!("  \x1b[2megress: {}\x1b[0m", egress.label());
+        cfg.transport = Some(spec);
+    }
+    if let Some(d) = oob_domain {
+        if !d.contains('.') {
+            anyhow::bail!("--oob-domain needs a real domain whose wildcard points at this host");
+        }
+        println!("  \x1b[2mout-of-band: *.{d}\x1b[0m");
+        cfg.oob_domain = Some(d);
+    }
+    for (val, label) in [(&oob_http, "--oob-http"), (&oob_dns, "--oob-dns")] {
+        if let Some(v) = val {
+            v.parse::<std::net::SocketAddr>()
+                .map_err(|_| anyhow::anyhow!("{label} must be host:port, got `{v}`"))?;
+        }
+    }
+    cfg.oob_http = oob_http;
+    cfg.oob_dns = oob_dns;
+    cfg.sms = sms;
     Ok(())
 }
 

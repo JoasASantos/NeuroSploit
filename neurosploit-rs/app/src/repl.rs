@@ -254,6 +254,13 @@ struct RunRecord {
 }
 
 struct Session {
+    /// Egress and out-of-band configuration, handed down from the launcher —
+    /// not settable from inside the session (see [`SessionAuth`]).
+    transport: Option<String>,
+    oob_domain: Option<String>,
+    oob_http: Option<String>,
+    oob_dns: Option<String>,
+    sms: Option<String>,
     models: Vec<String>,
     subscription: bool,
     mcp: bool,
@@ -301,6 +308,11 @@ struct Session {
 impl Default for Session {
     fn default() -> Self {
         Session {
+            transport: None,
+            oob_domain: None,
+            oob_http: None,
+            oob_dns: None,
+            sms: None,
             models: vec!["anthropic:claude-opus-4-8".into()],
             subscription: harness::installed_cli_backends().contains(&"claude"),
             mcp: false,
@@ -413,6 +425,14 @@ pub struct SessionAuth {
     pub in_scope: Vec<String>,
     pub environment: Option<String>,
     pub policy: Option<String>,
+    /// Egress route. Passed in like the grant, and for the same reason: a
+    /// session that can re-route its own traffic mid-engagement can leave the
+    /// network it was authorized on.
+    pub transport: Option<String>,
+    pub oob_domain: Option<String>,
+    pub oob_http: Option<String>,
+    pub oob_dns: Option<String>,
+    pub sms: Option<String>,
 }
 
 pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
@@ -453,6 +473,17 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
     }
     for entry in &auth.in_scope {
         s.policy.allow(entry);
+    }
+    s.transport = auth.transport.clone();
+    s.oob_domain = auth.oob_domain.clone();
+    s.oob_http = auth.oob_http.clone();
+    s.oob_dns = auth.oob_dns.clone();
+    s.sms = auth.sms.clone();
+    if let Some(t) = &s.transport {
+        println!("  \x1b[2m🔌 egress: {t}\x1b[0m");
+    }
+    if let Some(d) = &s.oob_domain {
+        println!("  \x1b[2m📡 out-of-band: *.{d}\x1b[0m");
     }
     if let Some(token) = auth.capability.as_deref() {
         match harness::capability::key_from_env() {
@@ -1447,6 +1478,11 @@ async fn run(base: &Path, s: &Session, history: &mut Vec<RunRecord>) {
     cfg.scope = s.policy.clone();
     cfg.capability = s.capability.clone();
     cfg.policy = s.engagement.clone();
+    cfg.transport = s.transport.clone();
+    cfg.oob_domain = s.oob_domain.clone();
+    cfg.oob_http = s.oob_http.clone();
+    cfg.oob_dns = s.oob_dns.clone();
+    cfg.sms = s.sms.clone();
     cfg.auth = s.auth.clone();
     cfg.pinned = s.pinned.clone();
     // Multiple /auth identities → prepend the access-control (IDOR/BOLA/BFLA) directive.
@@ -1525,6 +1561,11 @@ async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
     cfg.scope = s.policy.clone();
     cfg.capability = s.capability.clone();
     cfg.policy = s.engagement.clone();
+    cfg.transport = s.transport.clone();
+    cfg.oob_domain = s.oob_domain.clone();
+    cfg.oob_http = s.oob_http.clone();
+    cfg.oob_dns = s.oob_dns.clone();
+    cfg.sms = s.sms.clone();
     cfg.auth = s.auth.clone();
     cfg.pinned = s.pinned.clone();
     if matches!(mode_e, crate::Mode::Grey) { cfg.repo = s.repo.clone(); }
