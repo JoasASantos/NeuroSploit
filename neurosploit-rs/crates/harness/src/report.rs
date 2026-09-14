@@ -397,6 +397,55 @@ pub fn poc_scripts(f: &Finding, available: &[String]) -> Vec<String> {
     matches
 }
 
+/// Insert zero-width break opportunities into text that would otherwise
+/// overflow the page.
+///
+/// Typst's `raw` does not wrap, so a 300-character URL-encoded POST body ran
+/// off the page edge. The first attempt at a fix was worse: it inserted breaks
+/// every N characters regardless of context, which chopped ordinary prose
+/// mid-word — "rota ted", "lockoutOnFailu re=false". Evidence text is usually
+/// prose with a few long machine tokens embedded in it.
+///
+/// So the rule is per token: anything that fits on a line is left exactly as
+/// it is, and only a token too long to fit gets internal break points. A
+/// zero-width space carries no width and no content, so copying the text back
+/// out yields the original either way.
+pub fn wrappable(s: &str) -> String {
+    const ZWSP: char = '\u{200b}';
+    // Roughly the character budget of one line in the report's 7.5pt mono at
+    // the page width. Prose words never reach it; encoded payloads always do.
+    const LONG: usize = 46;
+    const AFTER: &[char] = &['&', '?', '/', '=', ';', ',', '+', '%', '|'];
+
+    let mut out = String::with_capacity(s.len() + s.len() / 16);
+    for chunk in s.split_inclusive(char::is_whitespace) {
+        let (token, trailing) = match chunk.find(char::is_whitespace) {
+            Some(i) => (&chunk[..i], &chunk[i..]),
+            None => (chunk, ""),
+        };
+        if token.chars().count() <= LONG {
+            out.push_str(token);
+        } else {
+            let mut run = 0usize;
+            for ch in token.chars() {
+                out.push(ch);
+                run += 1;
+                if AFTER.contains(&ch) {
+                    out.push(ZWSP);
+                    run = 0;
+                } else if run >= LONG - 6 {
+                    // A base64 blob or a hash has no separators at all; break it
+                    // rather than let it push the margin.
+                    out.push(ZWSP);
+                    run = 0;
+                }
+            }
+        }
+        out.push_str(trailing);
+    }
+    out
+}
+
 /// Is the `typst` binary available on PATH?
 fn typst_available() -> bool {
     std::env::var_os("PATH")
@@ -446,17 +495,21 @@ pub fn typst_report(target: &str, findings: &[Finding], dir: &Path) -> std::io::
         let status = if needs_review(f) { "needs-review" } else { "confirmed" };
         let shots = format!("({})",
             f.screenshots.iter().map(|p| format!("{},", tq(p))).collect::<String>());
+        // Steps go as an ARRAY so the template can render a real numbered
+        // list. Flattening them into one string is what produced the run-on
+        // paragraph in the last report, where five separate commands ran
+        // together as prose.
+        let steps = format!("({})",
+            repro_steps(f).iter().map(|st| format!("{},", tq(&wrappable(st)))).collect::<String>());
         data.push_str(&format!(
             "  (severity: {}, title: {}, agent: {}, cwe: {}, owasp: {}, cvss: {}, endpoint: {}, payload: {}, evidence: {}, impact: {}, remediation: {}, votes: {}, confidence: {}, status: {}, auth: {}, screenshots: {}, location: {}, steps: {}),\n",
             tq(&f.severity), tq(&f.title), tq(&f.agent), tq(&f.cwe), tq(&owasp), tq(&f.cvss),
-            tq(&f.endpoint), tq(&f.payload), tq(&technical_evidence(f)), tq(&f.impact),
+            tq(&f.endpoint), tq(&wrappable(&f.payload)), tq(&wrappable(&technical_evidence(f))), tq(&f.impact),
             tq(&f.remediation), tq(&f.votes), f.confidence, tq(status),
             tq(if f.auth_context.is_empty() { "-" } else { &f.auth_context }),
             shots,
             tq(&location_line(f)),
-            // The PDF gets the same pasteable steps as the HTML — a printed
-            // report that cannot be reproduced is the one people argue with.
-            tq(&repro_steps(f).iter().enumerate().map(|(i, st)| format!("{}. {}", i + 1, st)).collect::<Vec<_>>().join("\n\n")),
+            steps,
         ));
     }
     data.push_str(")\n\n");
@@ -736,10 +789,15 @@ pub fn write_all(target: &str, findings: &[Finding], dir: &Path) -> std::io::Res
 /// operator has no way to get one without re-running the engagement. This
 /// regenerates from the evidence already on disk.
 pub fn rebuild(dir: &Path) -> std::io::Result<PathBuf> {
-    let findings: Vec<Finding> = std::fs::read_to_string(dir.join("findings.json"))
+    let mut findings: Vec<Finding> = std::fs::read_to_string(dir.join("findings.json"))
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default();
+    // Re-enrich on rebuild: a run finished before a mapping existed (CVSS, a
+    // new CWE→technique entry) would otherwise keep reprinting the gap forever,
+    // and the whole point of rebuilding is to get the current report.
+    crate::attack_graph::enrich(&mut findings);
+    let _ = std::fs::write(dir.join("findings.json"), serde_json::to_string_pretty(&findings).unwrap_or_default());
     let status: serde_json::Value = std::fs::read_to_string(dir.join("status.json"))
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
@@ -779,5 +837,50 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&js).unwrap();
         assert_eq!(v["summary"]["needs_review"], 1);
         assert_eq!(v["summary"]["confirmed"], 0);
+    }
+}
+
+#[cfg(test)]
+mod wrap_tests {
+    use super::*;
+    const ZWSP: char = '\u{200b}';
+
+    /// The regression: evidence is prose with machine tokens in it, and the
+    /// first implementation broke the prose.
+    #[test]
+    fn ordinary_words_are_never_split() {
+        let prose = "token not rotated/consumed, so ASP.NET Core Identity configured with lockoutOnFailure=false";
+        let out = wrappable(prose);
+        assert!(!out.contains(ZWSP), "no word here is long enough to need breaking: {out:?}");
+        assert_eq!(out, prose);
+    }
+
+    #[test]
+    fn a_long_encoded_payload_gets_break_points() {
+        let payload = "Input.Nome=poc&Input.Email=victim@example.test&Input.Password=NrSplt!Test123&Input.ConfirmPassword=NrSplt!Test123&__RequestVerificationToken=CfDJ8A0uCaR&_handler=register";
+        let out = wrappable(payload);
+        assert!(out.contains(ZWSP), "a 170-character token must be breakable");
+        // The text itself is unchanged once the invisible marks are removed.
+        assert_eq!(out.replace(ZWSP, ""), payload);
+    }
+
+    #[test]
+    fn an_unbroken_blob_is_still_breakable() {
+        let blob = "A".repeat(200);
+        let out = wrappable(&blob);
+        assert!(out.contains(ZWSP), "a base64 blob has no separators and still must wrap");
+        assert_eq!(out.replace(ZWSP, ""), blob);
+    }
+
+    #[test]
+    fn whitespace_and_newlines_survive_untouched() {
+        let s = "line one\n  indented two\ttabbed";
+        assert_eq!(wrappable(s), s);
+    }
+
+    #[test]
+    fn a_url_just_under_the_limit_is_left_alone() {
+        let url = "https://arenahockeypara.com.br/Account/Login";
+        assert_eq!(wrappable(url), url, "a normal URL fits and must not be peppered with breaks");
     }
 }

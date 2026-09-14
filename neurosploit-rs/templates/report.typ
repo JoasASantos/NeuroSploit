@@ -23,6 +23,34 @@
 )
 #let sevrank(s) = (Critical: 0, High: 1, Medium: 2, Low: 3, Info: 4).at(s, default: 5)
 
+// A section label inside a finding: consistent spacing, so the eye can find
+// "How to fix it" without reading the paragraph above it.
+#let sectionhead(t) = [
+  #v(7pt)
+  #text(9pt, weight: "bold", fill: rgb("#2c3e50"), upper(t))
+  #v(3pt)
+]
+
+// Machine text: monospaced, on a tinted ground, wrapping at the zero-width
+// breaks the generator inserted. `raw` is deliberately NOT used — it refuses to
+// wrap, which is what pushed payloads off the page edge.
+#let codebox(body) = block(
+  width: 100%, breakable: true, fill: rgb("#f7f7f9"), inset: 6pt, radius: 4pt,
+  stroke: 0.5pt + rgb("#e4e4e8"),
+)[
+  #set par(justify: false, leading: 0.55em)
+  #text(font: ("Menlo", "DejaVu Sans Mono", "Courier New"), size: 7.5pt)[#body]
+]
+
+// "9.8 (CVSS:3.1/AV:N/...)" — the number reads large, the vector stays legible
+// underneath so the score can be checked rather than believed.
+#let cvssline(v) = {
+  let parts = v.split(" (")
+  let score = parts.at(0, default: v)
+  let vector = if parts.len() > 1 { parts.at(1).trim(")") } else { "" }
+  [#text(weight: "bold")[#score] #if vector != "" [ #linebreak() #text(6.5pt, fill: gray, font: ("Menlo", "Courier New"))[#vector] ]]
+}
+
 #set page(margin: 2cm, numbering: "1", footer: context [
   #set text(size: 8pt, fill: gray)
   NeuroSploit v3.5.1 · #meta.target · confidential
@@ -124,32 +152,69 @@
   #text(fill: gray)[_Nothing to report._]
 ]
 #for (i, f) in sorted.enumerate() [
-  #block(breakable: false, width: 100%, inset: 10pt, radius: 6pt,
+  // Breakable: a finding with a long evidence dump must flow onto the next
+  // page instead of overflowing off the bottom of this one.
+  #block(breakable: true, width: 100%, inset: 10pt, radius: 6pt, above: 10pt,
     stroke: (left: 3pt + sevcolor.at(f.severity, default: gray), rest: 0.5pt + rgb("#dddddd")))[
     #sevbadge(f.severity) #h(6pt)
     #if f.status == "needs-review" [ #box(fill: rgb("#8e44ad"), inset: (x: 5pt, y: 2pt), radius: 3pt, text(fill: white, weight: "bold", size: 8pt)[NEEDS REVIEW]) #h(6pt) ]
     #text(12pt, weight: "bold")[#str(i + 1). #f.title]
-    #v(4pt)
+    #v(5pt)
     #table(
       columns: (auto, 1fr, auto, 1fr),
-      inset: 4pt, stroke: none, align: left + horizon,
-      text(8pt, fill: gray)[Criticality], text(8pt)[#f.severity],
+      inset: 4pt, stroke: none, align: left + top,
+      text(8pt, fill: gray)[Severity], text(8pt)[#f.severity],
       text(8pt, fill: gray)[Status], text(8pt)[#f.status],
-      text(8pt, fill: gray)[OWASP/CWE], text(8pt)[#f.owasp · #f.cwe],
-      text(8pt, fill: gray)[Confidence], text(8pt)[#f.votes votes · #str(f.confidence)],
-      text(8pt, fill: gray)[Auth context], text(8pt)[#f.auth],
-      text(8pt, fill: gray)[Location], text(8pt)[#raw(f.endpoint)],
+      text(8pt, fill: gray)[OWASP / CWE], text(8pt)[#f.owasp · #f.cwe],
+      text(8pt, fill: gray)[Confidence], text(8pt)[#f.votes · #str(f.confidence)],
+      ..(if f.at("cvss", default: "") != "" {
+          (text(8pt, fill: gray)[CVSS v3.1], text(8pt)[#cvssline(f.cvss)],
+           text(8pt, fill: gray)[Auth context], text(8pt)[#f.auth])
+         } else {
+          (text(8pt, fill: gray)[Auth context], text(8pt)[#f.auth], [], [])
+         }),
       text(8pt, fill: gray)[Agent], text(8pt)[#raw(f.agent)],
+      [], [],
     )
-    #v(4pt) #strong[Where the problem is] #linebreak() #text(9pt)[#f.at("location", default: f.endpoint)]
-    #v(4pt) #strong[What it means] #linebreak() #text(9pt)[#f.impact]
-    #v(4pt) #strong[How to fix it] #linebreak() #text(9pt)[#f.remediation]
-    #v(4pt) #strong[Proof of concept — step by step] #linebreak() #raw(f.at("steps", default: f.payload))
-    #if f.payload != "" [ #v(3pt) #strong[Payload] #linebreak() #raw(f.payload) ]
-    #v(3pt) #strong[Technical evidence] #linebreak() #raw(f.evidence)
+    #v(2pt)
+    #sectionhead("Where the problem is")
+    #text(9pt)[#f.at("location", default: f.endpoint)]
+    #sectionhead("What it means")
+    #text(9pt)[#f.impact]
+    #sectionhead("How to fix it")
+    #text(9pt)[#f.remediation]
+
+    #let steps = f.at("steps", default: ())
+    #if type(steps) == array and steps.len() > 0 [
+      #sectionhead("Proof of concept — step by step")
+      // A real numbered list, one command per item. The previous template
+      // pushed every step into a single raw block, which rendered as one
+      // run-on paragraph nobody could follow or paste.
+      #for (n, st) in steps.enumerate() [
+        #grid(columns: (16pt, 1fr), gutter: 4pt,
+          text(8pt, fill: gray, weight: "bold")[#str(n + 1).],
+          codebox(st),
+        )
+        #v(3pt)
+      ]
+    ] else if f.payload != "" [
+      #sectionhead("Proof of concept")
+      #codebox(f.payload)
+    ]
+
+    #if f.payload != "" and type(steps) == array and steps.len() > 0 [
+      #sectionhead("Payload")
+      #codebox(f.payload)
+    ]
+
+    #if f.evidence != "" [
+      #sectionhead("Technical evidence")
+      #codebox(f.evidence)
+    ]
+
     #let shots = f.at("screenshots", default: ())
     #if shots.len() > 0 [
-      #v(4pt) #strong[Proof Screenshots]
+      #sectionhead("Proof screenshots")
       #for sp in shots [
         #v(3pt)
         #block(breakable: false, width: 100%)[
@@ -158,9 +223,7 @@
         ]
       ]
     ]
-
   ]
-  #v(8pt)
 ]
 
 // ---- Conclusion ----

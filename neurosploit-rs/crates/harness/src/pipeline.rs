@@ -767,7 +767,7 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
                      Each item: {{id,title,severity,cwe,endpoint,location,payload,evidence,repro_steps,impact,remediation,confidence,auth_context,account,secret,screenshots}}. \
                      Write for a developer who has never seen this app and has to fix it today:\n\
                      - `location`: EXACTLY where it is — the parameter, form field, header, JSON key, or flow step (e.g. \"POST /api/orders, JSON field `role`\"). An endpoint alone sends them hunting.\n\
-                     - `impact`: what an attacker gets, in one or two plain sentences tied to THIS app's data or users. No boilerplate, no hedging.\n\
+                     - `impact`: what an attacker gets, stated as what you MEASURED — not what the class usually enables. If you proved 25 unthrottled requests, say that; do not claim inbox flooding unless you observed mail being sent. An inflated impact gets the whole finding rejected, and the real measurement is lost with it.\n\
                      - `remediation`: the concrete change, naming the control (parameterised query, server-side authorisation check, allowlist), not \"sanitise input\".\n\
                      - `repro_steps`: an ORDERED array of literal commands someone can paste one by one from a clean shell — baseline request first, then the attack, then how to read the result. Include the real URL and the real payload.\n\
                      - `evidence`: the concrete proof (request/response excerpt with status, key headers and the decisive part of the body). \
@@ -1405,6 +1405,26 @@ async fn validate(candidates: Vec<Finding>, pool: &ModelPool, sys: &str, vote_n:
                     f.review_status = "needs-review".into();
                     f.review_reason = if total == 0 { "validator unavailable".into() }
                         else { format!("below vote quorum ({yes}/{total})") };
+                } else if grounded_receipt(&f) {
+                    // Unanimously rejected, but the MECHANISM was demonstrated —
+                    // a real engagement rejected "no rate limiting on the reset
+                    // flow" because the agent claimed email flooding and only
+                    // proved that 25 requests went through unthrottled. The
+                    // claim was inflated; the measurement was real, and
+                    // discarding it hid a genuine gap from the report.
+                    //
+                    // So an over-claimed finding is capped and flagged rather
+                    // than deleted: the reader gets the fact, not the story
+                    // that was built on it.
+                    let cap = "Low";
+                    let was = f.severity.clone();
+                    f.severity = cap.to_string();
+                    f.review_status = "needs-review".into();
+                    f.review_reason = format!(
+                        "impact not demonstrated — capped from {was} to {cap}. Validator: {}",
+                        f.review_reason.trim()
+                    );
+                    f.confidence = f.confidence.min(0.5);
                 }
                 let label = if f.validated { "CONFIRMED" } else if f.review_status == "needs-review" { "needs-review" } else { "rejected" };
                 let _ = txc.send(format!("vote {} → {} ({})", f.title, label, f.votes)).await;
@@ -1418,6 +1438,19 @@ async fn validate(candidates: Vec<Finding>, pool: &ModelPool, sys: &str, vote_n:
     // Include no-evidence flagged findings so the human loop sees them.
     flagged.extend(validated.into_iter().filter(|f| f.validated || f.review_status == "needs-review"));
     flagged
+}
+
+/// Does this finding carry evidence a reader could check, independent of the
+/// claim built on top of it? Structured artifacts count outright; otherwise the
+/// grounding pass's own verdict decides.
+fn grounded_receipt(f: &Finding) -> bool {
+    if f.evidence_data.is_some() {
+        return true;
+    }
+    if f.review_reason.contains("receipt_missing") || f.votes.contains("receipt_missing") {
+        return false;
+    }
+    crate::grounding::ground(f, "", crate::grounding::GroundMode::Either).ok
 }
 
 /// Adversarial refutation pass: every confirmed **High/Critical** finding is
