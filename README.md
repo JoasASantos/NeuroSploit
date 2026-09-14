@@ -365,6 +365,10 @@ enforcing makes the verdict the status.
   is dead, the pool switches to whatever else this machine can reach (an installed CLI
   subscription, or a provider whose API key is in the environment) and keeps going. It only
   parks the run when nothing at all is available.
+- **Pause and resume on demand** — `/pause` in the REPL or the web console's
+  pause button holds the run at the model pool's gate: in-flight agents finish,
+  every finding is kept, `/continue` picks it back up. The web console also
+  exposes *Report so far* and a full log download.
 - **Resume where it stopped** — findings are checkpointed live, so an interrupted run is
   recovered on the next start and `/continue` carries them forward. Non-interactive sessions
   (the web console drives the REPL over a pipe) resume automatically, since no one is there to
@@ -499,6 +503,53 @@ Every request is tagged with an identifying **User-Agent** (default
 validated by NeuroSploit" — so provenance travels in the traffic, the finding
 text, `findings.json` and the report footer.
 
+### Provenance — which build made this, and does it still match
+
+Attribution that survives someone else's copy-paste:
+
+- **`JOASNSCOPE`** leads every canary the harness mints, so a marker that
+  turns up later — in a response body, a customer's log, somebody else's
+  report — extracts whole and names the build that made it.
+- **Per-build fingerprint** (`neurosploit provenance show`), plus an optional
+  per-customer build id via `NEUROSPLOIT_CUSTOMER_ID`.
+- **`findings.json` is stamped** with `_engine`, and a **signed
+  `provenance.json`** ships beside it (`NEUROSPLOIT_PROVENANCE_KEY`).
+- **Structural signature** over the finding set's shape — it survives
+  rewording and reformatting, but not a changed result.
+- **Prompts are watermarked** at the single model-pool chokepoint
+  (`NEUROSPLOIT_WATERMARK=off` to disable).
+
+```bash
+neurosploit provenance show                 # this build's identity
+neurosploit provenance scan report.pdf.txt  # is this ours? which build?
+neurosploit provenance verify runs/ns-…     # manifest vs findings
+```
+
+### Internal network & Active Directory — the engagement as a graph
+
+An internal result is a path, not a list. `Asset → Exposure → Weakness →
+Credential → Privilege → Movement → Crown Jewel`, with business impact,
+detection and remediation on the **edges** — because what a client fixes is a
+relationship, not a host. The credential→identity→permission→machine loop
+expands it, and **`choke_points()`** answers the question a CVSS-sorted list
+cannot: *which single change buys the most*.
+
+```bash
+neurosploit internal --graph graph.json --scaffold corp.local --from prn01 --mermaid
+```
+
+One assumed hop caps the whole chain at informational — a hypothesis about a
+Critical is not a Critical.
+
+---
+
+## 📊 How we compare
+
+A rough, honest capability benchmark against Strix, Shannon, Penligent and the
+other open-source agents — including where NeuroSploit is **behind** (no
+container isolation, no real intercepting proxy, no published benchmark run) —
+lives in **[BENCHMARK.md](BENCHMARK.md)**.
+
 ---
 
 ## Build
@@ -566,6 +617,11 @@ git clone https://github.com/digininja/DVWA /tmp/DVWA
 | `--vote-n N` | How many models must agree a finding is real (default 3 / 2 for whitebox). |
 | `--max-agents N` | Cap agents run (`0` = all matching the recon). |
 | `--offline` | Exercise the full pipeline without calling any model. |
+| `--budget eco\|balanced\|aggressive` | How to spend reasoning. **Omitted = unlimited**: the full run, unchanged. |
+| `--token-limit N` | Hard ceiling on tokens (`0` = none). Independent of `--budget`. |
+| `--deep-test-limit N` | Cap on findings that get deep reasoning. |
+| `--coverage-first` / `--depth-first` | Map everything first, or chase a lead as it appears. |
+| `--sample-per-route N` | Requests per endpoint family — `/api/users/{id}` is sampled, not enumerated. |
 | `-v, --verbose` | Log each agent as it launches, recon, and votes. |
 
 ### Authentication — run via API key *or* subscription
@@ -685,7 +741,7 @@ Every run writes a self-contained folder `runs/ns-<ts>-<target>/`:
 A reinforcement-learning reward store (`data/rl_state_rs.json`) biases agent
 selection on future runs.
 
-## Agent library — `agents_md/` (435)
+## Agent library — `agents_md/` (446)
 
 | Category | Count | Purpose |
 |----------|-------|---------|
