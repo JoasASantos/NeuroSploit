@@ -426,6 +426,67 @@ impl ModelPool {
     /// `skip` names the model that produced the finding; when the panel has more
     /// than one model, that model is moved to the back so a DIFFERENT model
     /// adjudicates first (cross-model false-positive validation).
+    /// Assemble a voting panel of `n` models from DISTINCT providers.
+    ///
+    /// The panel used to be `candidates.take(n)`, so a run configured with one
+    /// model produced a "3-model vote" that was one model voting once — a real
+    /// engagement shipped 24 findings whose votes all read `1/1`. Asking the
+    /// same model three times would be no better: its errors are correlated
+    /// with themselves, and three confident repetitions of one mistake look
+    /// exactly like a consensus.
+    ///
+    /// So short panels are filled from other backends this machine can reach,
+    /// one per provider. Anthropic checking Anthropic is not independent; a
+    /// second vendor is. If nothing else is available the panel simply stays
+    /// small, and the `yes/total` the caller prints tells the truth about it.
+    fn build_panel(&self, preferred: Vec<ModelRef>, n: usize) -> Vec<ModelRef> {
+        let mut panel: Vec<ModelRef> = Vec::new();
+        let mut providers: Vec<String> = Vec::new();
+        for m in preferred {
+            if panel.len() >= n {
+                break;
+            }
+            if providers.contains(&m.provider) {
+                continue;
+            }
+            providers.push(m.provider.clone());
+            panel.push(m);
+        }
+        if panel.len() >= n {
+            return panel;
+        }
+        for alt in self.reachable_backends() {
+            if panel.len() >= n {
+                break;
+            }
+            if providers.contains(&alt.provider) {
+                continue;
+            }
+            providers.push(alt.provider.clone());
+            panel.push(alt);
+        }
+        panel
+    }
+
+    /// Backends usable right now, one model per provider: an installed
+    /// subscription CLI, or a provider whose API key is in the environment.
+    pub fn reachable_backends(&self) -> Vec<ModelRef> {
+        let installed = crate::models::installed_cli_backends();
+        let mut out = Vec::new();
+        for pr in crate::models::providers() {
+            let usable = (pr.kind == "cli"
+                && crate::models::cli_binary_for(pr.key).map(|b| installed.contains(&b)).unwrap_or(false))
+                || std::env::var(pr.env_key).ok().filter(|v| !v.trim().is_empty()).is_some();
+            if !usable {
+                continue;
+            }
+            if let Some(model) = pr.models.first() {
+                out.push(ModelRef { provider: pr.key.to_string(), model: (*model).to_string() });
+            }
+        }
+        out
+    }
+
     pub async fn vote(&self, system: &str, user: &str, n: usize, skip: Option<&str>) -> (usize, usize) {
         let mut ordered: Vec<ModelRef> = self.candidates.clone();
         if let Some(finder) = skip {
@@ -433,7 +494,7 @@ impl ModelPool {
                 ordered.sort_by_key(|m| m.label() == finder); // finder (true) sorts last
             }
         }
-        let panel: Vec<ModelRef> = ordered.into_iter().take(n.max(1)).collect();
+        let panel = self.build_panel(ordered, n.max(1));
         let mut confirmed = 0usize;
         let mut total = 0usize;
         for m in &panel {
@@ -587,5 +648,59 @@ mod verdict_tests {
         assert!(!quorum_confirmed("Medium", 1, 2));
         assert!(quorum_confirmed("Low", 2, 3));
         assert!(!quorum_confirmed("Low", 0, 2));
+    }
+}
+
+#[cfg(test)]
+mod panel_tests {
+    use super::*;
+
+    fn m(p: &str, model: &str) -> ModelRef {
+        ModelRef { provider: p.into(), model: model.into() }
+    }
+
+    /// The defect a real engagement exposed: every finding's votes read `1/1`
+    /// because the panel was `candidates.take(n)` and only one model was
+    /// configured.
+    #[test]
+    fn a_single_configured_model_no_longer_produces_a_panel_of_one() {
+        let pool = ModelPool::new(vec![m("anthropic", "claude-opus-4-8")], 2);
+        let panel = pool.build_panel(pool.candidates.clone(), 3);
+        // Whatever this machine has, the panel must not be the configured model
+        // repeated, and must not silently claim three votes from one.
+        let mut seen: Vec<&str> = panel.iter().map(|x| x.provider.as_str()).collect();
+        let before = seen.len();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), before, "a panel must never contain the same provider twice");
+    }
+
+    #[test]
+    fn the_panel_never_repeats_a_provider_even_when_asked_to() {
+        let pool = ModelPool::new(
+            vec![m("anthropic", "claude-opus-5"), m("anthropic", "claude-sonnet-5"), m("anthropic", "claude-haiku-4-5")],
+            2,
+        );
+        let panel = pool.build_panel(pool.candidates.clone(), 3);
+        let anthropic = panel.iter().filter(|x| x.provider == "anthropic").count();
+        assert_eq!(anthropic, 1, "three models from one vendor are not three independent votes");
+    }
+
+    #[test]
+    fn configured_models_are_preferred_over_discovered_ones() {
+        let pool = ModelPool::new(vec![m("openai", "gpt-5.4"), m("xai", "grok-4.5")], 2);
+        let panel = pool.build_panel(pool.candidates.clone(), 2);
+        assert_eq!(panel.len(), 2);
+        assert_eq!(panel[0].provider, "openai");
+        assert_eq!(panel[1].provider, "xai");
+    }
+
+    #[test]
+    fn a_panel_of_one_is_honest_rather_than_padded() {
+        // With nothing else reachable the panel stays small; the caller prints
+        // yes/total, so a 1/1 vote is visible as exactly that.
+        let pool = ModelPool::new(vec![m("anthropic", "claude-opus-4-8")], 1);
+        let panel = pool.build_panel(pool.candidates.clone(), 1);
+        assert_eq!(panel.len(), 1);
     }
 }
