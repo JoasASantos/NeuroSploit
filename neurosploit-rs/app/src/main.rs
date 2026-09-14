@@ -151,6 +151,29 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ProvCmd,
     },
+    /// Internal network / AD attack graph: paths to the crown jewels, and the
+    /// one edge worth fixing first.
+    Internal {
+        /// Graph file (JSON: {"nodes": [...], "edges": [...]}). Omit to start
+        /// from the AD scaffold alone.
+        #[arg(long = "graph")]
+        graph: Option<String>,
+        /// Seed the graph with the structure every domain has.
+        #[arg(long = "scaffold")]
+        scaffold: Option<String>,
+        /// Where the attacker starts — the foothold node's id.
+        #[arg(long = "from", default_value = "printer")]
+        from: String,
+        /// Turn the credential→identity→permission→machine loop this many times.
+        #[arg(long = "expand", default_value_t = 3)]
+        expand: usize,
+        /// Print the Mermaid diagram too.
+        #[arg(long)]
+        mermaid: bool,
+        /// Write the expanded graph back out as JSON.
+        #[arg(long = "save")]
+        save: Option<String>,
+    },
     /// White-box: analyse a repository's source code for vulnerabilities.
     Whitebox {
         /// Local path, a GitHub URL (https://github.com/owner/repo[.git]) or an
@@ -478,6 +501,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Cmd::Capability { cmd } => handle_capability(cmd)?,
         Cmd::Provenance { cmd } => handle_provenance(cmd)?,
+        Cmd::Internal { graph, scaffold, from, expand, mermaid, save } => {
+            handle_internal(graph.as_deref(), scaffold.as_deref(), &from, expand, mermaid, save.as_deref())?
+        }
         Cmd::Run { url, models, max_agents, vote_n, chain_depth, recon, offline, subscription, mcp, creds, focus, objective, out_of_scope, in_scope, environment, policy, budget, token_limit, deep_test_limit, coverage_first, depth_first, sample_per_route, jira, only, verbose } => {
             let url = if url.starts_with("http") { url } else { format!("https://{url}") };
             let mut cfg = RunConfig::new(&url);
@@ -1121,6 +1147,70 @@ fn provenance_key() -> Option<Vec<u8>> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .map(|s| s.into_bytes())
+}
+
+fn handle_internal(
+    graph: Option<&str>,
+    scaffold: Option<&str>,
+    from: &str,
+    expand: usize,
+    mermaid: bool,
+    save: Option<&str>,
+) -> anyhow::Result<()> {
+    use harness::internal::InternalGraph;
+    let mut g = match (graph, scaffold) {
+        (Some(path), _) => {
+            let text = std::fs::read_to_string(path).map_err(|e| anyhow::anyhow!("cannot read {path}: {e}"))?;
+            let mut loaded: InternalGraph = serde_json::from_str(&text)
+                .map_err(|e| anyhow::anyhow!("{path} is not an internal graph: {e}"))?;
+            // A loaded graph plus the scaffold: the domain's built-in structure
+            // is true whether or not the operator typed it out.
+            if let Some(domain) = scaffold {
+                let base = harness::internal::ad_scaffold(domain);
+                for n in base.nodes {
+                    loaded.add(n);
+                }
+                for e in base.edges {
+                    loaded.link(e);
+                }
+            }
+            loaded
+        }
+        (None, Some(domain)) => harness::internal::ad_scaffold(domain),
+        (None, None) => anyhow::bail!("nothing to work with — pass --graph <file.json> or --scaffold <domain>"),
+    };
+    if !g.has(from) {
+        anyhow::bail!(
+            "no node `{from}` in the graph — known nodes: {}",
+            g.nodes.iter().map(|n| n.id.clone()).collect::<Vec<_>>().join(", ")
+        );
+    }
+    let turns = g.expand(expand);
+    println!("  \x1b[2mcredential loop turned {turns} time(s)\x1b[0m");
+    print!("  {}", g.summary(from));
+
+    let proven = g.paths(from, true);
+    let all = g.paths(from, false);
+    if proven.is_empty() && !all.is_empty() {
+        println!("  \x1b[33mno path was walked end to end — {} hypothesis(es) to test next:\x1b[0m", all.len());
+        for p in all.iter().take(5) {
+            for a in &p.assumptions {
+                println!("    · {a}");
+            }
+        }
+    }
+    let gaps = g.detection_gaps();
+    if !gaps.is_empty() {
+        println!("  \x1b[2m{} proven hop(s) with no detection answer — untested, not unmonitored\x1b[0m", gaps.len());
+    }
+    if mermaid {
+        println!("\n{}", g.mermaid());
+    }
+    if let Some(path) = save {
+        std::fs::write(path, serde_json::to_string_pretty(&g)?)?;
+        println!("  saved {path}");
+    }
+    Ok(())
 }
 
 fn handle_provenance(cmd: ProvCmd) -> anyhow::Result<()> {

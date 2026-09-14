@@ -19,6 +19,7 @@ pub mod creds;
 pub mod grounding;
 pub mod hygiene;
 pub mod integrations;
+pub mod internal;
 pub mod knowledge_graph;
 pub mod memory;
 pub mod policy;
