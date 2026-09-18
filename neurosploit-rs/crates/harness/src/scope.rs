@@ -345,6 +345,114 @@ impl ScopePolicy {
         self.soft.observe_only.len() - before
     }
 
+    /// Load a scope from a YAML file (the operator-facing format).
+    ///
+    /// The friendly string form — `app.example.com`, `*.example.com`,
+    /// `10.0.0.0/24`, `https://example.com/api` — the SAME strings the CLI flag
+    /// and the web form take, parsed through [`Pattern::parse`]. NOT the raw
+    /// serde shape (`{kind, value}`), which is faithful but unwritable by hand.
+    ///
+    /// This is a hard boundary, so parsing is strict in one direction: an
+    /// unreadable file is an error, never a silently-empty policy. An empty
+    /// policy authorizes nothing, and "nothing" is a safe failure — but it must
+    /// be the operator's choice, not a typo swallowed here.
+    pub fn from_file(path: &std::path::Path) -> std::io::Result<ScopePolicy> {
+        let text = std::fs::read_to_string(path)?;
+        Ok(ScopePolicy::from_yaml(&text))
+    }
+
+    /// Parse the friendly scope YAML subset. Dependency-free, matching the
+    /// house style of `creds.rs` — the schema is small and known:
+    ///
+    /// ```yaml
+    /// hard:    [ - <pattern> ... ]
+    /// exclude: [ - <pattern> ... ]
+    /// soft:
+    ///   observe_only: [ - <pattern> ... ]
+    ///   allow_destructive_methods: <bool>
+    ///   allow_account_creation:    <bool>
+    ///   max_accounts:              <int>
+    ///   max_requests_per_minute:   <int>
+    ///   forbidden_payloads: [ - <string> ... ]
+    ///   notes:              [ - <string> ... ]
+    /// ```
+    pub fn from_yaml(text: &str) -> ScopePolicy {
+        let mut p = ScopePolicy::default();
+        // Section state: which list a `- item` currently belongs to.
+        #[derive(PartialEq)]
+        enum Sect { None, Hard, Exclude, Observe, Forbidden, Notes }
+        let mut sect = Sect::None;
+        // Track whether we are inside the `soft:` block (deeper indent), so a
+        // top-level `notes:` (there is none today, but be robust) is not
+        // confused with `soft.notes`.
+        for raw in text.lines() {
+            let line = strip_comment(raw);
+            if line.trim().is_empty() {
+                continue;
+            }
+            let indent = line.len() - line.trim_start().len();
+            let t = line.trim();
+
+            if let Some(item) = t.strip_prefix("- ") {
+                let val = unquote(item.trim());
+                if val.is_empty() {
+                    continue;
+                }
+                match sect {
+                    Sect::Hard => { p.allow(&val); }
+                    Sect::Exclude => { p.deny(&val); }
+                    Sect::Observe => { p.observe_only(&val); }
+                    Sect::Forbidden => p.soft.forbidden_payloads.push(val.to_lowercase()),
+                    Sect::Notes => p.soft.notes.push(val),
+                    Sect::None => {}
+                }
+                continue;
+            }
+
+            // A `key:` or `key: value` line. Indent 0 = top level; deeper =
+            // inside `soft:`.
+            let (key, value) = match t.split_once(':') {
+                Some((k, v)) => (k.trim(), unquote(v.trim())),
+                None => continue,
+            };
+            let top = indent == 0;
+            // An inline list on the key line (`hard: [a, b]`) is routed by key
+            // regardless of depth, before the section-header handling.
+            if value.starts_with('[') {
+                let inner = value.trim_start_matches('[').trim_end_matches(']');
+                for tok in inner.split(',') {
+                    let v = unquote(tok.trim());
+                    if v.is_empty() { continue; }
+                    match key {
+                        "hard" => { p.allow(&v); }
+                        "exclude" => { p.deny(&v); }
+                        "observe_only" => { p.observe_only(&v); }
+                        "forbidden_payloads" => p.soft.forbidden_payloads.push(v.to_lowercase()),
+                        "notes" => p.soft.notes.push(v),
+                        _ => {}
+                    }
+                }
+                sect = Sect::None;
+                continue;
+            }
+            match (top, key) {
+                (true, "hard") => sect = Sect::Hard,
+                (true, "exclude") => sect = Sect::Exclude,
+                (true, "soft") => sect = Sect::None,
+                // soft.* children
+                (false, "observe_only") => sect = Sect::Observe,
+                (false, "forbidden_payloads") => sect = Sect::Forbidden,
+                (false, "notes") => sect = Sect::Notes,
+                (false, "allow_destructive_methods") => { p.soft.allow_destructive_methods = truthy(&value); sect = Sect::None; }
+                (false, "allow_account_creation") => { p.soft.allow_account_creation = truthy(&value); sect = Sect::None; }
+                (false, "max_accounts") => { if let Ok(n) = value.parse() { p.soft.max_accounts = n; } sect = Sect::None; }
+                (false, "max_requests_per_minute") => { if let Ok(n) = value.parse() { p.soft.max_requests_per_minute = n; } sect = Sect::None; }
+                _ => { sect = Sect::None; }
+            }
+        }
+        p
+    }
+
     pub fn in_hard_scope(&self, url: &str) -> bool {
         if self.exclude.iter().any(|p| p.matches(url)) {
             return false;
@@ -549,6 +657,37 @@ fn split_list(raw: &str) -> Vec<String> {
         .collect()
 }
 
+/// Drop a trailing `# comment`. A scope pattern never contains `#`, and we only
+/// strip when the `#` follows whitespace or opens the line.
+fn strip_comment(line: &str) -> String {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'#' && (i == 0 || bytes[i - 1] == b' ' || bytes[i - 1] == b'\t') {
+            return line[..i].to_string();
+        }
+        i += 1;
+    }
+    line.to_string()
+}
+
+/// Strip matching surrounding quotes.
+fn unquote(s: &str) -> String {
+    let t = s.trim();
+    if (t.starts_with('"') && t.ends_with('"') && t.len() >= 2)
+        || (t.starts_with('\'') && t.ends_with('\'') && t.len() >= 2)
+    {
+        t[1..t.len() - 1].to_string()
+    } else {
+        t.to_string()
+    }
+}
+
+/// YAML-ish truthiness.
+fn truthy(s: &str) -> bool {
+    matches!(s.trim().to_lowercase().as_str(), "true" | "yes" | "on" | "1")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -699,4 +838,62 @@ mod tests {
             d => panic!("an unconfigured policy must be closed, not open: {d:?}"),
         }
     }
+
+    #[test]
+    fn from_yaml_parses_the_friendly_format_and_enforces_it() {
+        let yaml = r#"
+hard:
+  - app.example.com
+  - "*.staging.example.com"
+  - https://example.com/api/v2
+exclude:
+  - payments.example.com
+soft:
+  observe_only:
+    - cdn.example.com
+  allow_destructive_methods: false
+  max_accounts: 5
+  max_requests_per_minute: 120
+  forbidden_payloads:
+    - "delete from"
+  notes:
+    - "SOW-2026-0142"
+"#;
+        let p = ScopePolicy::from_yaml(yaml);
+        assert!(p.check_request("https://app.example.com/x", "GET", "").allowed());
+        assert!(p.check_request("https://sub.staging.example.com/x", "GET", "").allowed());
+        assert!(!p.check_request("https://payments.example.com/x", "GET", "").allowed());
+        assert!(!p.check_request("https://evil.test/x", "GET", "").allowed());
+        assert!(p.check_request("https://example.com/api/v2/users", "GET", "").allowed());
+        assert!(!p.check_request("https://example.com/admin", "GET", "").allowed());
+        assert!(!p.check_request("https://cdn.example.com/x", "POST", "").allowed());
+        assert_eq!(p.soft.max_accounts, 5);
+        assert_eq!(p.soft.max_requests_per_minute, 120);
+        assert!(!p.soft.allow_destructive_methods);
+        assert!(p.soft.forbidden_payloads.iter().any(|f| f == "delete from"));
+        assert!(p.soft.notes.iter().any(|n| n.contains("SOW")));
+    }
+
+    #[test]
+    fn from_yaml_strips_comments_and_quotes() {
+        let yaml = "hard:\n  - app.example.com   # the app\n  - \"*.api.example.com\"\n";
+        let p = ScopePolicy::from_yaml(yaml);
+        assert!(p.check_request("https://app.example.com/x", "GET", "").allowed());
+        assert!(p.check_request("https://v2.api.example.com/x", "GET", "").allowed());
+    }
+
+    #[test]
+    fn an_empty_scope_yaml_authorizes_nothing() {
+        let p = ScopePolicy::from_yaml("soft:\n  max_accounts: 2\n");
+        assert!(p.hard.is_empty());
+        assert!(!p.check_request("https://anything.test/x", "GET", "").allowed());
+    }
+
+    #[test]
+    fn inline_list_form_also_parses() {
+        let p = ScopePolicy::from_yaml("hard: [app.example.com, api.example.com]\n");
+        assert!(p.check_request("https://api.example.com/x", "GET", "").allowed());
+        assert!(p.check_request("https://app.example.com/x", "GET", "").allowed());
+    }
+
 }

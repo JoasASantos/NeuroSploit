@@ -748,3 +748,7 @@ body.resizing-ns { user-select: none; cursor: ns-resize; }
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* Scoping/Guardrails UI accents */
+.pill { display:inline-block; padding:1px 7px; border-radius:999px; background:var(--sev-medium-bg); color:var(--sev-medium-fg); font-weight:600; letter-spacing:.02em; }
+.req { color:var(--muted, #888); font-weight:400; font-size:.9em; }

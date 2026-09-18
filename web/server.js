@@ -141,6 +141,49 @@ function buildCredsYaml({ auth, roles }) {
   return lines.join('\n') + '\n';
 }
 
+// Turn the web form's Scoping/Guardrails object into the scope YAML the CLI
+// loads with --scope-file. The hard list is the boundary; everything else is a
+// guardrail inside it. Written to a temp file per job.
+function buildScopeYaml(scope) {
+  const lines = [];
+  const list = (v) => (Array.isArray(v) ? v : String(v || '').split(/[\n,;]+/)).map((x) => String(x).trim()).filter(Boolean);
+  const block = (key, items) => {
+    if (!items.length) return;
+    lines.push(`${key}:`);
+    for (const it of items) lines.push(`  - ${JSON.stringify(it)}`);
+  };
+  block('hard', list(scope.hard));
+  block('exclude', list(scope.exclude));
+  const soft = [];
+  const obs = list(scope.observeOnly);
+  if (obs.length) { soft.push('  observe_only:'); for (const o of obs) soft.push(`    - ${JSON.stringify(o)}`); }
+  soft.push(`  allow_destructive_methods: ${scope.allowDestructive ? 'true' : 'false'}`);
+  soft.push(`  allow_account_creation: ${scope.allowAccountCreation === false ? 'false' : 'true'}`);
+  if (scope.maxAccounts !== undefined && scope.maxAccounts !== '') soft.push(`  max_accounts: ${Number(scope.maxAccounts) || 0}`);
+  if (scope.rateLimit !== undefined && scope.rateLimit !== '') soft.push(`  max_requests_per_minute: ${Number(scope.rateLimit) || 0}`);
+  const forb = list(scope.forbidden);
+  if (forb.length) { soft.push('  forbidden_payloads:'); for (const fp of forb) soft.push(`    - ${JSON.stringify(fp)}`); }
+  const notes = list(scope.notes);
+  if (notes.length) { soft.push('  notes:'); for (const n of notes) soft.push(`    - ${JSON.stringify(n)}`); }
+  lines.push('soft:');
+  lines.push(...soft);
+  return lines.join('\n') + '\n';
+}
+
+// Only materialize a scope file when the operator actually set a hard boundary
+// through the form — otherwise the run keeps its normal target+flags behaviour.
+async function materializeScope(body, jobId) {
+  const scope = body.scope;
+  if (!scope) return undefined;
+  const hard = (Array.isArray(scope.hard) ? scope.hard : String(scope.hard || '').split(/[\n,;]+/)).map((x) => String(x).trim()).filter(Boolean);
+  if (!hard.length) return undefined; // no boundary set — nothing to enforce beyond flags
+  const dir = path.join(os.tmpdir(), 'neurosploit-web');
+  await fsp.mkdir(dir, { recursive: true });
+  const file = path.join(dir, `${jobId}.scope.yaml`);
+  await fsp.writeFile(file, buildScopeYaml(scope));
+  return file;
+}
+
 async function materializeCreds(body, jobId) {
   if (body.creds) return body.creds; // explicit file path on disk wins
   if (!body.auth && !(body.roles || []).length) return undefined;
@@ -610,6 +653,7 @@ function buildArgs(body) {
   // Authorization: the signed grant caps the scope, the extra in-scope entries
   // can only narrow within it, and the environment scales every risk score.
   for (const entry of body.inScope || []) args.push('--in-scope', entry);
+  if (body.scopePath) args.push('--scope-file', body.scopePath);
   if (body.capability) args.push('--capability-token', body.capability);
   if (body.environment) args.push('--environment', body.environment);
   if (body.policyProfile) args.push('--policy', body.policyProfile);
@@ -622,7 +666,8 @@ async function startJob(body) {
   if (!BIN) throw new Error('neurosploit binary not found — run `cargo build --release` in neurosploit-rs/');
   const id = crypto.randomUUID();
   const credsPath = await materializeCreds(body, id);
-  const args = buildArgs({ ...body, creds: credsPath });
+  const scopePath = await materializeScope(body, id);
+  const args = buildArgs({ ...body, creds: credsPath, scopePath });
   const job = new Job(id, BIN, args, body.repo || body.target || '', body.name || '');
   job.pinnedAgents = body.agents || [];
   jobs.set(id, job);
@@ -666,6 +711,7 @@ async function startJob(body) {
 function authArgs(body) {
   const args = [];
   for (const entry of body.inScope || []) args.push('--in-scope', entry);
+  if (body.scopePath) args.push('--scope-file', body.scopePath);
   if (body.capability) args.push('--capability-token', body.capability);
   if (body.environment) args.push('--environment', body.environment);
   if (body.policyProfile) args.push('--policy', body.policyProfile);
@@ -724,7 +770,8 @@ async function startJobViaRepl(body) {
   const id = crypto.randomUUID();
   const credsPath = await materializeCreds(body, id);
   const script = buildReplScript({ ...body, creds: credsPath });
-  const auth = authArgs(body);
+  const scopePath = await materializeScope(body, id);
+  const auth = authArgs({ ...body, scopePath });
   const job = new Job(id, BIN, auth, body.repo || body.target || '', body.name || '');
   job.pinnedAgents = body.agents || [];
   job.repl = true;

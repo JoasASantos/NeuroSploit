@@ -1,0 +1,67 @@
+# NeuroSploit — engagement scope & guardrails
+# ---------------------------------------------------------------------------
+# HARD scope is enforced in code: a request whose host is not covered by `hard`
+# (or is hit by `exclude`) is REFUSED before it leaves — not warned about,
+# refused. SOFT scope is the guardrails inside that boundary.
+#
+# Every pattern below is a plain string, parsed the same way the --in-scope flag
+# and the web form parse it (crate::scope::Pattern::parse):
+#
+#   app.example.com              exact host
+#   *.example.com                the apex AND every sub-domain
+#   10.0.0.0/24                  an IPv4 network (CIDR)
+#   https://example.com/api/v2   a URL prefix — narrower than a whole host
+#
+# An empty `hard` list means NOTHING is authorized. Scope is never implicit.
+# ===========================================================================
+
+# --- HARD: the allowlist. Only these are testable. ------------------------
+hard:
+  - app.example.com
+  - "*.staging.example.com"          # apex + subdomains of the staging tier
+  - https://example.com/api/v2       # only this path prefix on the apex host
+  - 10.20.30.0/24                    # an internal range reached via --transport
+
+# --- EXCLUDE: carve-outs. These always beat the allowlist. ----------------
+# A host here is refused even if `hard` would otherwise cover it.
+exclude:
+  - admin.example.com                # never touch the admin console
+  - https://app.example.com/billing  # PCI surface — out of this engagement
+  - payments.example.com
+
+# --- SOFT: guardrails inside the boundary ---------------------------------
+soft:
+  # Hosts you may LOOK at but never attack (recon only — no payloads).
+  observe_only:
+    - cdn.example.com
+    - "*.thirdparty.example.com"
+
+  # State-mutating verbs (DELETE/PUT/PATCH). Off by default: a scan should not
+  # change the target's state to "prove" a bug.
+  allow_destructive_methods: false
+
+  # Registering test accounts, and how many. 0 = unlimited (not recommended).
+  allow_account_creation: true
+  max_accounts: 3
+
+  # Requests per minute across the WHOLE engagement. 0 = unlimited.
+  # Keep this low on production; the OT profile caps far lower still.
+  max_requests_per_minute: 240
+
+  # Payload substrings that are NEVER acceptable, whatever the finding — the
+  # classes that damage a production target instead of demonstrating a bug.
+  # These extend the built-in defaults (drop table, rm -rf /, fork bombs, …).
+  forbidden_payloads:
+    - "drop table"
+    - "truncate table"
+    - "delete from"
+    - "rm -rf /"
+    - "shutdown"
+    - "while(true)"
+
+  # Free-text context for the agents. NOT enforceable — kept separate from the
+  # rules on purpose, so nobody mistakes prose for a control.
+  notes:
+    - "Authorized per SOW-2026-0142; contact security@example.com on any outage."
+    - "Test window 02:00–06:00 UTC only."
+    - "Data-exfil PoCs: prove read access with a canary row, do not pull real PII."

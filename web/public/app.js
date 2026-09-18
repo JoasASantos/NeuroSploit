@@ -455,6 +455,27 @@ function budgetSummary() {
   return parts.join(' · ');
 }
 
+/// Gather the Scoping/Guardrails form into the object the server turns into a
+/// scope YAML. A hard list is what makes it a boundary; without one the server
+/// sends nothing and the run keeps its target+flags behaviour.
+function collectScope() {
+  const lines = (id) => ($(`#${id}`)?.value || '').split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean);
+  const hard = lines('scopeHard');
+  const scope = {
+    hard,
+    exclude: lines('scopeExclude'),
+    observeOnly: lines('scopeObserve'),
+    allowDestructive: $('#scopeDestructive')?.checked || false,
+    allowAccountCreation: $('#scopeAccounts') ? $('#scopeAccounts').checked : true,
+    maxAccounts: $('#scopeMaxAccounts')?.value ?? '',
+    rateLimit: $('#scopeRate')?.value ?? '',
+    forbidden: lines('scopeForbidden'),
+    notes: lines('scopeNotes'),
+  };
+  // Only meaningful when a boundary was actually drawn.
+  return hard.length ? scope : undefined;
+}
+
 function renderReview() {
   const target = $('#fieldTarget').value.trim();
   const repo = $('#fieldRepo').value.trim();
@@ -473,6 +494,7 @@ function renderReview() {
     { k: 'Budget', v: budgetSummary() },
     { k: 'Egress', v: state.authz.transport || 'direct' },
     { k: 'Out-of-band', v: state.authz.oobDomain ? `*.${state.authz.oobDomain}` : 'none — blind classes stay leads' },
+    { k: 'Hard scope', v: (() => { const sc = collectScope(); return sc ? `${sc.hard.length} rule(s), ${sc.exclude.length} excluded, ${sc.rateLimit || '∞'}rpm${sc.allowDestructive ? ', destructive ON' : ''}` : 'target + authorized hosts only'; })() },
     { k: 'Intercept', v: $('#fieldIntercept').value === 'off' ? 'direct' : $('#fieldIntercept').value },
     { k: 'Sandbox', v: $('#fieldSandbox').value ? 'Kali container' : 'host' },
     { k: 'PoC re-validation', v: $('#fieldRevalidatePoc').checked ? 'on' : 'off' },
@@ -537,6 +559,7 @@ async function startExploitation() {
     oobHttp: state.authz.oobHttp || undefined,
     oobDns: state.authz.oobDns || undefined,
     sms: state.authz.sms || undefined,
+    scope: collectScope(),
   };
 
   $('#btnLaunch').disabled = true;

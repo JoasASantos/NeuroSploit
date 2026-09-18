@@ -717,6 +717,7 @@ git clone https://github.com/digininja/DVWA /tmp/DVWA
 | `--sandbox [image]` | Run agent commands in a Kali container (docker/podman) instead of on the host. |
 | `--revalidate-poc` | Re-run every PoC after validation; demote any that no longer reproduces. |
 | `--compliance pci-dss,hipaa,soc2` | Map findings onto compliance controls in the report. |
+| `--scope-file <yaml>` | Load the hard scope + guardrails from a YAML file (see `examples/scope.example.yaml`). Enforced in code; a capability token still caps it. |
 | `-v, --verbose` | Log each agent as it launches, recon, and votes. |
 
 ### Authentication — run via API key *or* subscription

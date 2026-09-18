@@ -476,6 +476,62 @@
           <input id="inScope" type="text" placeholder="app.example.com, *.api.example.com, 10.0.0.0/24" />
           <div class="field-help">Without this the engagement is authorized against the target and nothing else — discovering a host is not permission to test it.</div>
         </div>
+
+        <div class="section-title" style="margin-top:20px;display:flex;align-items:center;gap:8px;">
+          Scoping &amp; Guardrails
+          <span class="pill" style="font-size:10px;">enforced in code</span>
+        </div>
+        <div class="field-help" style="margin:-6px 0 10px;">
+          The <b>hard scope</b> is the boundary: a request whose host is not listed is <b>refused before it is sent</b> — not warned about. Exclusions always win. A capability token still caps all of this. Leave the hard list empty to keep the plain target + <em>Additional authorized hosts</em> behaviour.
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="scopeHard">Hard scope <span class="req">— the allowlist</span></label>
+          <textarea id="scopeHard" rows="3" placeholder="one per line, or comma-separated&#10;app.example.com&#10;*.staging.example.com&#10;https://example.com/api/v2&#10;10.20.30.0/24"></textarea>
+          <div class="field-help">Exact host · <code>*.wildcard</code> (apex + subdomains) · <code>CIDR</code> · <code>https://host/path</code> prefix. Empty = nothing extra is enforced here.</div>
+        </div>
+        <div class="field-row">
+          <div class="field-group">
+            <label class="field-label" for="scopeExclude">Exclusions <span class="req">— always win</span></label>
+            <textarea id="scopeExclude" rows="3" placeholder="payments.example.com&#10;admin.example.com&#10;https://app.example.com/billing"></textarea>
+            <div class="field-help">Refused even if the allowlist would cover them.</div>
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="scopeObserve">Observe-only</label>
+            <textarea id="scopeObserve" rows="3" placeholder="cdn.example.com&#10;*.thirdparty.example.com"></textarea>
+            <div class="field-help">May be looked at (recon) but never attacked.</div>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field-group">
+            <label class="field-label">State-changing methods</label>
+            <div class="check-row"><input type="checkbox" id="scopeDestructive" /> <label for="scopeDestructive">Allow DELETE / PUT / PATCH</label></div>
+            <div class="field-help">Off by default — a scan should not change the target's state to prove a bug.</div>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Test accounts</label>
+            <div class="check-row"><input type="checkbox" id="scopeAccounts" checked /> <label for="scopeAccounts">Allow account creation</label></div>
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="scopeMaxAccounts">Max accounts</label>
+            <input class="narrow" id="scopeMaxAccounts" type="number" min="0" value="3" />
+            <div class="field-help">0 = unlimited.</div>
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="scopeRate">Requests / min</label>
+            <input class="narrow" id="scopeRate" type="number" min="0" value="240" />
+            <div class="field-help">Whole engagement. 0 = unlimited. Keep low on production.</div>
+          </div>
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="scopeForbidden">Forbidden payloads</label>
+          <textarea id="scopeForbidden" rows="2" placeholder="delete from&#10;drop table&#10;rm -rf /"></textarea>
+          <div class="field-help">Substrings NEVER acceptable, whatever the finding — the classes that damage a target instead of demonstrating a bug. Extends the built-in defaults.</div>
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="scopeNotes">Notes <span class="req">— guidance, NOT enforced</span></label>
+          <textarea id="scopeNotes" rows="2" placeholder="SOW-2026-0142; test window 02:00–06:00 UTC; prove PII with a canary row only"></textarea>
+          <div class="field-help">Context passed to the agents. Kept separate from the rules on purpose — prose is not a control.</div>
+        </div>
         <div class="field-row">
           <div class="field-group">
             <label class="field-label" for="envSelect">Environment</label>

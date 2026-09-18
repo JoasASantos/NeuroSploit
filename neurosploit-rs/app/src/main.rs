@@ -123,6 +123,11 @@ enum Cmd {
         /// Without this the engagement is authorized against the target and nothing else.
         #[arg(long = "in-scope")]
         in_scope: Vec<String>,
+        /// Load the hard scope + guardrails from a YAML file (see
+        /// examples/scope.example.yaml). Its `hard` list is the boundary;
+        /// --in-scope adds to it and a capability token still caps it.
+        #[arg(long = "scope-file")]
+        scope_file: Option<String>,
         /// Environment, which scales every risk score: lab · development ·
         /// staging · production · ot-production (aliases: ics, scada).
         #[arg(long = "environment", default_value = "production")]
@@ -577,7 +582,7 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Internal { graph, scaffold, from, expand, mermaid, save } => {
             handle_internal(graph.as_deref(), scaffold.as_deref(), &from, expand, mermaid, save.as_deref())?
         }
-        Cmd::Run { url, models, max_agents, vote_n, chain_depth, recon, offline, subscription, mcp, creds, focus, objective, out_of_scope, in_scope, environment, policy, budget, token_limit, deep_test_limit, coverage_first, depth_first, sample_per_route, revalidate_poc, compliance, jira, only, verbose } => {
+        Cmd::Run { url, models, max_agents, vote_n, chain_depth, recon, offline, subscription, mcp, creds, focus, objective, out_of_scope, in_scope, scope_file, environment, policy, budget, token_limit, deep_test_limit, coverage_first, depth_first, sample_per_route, revalidate_poc, compliance, jira, only, verbose } => {
             let url = if url.starts_with("http") { url } else { format!("https://{url}") };
             let mut cfg = RunConfig::new(&url);
             cfg.max_agents = max_agents;
@@ -591,6 +596,16 @@ async fn main() -> anyhow::Result<()> {
             cfg.objective = objective;
             cfg.out_of_scope = out_of_scope;
             cfg.pinned = parse_only(&only);
+            if let Some(path) = scope_file.as_deref() {
+                let sp = harness::scope::ScopePolicy::from_file(std::path::Path::new(path))
+                    .map_err(|e| anyhow::anyhow!("scope-file {path}: {e}"))?;
+                if sp.hard.is_empty() {
+                    println!("  \x1b[33m⚠ {path} sets no hard scope — nothing would be authorized; ignoring it\x1b[0m");
+                } else {
+                    println!("  \x1b[2mscope-file: {} host rule(s), {} exclusion(s), rate {}rpm\x1b[0m", sp.hard.len(), sp.exclude.len(), sp.soft.max_requests_per_minute);
+                    cfg.scope = sp;
+                }
+            }
             apply_authorization(&mut cfg, &in_scope, cli.capability_token.clone(), &environment, &policy)?;
             apply_budget(&mut cfg, budget.as_deref(), token_limit, deep_test_limit, coverage_first, depth_first, sample_per_route)?;
             apply_network(&mut cfg, &cli)?;
