@@ -2129,6 +2129,34 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
         )).await;
     }
 
+    // #9 — evidence integrity: reject fabricated or re-used proof (evidence from
+    // another target, one receipt backing two classes, a foreign OAST marker,
+    // a confirmed finding with no evidence). Strips the proof, never deletes.
+    {
+        let build = crate::provenance::Provenance::process().build.clone();
+        let audits = crate::integrity::audit_evidence(&findings, &build);
+        let bad = audits.iter().filter(|a| !a.clean()).count();
+        if bad > 0 {
+            let by_id: std::collections::HashMap<&str, &crate::integrity::Audit> = audits.iter().map(|a| (a.finding_id.as_str(), a)).collect();
+            for f in findings.iter_mut() {
+                if let Some(a) = by_id.get(f.id.as_str()) {
+                    if !a.clean() {
+                        crate::integrity::apply(f, a);
+                        audit.append(
+                            crate::audit::AuditRecord::new("integrity", "reject-evidence", &f.endpoint)
+                                .hypothesis(&f.id)
+                                .decision(&format!("deny: {}", a.violations.iter().map(|v| v.reason()).collect::<Vec<_>>().join("; ")))
+                                .tool("integrity")
+                                .capability(&cap_id)
+                                .result(&f.title),
+                        );
+                    }
+                }
+            }
+        }
+        let _ = tx.send(format!("notify: 🧾 {}", crate::integrity::summary(&audits))).await;
+    }
+
     // PoC re-validation: re-run each finding's recorded proof and demote any
     // that no longer reproduces. This is the harness checking its own work — a
     // bug that was hotfixed between discovery and reporting, or a "proof" that
@@ -3095,7 +3123,18 @@ async fn deep_recon(cfg: &RunConfig, pool: &ModelPool, probe_facts: &str, tx: &S
     let doctrine = tool_doctrine(pool.mcp_config.is_some());
     let intensity_dir = recon_intensity_directive(intensity);
     let dir = operator_directives(cfg);
-    let mut accum = format!("OBSERVED HTTP PROBE:\n{probe_facts}");
+    // #15 — the probe facts include content the TARGET controls (titles, body
+    // snippets, headers). Fence it as untrusted data before it enters the
+    // prompt, and flag any prompt-injection the target planted in it.
+    let fenced = crate::taint::sanitize(probe_facts, "http-probe");
+    if fenced.is_suspicious() {
+        let _ = tx.send(format!(
+            "notify: 🛑 prompt-injection signal(s) in the target's response neutralised: {}",
+            fenced.signals.iter().map(|x| x.kind.as_str()).collect::<Vec<_>>().join(", ")
+        )).await;
+    }
+    let mut accum = crate::taint::fence(probe_facts, "http-probe");
+    let _ = &fenced;
     let recon_start = std::time::Instant::now();
     let total_rounds = 1 + extra_rounds;
 

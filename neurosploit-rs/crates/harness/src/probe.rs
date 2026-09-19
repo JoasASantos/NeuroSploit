@@ -102,10 +102,27 @@ pub fn http_client() -> reqwest::Client {
 fn client() -> reqwest::Client {
     let ua = std::env::var("NEUROSPLOIT_UA").ok().filter(|v| !v.trim().is_empty())
         .unwrap_or_else(crate::pipeline::default_user_agent);
+    // Redirects are followed, but a redirect to a private/loopback address is
+    // refused — that is the SSRF-redirect-to-internal pivot, and reqwest would
+    // otherwise chase it off the authorized surface. Normal cross-host
+    // redirects between public hosts are still followed (the scope layer judges
+    // the findings; this only stops the network-level pivot).
+    let redirect = reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 5 {
+            return attempt.stop();
+        }
+        let host = crate::netguard::normalize_host(attempt.url().host_str().unwrap_or(""));
+        if let Some(ip) = crate::netguard::parse_ip_any(&host) {
+            if crate::netguard::is_private(&ip) {
+                return attempt.stop();
+            }
+        }
+        attempt.follow()
+    });
     let mut b = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .danger_accept_invalid_certs(true)
-        .redirect(reqwest::redirect::Policy::limited(5))
+        .redirect(redirect)
         .user_agent(ua);
     if let Ok(p) = std::env::var("NEUROSPLOIT_PROXY") {
         if !p.trim().is_empty() {

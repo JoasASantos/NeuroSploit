@@ -124,10 +124,13 @@ impl Pattern {
     }
 
     pub fn matches(&self, url: &str) -> bool {
-        let host = host_of(url);
+        // Canonicalise the host first: alternate IP encodings (decimal, hex,
+        // octal, IPv4-mapped IPv6) collapse to dotted-quad, so a rule cannot be
+        // dodged by respelling the same address. See `crate::netguard`.
+        let host = crate::netguard::normalize_host(&host_of(url));
         match self {
-            Pattern::Host(h) => host == *h,
-            Pattern::Wildcard(root) => host == *root || host.ends_with(&format!(".{root}")),
+            Pattern::Host(h) => host == crate::netguard::normalize_host(h),
+            Pattern::Wildcard(root) => { let root = crate::netguard::normalize_host(root); host == root || host.ends_with(&format!(".{root}")) }
             Pattern::Cidr { base, bits } => ipv4_to_u32(&host).map(|ip| ip & mask(*bits) == *base).unwrap_or(false),
             Pattern::UrlPrefix(p) => {
                 let n = normalize_url(url);
