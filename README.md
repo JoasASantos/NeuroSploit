@@ -525,6 +525,21 @@ neurosploit provenance scan report.pdf.txt  # is this ours? which build?
 neurosploit provenance verify runs/ns-…     # manifest vs findings
 ```
 
+### TypeSafe System One — calibrated adjudication (RLCD)
+
+When `TYPESAFE_API_KEY` is set, each finding is adjudicated by TypeSafe's
+System One model (Jev) — a **calibrated decision** over its *evidence*, not its
+prose: a `Choice` of `{confirmed, needs-review, rejected}` with a probability
+distribution, plus a `Noul` on whether real impact was demonstrated. The result
+refines the finding's confidence and moves borderline cases to needs-review.
+
+It is **additive**: a deterministic validator still rules (a rejected finding
+stays rejected), and TypeSafe can only lower confidence or flag for review,
+never resurrect a claim. Every adjudication is written to the audit trail.
+Disable with `NEUROSPLOIT_TYPESAFE=off`. This is the RLCD (Reinforcement
+Learning for Calibrated Decisions) tier of the model stack — typed judgments
+where the harness needs a number, not a paragraph.
+
 ### Scope-evasion resistance, evidence integrity, untrusted output
 
 Three hardening passes, all enforced in code:

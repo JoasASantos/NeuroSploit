@@ -27,6 +27,41 @@ pub struct RunOutput {
     pub denied: Option<String>,
 }
 
+/// Build the TypeSafe "state" for a finding — its EVIDENCE, not its prose.
+///
+/// System One judges what it is given; giving it the model's own narrative
+/// would just launder the narrative back as a probability. So the state is the
+/// recorded request/response facts and the structured fields, and nothing the
+/// agent wrote about them.
+fn typesafe_state(f: &Finding) -> serde_json::Value {
+    let ex = |x: &Option<crate::validation::Exchange>| -> serde_json::Value {
+        match x {
+            Some(e) => serde_json::json!({
+                "method": e.method, "url": e.url, "status": e.status,
+                "content_type": e.content_type,
+                "body_snippet": e.body.chars().take(1200).collect::<String>(),
+            }),
+            None => serde_json::Value::Null,
+        }
+    };
+    let evidence = f.evidence_data.as_ref().map(|ev| serde_json::json!({
+        "baseline": ex(&ev.baseline),
+        "attack": ex(&ev.attack),
+        "marker": ev.marker,
+        "marker_observed": ev.marker_observed,
+        "browser_executed": ev.browser_executed,
+        "callback_received": ev.callback_received,
+    })).unwrap_or(serde_json::Value::Null);
+    serde_json::json!({
+        "class": f.cwe,
+        "title": f.title,
+        "endpoint": f.endpoint,
+        "payload": f.payload,
+        "auth_context": f.auth_context,
+        "evidence": evidence,
+    })
+}
+
 /// A run that stopped before it started.
 ///
 /// Returned when the egress or the authorization boundary refuses the target.
@@ -2155,6 +2190,57 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
             }
         }
         let _ = tx.send(format!("notify: 🧾 {}", crate::integrity::summary(&audits))).await;
+    }
+
+    // TypeSafe System One adjudication (optional). When TYPESAFE_API_KEY is set,
+    // a calibrated Choice over {confirmed, needs-review, rejected} plus an
+    // "impact demonstrated" Noul is asked over each finding's EVIDENCE (never
+    // its prose). Additive: it never overrules a deterministic validator —
+    // evidence still rules — it only refines confidence and moves a borderline
+    // finding to needs-review. Off with NEUROSPLOIT_TYPESAFE=off.
+    if std::env::var("NEUROSPLOIT_TYPESAFE").unwrap_or_default().trim().to_lowercase() != "off" {
+        if let Some(ts) = crate::typesafe::TypeSafe::from_env() {
+            let _ = tx.send("notify: 🧮 TypeSafe System One adjudicating findings…".to_string()).await;
+            let mut refined = 0usize;
+            for f in findings.iter_mut() {
+                let state = typesafe_state(f);
+                match ts.adjudicate(state).await {
+                    Ok(adj) => {
+                        // A deterministic rejection is final; TypeSafe can only
+                        // lower confidence or flag for review, never resurrect.
+                        if f.review_status != "rejected" {
+                            let cal = adj.calibrated_confidence();
+                            // Take the more conservative of the two confidences.
+                            f.confidence = f.confidence.min(cal.max(0.05));
+                            if adj.wants_review() && f.review_status.is_empty() {
+                                f.review_status = "needs-review".into();
+                                f.validated = false;
+                                f.review_reason = format!(
+                                    "TypeSafe: p(confirmed)={:.2}, impact={:.2} — below the bar for auto-confirm",
+                                    adj.p_confirmed, adj.impact_demonstrated
+                                );
+                            }
+                            refined += 1;
+                        }
+                        audit.append(
+                            crate::audit::AuditRecord::new("typesafe", "adjudicate-finding", &f.endpoint)
+                                .hypothesis(&f.id)
+                                .decision(&format!("{}: p_confirmed={:.2} impact={:.2} conf={:.2}", adj.verdict, adj.p_confirmed, adj.impact_demonstrated, adj.confidence))
+                                .tool("typesafe:jev-latest")
+                                .capability(&cap_id)
+                                .result(&f.title),
+                        );
+                    }
+                    Err(e) => {
+                        let _ = tx.send(format!("notify: ⚠ TypeSafe unavailable ({e}) — keeping deterministic verdicts")).await;
+                        break; // don't hammer a failing service
+                    }
+                }
+            }
+            if refined > 0 {
+                let _ = tx.send(format!("notify: 🧮 TypeSafe refined {refined} finding(s) with calibrated confidence")).await;
+            }
+        }
     }
 
     // PoC re-validation: re-run each finding's recorded proof and demote any

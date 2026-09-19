@@ -47,6 +47,7 @@ pub mod scope;
 pub mod taint;
 pub mod transport;
 pub mod types;
+pub mod typesafe;
 pub mod uncertainty;
 pub mod validation;
 pub mod waf;
