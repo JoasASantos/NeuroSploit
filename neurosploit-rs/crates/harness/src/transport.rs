@@ -139,6 +139,16 @@ impl Egress {
 /// `.internal`/`.corp` style names. These are the addresses that resolve to
 /// something different depending on which network you are on, which is exactly
 /// the condition that makes a missing VPN dangerous rather than merely broken.
+/// Loopback target — unambiguous, exempt from the fail-closed transport gate.
+pub fn is_loopback_target(target: &str) -> bool {
+    let host = target.rsplit("://").next().unwrap_or(target)
+        .split('/').next().unwrap_or("")
+        .rsplit('@').next().unwrap_or("")
+        .trim_end_matches('.').to_lowercase();
+    let host = if let Some(rest) = host.strip_prefix('[') { rest.split(']').next().unwrap_or(rest).to_string() } else { host.split(':').next().unwrap_or(&host).to_string() };
+    host == "localhost" || host == "127.0.0.1" || host == "::1" || host.starts_with("127.")
+}
+
 pub fn is_internal(target: &str) -> bool {
     let host = target
         .rsplit("://")
@@ -218,7 +228,11 @@ impl Transport {
     /// and it is a refusal rather than a warning because a warning in a log
     /// nobody is reading is not a control.
     pub fn admits(&self, target: &str) -> Result<(), String> {
-        if self.egress == Egress::Direct && is_internal(target) {
+        // Loopback is exempt: 127.0.0.1 / localhost / ::1 unambiguously mean
+        // THIS host, regardless of any VPN — there is no network-position
+        // ambiguity to fail closed on. The gate exists for RFC1918-style
+        // addresses that resolve to different machines depending on the route.
+        if self.egress == Egress::Direct && is_internal(target) && !is_loopback_target(target) {
             return Err(format!(
                 "{target} is an internal address and no transport is configured. \
                  With the VPN or bastion down this address belongs to whatever network this host is on, \
