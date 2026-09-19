@@ -182,6 +182,16 @@ enum Cmd {
         /// Run id (`ns-…`) or a path to the run directory.
         run: String,
     },
+    /// Verify a finished run's audit trail — the hash chain and, with --anchor,
+    /// the signed anchors that catch truncation and silent rebuilds.
+    Audit {
+        /// Run id (`ns-…`) or path to the run directory.
+        run: String,
+        /// Also verify anchors (P4): truncation, rebuild and, if a key is set,
+        /// anchor signatures.
+        #[arg(long = "anchor")]
+        anchor: bool,
+    },
     /// Compliance mapping: re-frame a finished run's findings against PCI-DSS,
     /// HIPAA or SOC 2 controls.
     Compliance {
@@ -205,6 +215,15 @@ enum Cmd {
         /// Write the demoted findings back to findings.json.
         #[arg(long = "apply")]
         apply: bool,
+    },
+    /// Assemble/print/verify a run's assurance bundle (P1–P5 in one manifest).
+    Assurance {
+        /// Run id (`ns-…`) or path to the run directory.
+        run: String,
+        /// Verify the bundle against the run dir (hashes + signature) instead
+        /// of assembling a fresh one.
+        #[arg(long = "verify")]
+        verify: bool,
     },
     /// Manage the Kali sandbox container (up · exec · down).
     Sandbox {
@@ -574,6 +593,8 @@ async fn main() -> anyhow::Result<()> {
                 Err(e) => anyhow::bail!("rebuild failed: {e}"),
             }
         }
+        Cmd::Audit { run, anchor } => handle_audit(&base, &run, anchor)?,
+        Cmd::Assurance { run, verify } => handle_assurance(&base, &run, verify)?,
         Cmd::Compliance { run, framework, include_leads } => handle_compliance(&base, &run, &framework, include_leads)?,
         Cmd::Poc { run, repeats, apply } => handle_poc(&base, &run, repeats, apply).await?,
         Cmd::Sandbox { cmd } => handle_sandbox(cmd).await?,
@@ -619,6 +640,7 @@ async fn main() -> anyhow::Result<()> {
             apply_creds(&mut cfg, creds.as_deref()).await;
             let out = run_engagement(&base, cfg, mcp, false).await?;
             print_findings(&out);
+            if let Some(code) = &out.denied { anyhow::bail!("{code}"); }
             let ig = harness::integrations::Integrations::load(&repl::proj_dir());
             post_integrations(&ig, &url, &out, jira, false, None).await;
         }
@@ -1100,6 +1122,11 @@ async fn run_mode(base: &Path, cfg: RunConfig, mcp: bool, mode: Mode) -> anyhow:
 }
 
 pub(crate) fn print_findings(out: &RunOutput) {
+    if let Some(code) = &out.denied {
+        eprintln!("\n\x1b[1;31m⛔ RUN REFUSED\x1b[0m — {code}");
+        eprintln!("  The target was not authorized. Nothing was tested. See audit.jsonl.");
+        return;
+    }
     println!("\n=== {} validated finding(s) ===", out.findings.len());
     if !out.findings.is_empty() {
         let mut by = std::collections::BTreeMap::new();
@@ -1345,6 +1372,54 @@ fn load_findings(dir: &std::path::Path) -> anyhow::Result<Vec<harness::types::Fi
     let text = std::fs::read_to_string(dir.join("findings.json"))
         .map_err(|e| anyhow::anyhow!("no findings.json in {}: {e}", dir.display()))?;
     Ok(serde_json::from_str(&text)?)
+}
+
+fn handle_assurance(base: &std::path::Path, run: &str, verify: bool) -> anyhow::Result<()> {
+    let dir = resolve_run(base, run)?;
+    let key = std::env::var("NEUROSPLOIT_PROVENANCE_KEY").ok().filter(|k| !k.trim().is_empty()).map(|k| k.into_bytes());
+    if verify {
+        let text = std::fs::read_to_string(dir.join("assurance.json"))
+            .map_err(|e| anyhow::anyhow!("no assurance.json in {}: {e}", dir.display()))?;
+        let bundle: harness::assurance::Bundle = serde_json::from_str(&text)?;
+        match bundle.verify(&dir, key.as_deref()) {
+            Ok(()) => println!("  \x1b[1;32m✓ assurance bundle verified\x1b[0m — {} artifact(s){}", bundle.artifacts.iter().filter(|a| a.present).count(), if key.is_some() { ", signature valid" } else { " (signature NOT checked)" }),
+            Err(e) => { println!("  \x1b[1;31m✗ {e}\x1b[0m"); anyhow::bail!("assurance verification failed"); }
+        }
+    } else {
+        let bundle = harness::assurance::Bundle::build(&dir);
+        let bundle = match &key { Some(k) => bundle.sign(k), None => bundle };
+        let out = dir.join("assurance.json");
+        std::fs::write(&out, serde_json::to_string_pretty(&bundle)?)?;
+        print!("\n{}", bundle.summary());
+        println!("  \x1b[2mbundle hash {} · saved → {}\x1b[0m", &bundle.bundle_hash[..16.min(bundle.bundle_hash.len())], out.display());
+    }
+    Ok(())
+}
+
+fn handle_audit(base: &std::path::Path, run: &str, anchor: bool) -> anyhow::Result<()> {
+    let dir = resolve_run(base, run)?;
+    let log = harness::audit::AuditLog::open(dir.join("audit.jsonl"));
+    if anchor {
+        // A provenance key verifies anchor signatures too; without it we still
+        // catch truncation and rebuilds by hash, and say the sigs are unchecked.
+        let key = std::env::var("NEUROSPLOIT_PROVENANCE_KEY").ok().filter(|k| !k.trim().is_empty()).map(|k| k.into_bytes());
+        match log.verify_anchored(key.as_deref()) {
+            Ok(rep) => {
+                println!("  \x1b[1;32m✓ audit chain intact\x1b[0m — {} record(s)", rep.records);
+                println!("  \x1b[1;32m✓ {} anchor(s) consistent\x1b[0m{}", rep.anchors, if rep.signed { " (signatures verified)" } else { " (signatures NOT checked — set NEUROSPLOIT_PROVENANCE_KEY)" });
+            }
+            Err(e) => {
+                println!("  \x1b[1;31m✗ {e}\x1b[0m");
+                anyhow::bail!("audit verification failed");
+            }
+        }
+    } else {
+        match log.verify() {
+            Ok(n) => println!("  \x1b[1;32m✓ audit chain intact\x1b[0m — {n} record(s). (Add --anchor to check truncation/rebuild.)"),
+            Err(e) => { println!("  \x1b[1;31m✗ {e}\x1b[0m"); anyhow::bail!("audit verification failed"); }
+        }
+    }
+    Ok(())
 }
 
 fn handle_compliance(base: &std::path::Path, run: &str, frameworks: &[String], include_leads: bool) -> anyhow::Result<()> {

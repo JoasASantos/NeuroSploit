@@ -7,6 +7,7 @@
 //! **N-model voting** before scoring and reporting.
 
 pub mod agents;
+pub mod assurance;
 pub mod attack_graph;
 pub mod audit;
 pub mod belief;
@@ -17,6 +18,7 @@ pub mod chain;
 pub mod claims;
 pub mod compliance;
 pub mod creds;
+pub mod cvss;
 pub mod grounding;
 pub mod hygiene;
 pub mod inbox;

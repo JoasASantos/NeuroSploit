@@ -525,6 +525,39 @@ neurosploit provenance scan report.pdf.txt  # is this ours? which build?
 neurosploit provenance verify runs/ns-…     # manifest vs findings
 ```
 
+### Assurance — target gate, CVSS, anchoring, one bundle
+
+**Target authorization gate (default-deny).** Before any recon, the target is
+validated against the capability grant — protocol, host, port, URL prefix. A
+token that does not cover the target refuses the run with
+`DENY_TARGET_OUTSIDE_GRANT`, logs it, and exits non-zero. The CLI target is no
+longer auto-trusted when a grant is in force.
+
+**CVSS computed from evidence.** `cvss.rs` implements the FIRST v3.1 base
+equation verbatim (checked against first.org reference vectors) and grades each
+impact metric against a receipt: `C:H`/`I:H` with no evidence is dropped to the
+*demonstrated* vector while the *potential* vector keeps it. SQLi with nothing
+extracted is not a 9.8.
+
+**Audit anchoring (P4).** `audit.jsonl` is hash-chained; a signed **anchor**
+(`neurosploit audit <run> --anchor`) is written per run and, with
+`NEUROSPLOIT_ANCHOR_DIR`, to external append-only storage. Truncation and
+silent rebuilds are then detectable, not just neighbour-tampering.
+
+**Assurance bundle (P1–P5 in one run).** Every run emits `assurance.json`: each
+artifact with its SHA-256, which of the five properties it produced
+(authorization · enforcement · evidence/CVSS · integrity · provenance), a
+bundle hash and a signature. Verify independently:
+
+```bash
+neurosploit assurance <run>            # assemble + print the P1–P5 summary
+neurosploit assurance <run> --verify   # re-hash every artifact + check the signature
+neurosploit audit <run> --anchor       # chain + anchors (truncation/rebuild/forgery)
+```
+
+A property is reported `present` only when its artifact is actually on disk —
+a missing anchor is `partial`, never quietly omitted.
+
 ### Egress — how traffic reaches the target
 
 Internal engagements happen *through* something, and the dangerous failure is

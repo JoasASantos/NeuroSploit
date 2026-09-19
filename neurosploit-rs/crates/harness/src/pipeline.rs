@@ -20,6 +20,11 @@ pub struct RunOutput {
     pub workdir: String,
     /// Paths to persisted artifacts (recon/exploit/findings/report), if any.
     pub artifacts: Vec<String>,
+    /// Set when the run was refused before it started — a scope/authorization
+    /// denial the caller must surface with a non-zero exit, not a clean "0
+    /// findings". Carries the machine-readable reason code.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub denied: Option<String>,
 }
 
 /// A run that stopped before it started.
@@ -29,6 +34,13 @@ pub struct RunOutput {
 /// it the same way it reports any other run, and an empty findings list is the
 /// honest answer to "what did you find" when nothing was ever tested.
 fn aborted(cfg: &RunConfig) -> RunOutput {
+    aborted_with(cfg, None)
+}
+
+/// As [`aborted`], but records a machine-readable denial code so the CLI can
+/// exit non-zero and the reason is auditable — a refused engagement is a
+/// result the operator must be able to prove, not a silent no-op.
+fn aborted_with(cfg: &RunConfig, denied: Option<String>) -> RunOutput {
     RunOutput {
         target: cfg.target.clone(),
         findings: vec![],
@@ -37,6 +49,7 @@ fn aborted(cfg: &RunConfig) -> RunOutput {
         recon: String::new(),
         workdir: cfg.workdir.clone().unwrap_or_default(),
         artifacts: vec![],
+        denied,
     }
 }
 
@@ -650,6 +663,7 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
                 candidates: 0,
                 recon: String::new(),
                 artifacts: vec![],
+                denied: None,
             };
         }
     };
@@ -674,6 +688,26 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
     // minted, so everything the run emits agrees on which run it came from.
     let prov = crate::provenance::Provenance::bind_run(&run_id(&cfg));
     let _ = tx.send(format!("notify: 🧬 provenance {} (build {})", prov.tag(), prov.build)).await;
+
+    // P1 — target authorization gate, default-deny, BEFORE any reconnaissance.
+    // A capability token that does not cover the target is the exact bypass
+    // this closes: the run refuses the target instead of quietly seeding it
+    // into scope. Legacy (no token) still authorizes a bare target.
+    {
+        let has_grant = matches!(verify_capability(&cfg), Ok(Some(_)));
+        let escope = effective_scope(&cfg);
+        if let Err(reason) = escope.validate_target(&cfg.target, has_grant) {
+            let _ = tx.send(format!("notify: ⛔ DENY_TARGET_OUTSIDE_GRANT — {reason}")).await;
+            let audit = audit_log(&cfg);
+            audit.append(
+                crate::audit::AuditRecord::new("scope-guard", "deny-target-outside-grant", &cfg.target)
+                    .decision(&format!("DENY_TARGET_OUTSIDE_GRANT: {reason}"))
+                    .tool("scope-guard")
+                    .result("run refused before reconnaissance"),
+            );
+            return aborted_with(&cfg, Some(format!("DENY_TARGET_OUTSIDE_GRANT: {reason}")));
+        }
+    }
 
     // Egress, fail-closed. An internal target with the VPN down belongs to
     // whatever network this host is on — not the client's — so the run stops
@@ -822,7 +856,7 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
                 .unwrap_or_else(|| "no HTTP response".into());
             let _ = tx.send(format!("✗ target unreachable — {} is DOWN ({why}). Aborting; check the URL/port or that the service is up.", cfg.target)).await;
             let artifacts = persist(&cfg, "{}", "", &[]);
-            return RunOutput { target: cfg.target.clone(), workdir: cfg.workdir.clone().unwrap_or_default(), findings: vec![], agents_ran: vec![], candidates: 0, recon: String::new(), artifacts };
+            return RunOutput { target: cfg.target.clone(), workdir: cfg.workdir.clone().unwrap_or_default(), findings: vec![], agents_ran: vec![], candidates: 0, recon: String::new(), artifacts, denied: None };
         }
         // Identify the ASSET (product + stack), not just the URL, for the report.
         let asset = identify_asset(&p);
@@ -855,7 +889,7 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
             let _ = tx.send(n).await;
         }
         let artifacts = persist(&cfg, &recon, "", &[]);
-        return RunOutput { target: cfg.target.clone(), workdir: cfg.workdir.clone().unwrap_or_default(), findings: vec![], agents_ran: selected.iter().map(|a| a.name.clone()).collect(), candidates: 0, recon, artifacts };
+        return RunOutput { target: cfg.target.clone(), workdir: cfg.workdir.clone().unwrap_or_default(), findings: vec![], agents_ran: selected.iter().map(|a| a.name.clone()).collect(), candidates: 0, recon, artifacts, denied: None };
     }
 
     // Use the model to pick the agents whose preconditions match the recon —
@@ -1071,7 +1105,7 @@ pub async fn run_whitebox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: S
 
     if cfg.offline || bytes == 0 {
         let artifacts = persist(&cfg, "{}", &context, &[]);
-        return RunOutput { target: cfg.target.clone(), workdir: cfg.workdir.clone().unwrap_or_default(), findings: vec![], agents_ran: selected.iter().map(|a| a.name.clone()).collect(), candidates: 0, recon: String::new(), artifacts };
+        return RunOutput { target: cfg.target.clone(), workdir: cfg.workdir.clone().unwrap_or_default(), findings: vec![], agents_ran: selected.iter().map(|a| a.name.clone()).collect(), candidates: 0, recon: String::new(), artifacts, denied: None };
     }
 
     let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(selected.iter().cloned())
@@ -1190,7 +1224,7 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
         let _ = tx.send(format!("offline: selected {} agent(s); no live exploitation", selected.len())).await;
         let artifacts = persist(&cfg, &recon, &code_leads, &[]);
         return RunOutput { target: cfg.target.clone(), workdir: cfg.workdir.clone().unwrap_or_default(), findings: vec![],
-            agents_ran: selected.iter().map(|a| a.name.clone()).collect(), candidates: 0, recon, artifacts };
+            agents_ran: selected.iter().map(|a| a.name.clone()).collect(), candidates: 0, recon, artifacts, denied: None };
     }
 
     let chosen = select_agents(pool, &recon, &focus, &ranked, &tx).await;
@@ -2173,6 +2207,17 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
             .capability(&cap_id)
             .result(&format!("{} finding(s) reported", findings.len())),
     );
+    // P4 — anchor the chain: a signed checkpoint of the head, written locally
+    // and (if NEUROSPLOIT_ANCHOR_DIR is set) to external append-only storage.
+    // This is what makes a later truncation or silent rebuild detectable.
+    let anchor_key = provenance_key().unwrap_or_else(|| crate::provenance::Provenance::build_fingerprint().into_bytes());
+    let anchor = audit.checkpoint(&anchor_key, "engagement-end");
+    let _ = tx.send(format!(
+        "notify: ⚓ audit anchored — {} record(s), head {}{}",
+        anchor.count,
+        anchor.chain_hash.chars().take(12).collect::<String>(),
+        if provenance_key().is_some() { " (signed)" } else { " (unsigned — set NEUROSPLOIT_PROVENANCE_KEY)" }
+    )).await;
     match audit.verify() {
         Ok(n) => {
             let _ = tx.send(format!("audit trail: {n} record(s), hash chain intact → audit.jsonl")).await;
@@ -2213,6 +2258,7 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
         agents_ran: selected.iter().map(|a| a.name.clone()).collect(),
         recon,
         artifacts,
+        denied: None,
     }
 }
 
@@ -2366,6 +2412,15 @@ fn persist(cfg: &RunConfig, recon: &str, transcript: &str, findings: &[Finding])
         None => manifest,
     };
     put("provenance.json", serde_json::to_string_pretty(&manifest).unwrap_or_default());
+    // P5 — the assurance bundle: one manifest of every artifact + hashes,
+    // signed, so a reviewer can verify the whole run independently. Built last
+    // so it hashes the files just written above.
+    let bundle = crate::assurance::Bundle::build(&dir);
+    let bundle = match provenance_key() {
+        Some(k) => bundle.sign(&k),
+        None => bundle,
+    };
+    put("assurance.json", serde_json::to_string_pretty(&bundle).unwrap_or_default());
     put("findings.md", findings_md(&cfg.target, findings));
     // Compliance mapping, one file per requested framework. Confirmed findings
     // only — a lead is not a control gap.
@@ -2905,7 +2960,7 @@ pub async fn run_host(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sende
         let _ = tx.send(format!("offline: selected {} infra agent(s); no live testing", selected.len())).await;
         let artifacts = persist(&cfg, &recon, "", &[]);
         return RunOutput { target: cfg.target.clone(), workdir: cfg.workdir.clone().unwrap_or_default(), findings: vec![],
-            agents_ran: selected.iter().map(|a| a.name.clone()).collect(), candidates: 0, recon, artifacts };
+            agents_ran: selected.iter().map(|a| a.name.clone()).collect(), candidates: 0, recon, artifacts, denied: None };
     }
 
     let chosen = select_agents(pool, &recon, &focus, &ranked, &tx).await;

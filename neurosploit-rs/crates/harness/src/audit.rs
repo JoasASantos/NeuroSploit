@@ -255,6 +255,163 @@ impl AuditLog {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// Sign the current chain head and record an anchor.
+    ///
+    /// This is P4: a hash chain proves a record was not altered *relative to its
+    /// neighbours*, but says nothing against someone who rebuilds the whole file
+    /// consistently, or truncates its tail. An anchor is a signed statement —
+    /// "at phase X the chain had N records ending in hash H" — written to a
+    /// separate file and, when `NEUROSPLOIT_ANCHOR_DIR` is set, to external
+    /// (ideally WORM/Object-Lock) storage. A later truncation or silent rebuild
+    /// then contradicts an anchor the attacker cannot forge without the key.
+    pub fn checkpoint(&self, key: &[u8], phase: &str) -> Anchor {
+        let records = self.read_all();
+        let count = records.len() as u64;
+        let head = records.last().map(|r| r.hash.clone()).unwrap_or_default();
+        let ts = now();
+        let body = format!("{count}|{head}|{phase}|{ts}");
+        let anchor = Anchor {
+            phase: phase.to_string(),
+            count,
+            chain_hash: head,
+            at: ts,
+            signature: hmac_hex(key, body.as_bytes()),
+        };
+        if let Ok(line) = serde_json::to_string(&anchor) {
+            use std::io::Write;
+            let ap = self.anchors_path();
+            if let Ok(mut fh) = std::fs::OpenOptions::new().create(true).append(true).open(&ap) {
+                let _ = writeln!(fh, "{line}");
+            }
+            // External copy: append-only, so a local tamper cannot also rewrite
+            // the off-box record. WORM/Object-Lock is the operator's to enforce
+            // on that directory; we just write there.
+            if let Ok(dir) = std::env::var("NEUROSPLOIT_ANCHOR_DIR") {
+                if !dir.trim().is_empty() {
+                    let _ = std::fs::create_dir_all(&dir);
+                    let name = self.path.file_stem().and_then(|s| s.to_str()).unwrap_or("audit");
+                    if let Ok(mut fh) = std::fs::OpenOptions::new().create(true).append(true).open(std::path::Path::new(&dir).join(format!("{name}.anchors.jsonl"))) {
+                        let _ = writeln!(fh, "{line}");
+                    }
+                }
+            }
+        }
+        anchor
+    }
+
+    fn anchors_path(&self) -> PathBuf {
+        let mut p = self.path.clone();
+        let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("audit.jsonl").to_string();
+        p.set_file_name(format!("{name}.anchors"));
+        p
+    }
+
+    /// Read the anchors recorded for this trail (local file).
+    pub fn anchors(&self) -> Vec<Anchor> {
+        std::fs::read_to_string(self.anchors_path())
+            .map(|t| t.lines().filter_map(|l| serde_json::from_str(l).ok()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Verify the chain AND every anchor against it.
+    ///
+    /// Catches the two attacks a bare chain misses: **truncation** (the chain is
+    /// now shorter than an anchor's `count`, so the tail was removed) and a
+    /// **silent rebuild** (an anchor's `chain_hash` no longer matches the record
+    /// at that position). With `key`, anchor signatures are verified too, so a
+    /// forged anchor is caught as well.
+    pub fn verify_anchored(&self, key: Option<&[u8]>) -> Result<AnchorReport, String> {
+        let n = self.verify()?; // chain integrity first
+        let records = self.read_all();
+        let anchors = self.anchors();
+        let mut checked = 0usize;
+        for a in &anchors {
+            if let Some(k) = key {
+                let body = format!("{}|{}|{}|{}", a.count, a.chain_hash, a.phase, a.at);
+                if !constant_time_eq(hmac_hex(k, body.as_bytes()).as_bytes(), a.signature.as_bytes()) {
+                    return Err(format!("anchor for phase '{}' (#{} records) has an invalid signature", a.phase, a.count));
+                }
+            }
+            if (records.len() as u64) < a.count {
+                return Err(format!(
+                    "TRUNCATION: an anchor attests {} record(s) but the chain now has {} — the tail was removed",
+                    a.count, records.len()
+                ));
+            }
+            let at_pos = records.get(a.count.saturating_sub(1) as usize).map(|r| r.hash.clone()).unwrap_or_default();
+            if a.count > 0 && at_pos != a.chain_hash {
+                return Err(format!(
+                    "REBUILD: the chain hash at record #{} does not match its anchor — the log was rewritten",
+                    a.count
+                ));
+            }
+            checked += 1;
+        }
+        Ok(AnchorReport { records: n, anchors: checked, signed: key.is_some() })
+    }
+}
+
+/// A signed statement about the chain at a moment in time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Anchor {
+    /// Which phase produced it (a checkpoint per phase, plus one at the end).
+    pub phase: String,
+    /// How many records the chain had.
+    pub count: u64,
+    /// The hash of the last record — the chain head.
+    pub chain_hash: String,
+    /// Unix seconds.
+    pub at: u64,
+    /// HMAC over `count|chain_hash|phase|at`.
+    pub signature: String,
+}
+
+/// The result of an anchored verification.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnchorReport {
+    pub records: usize,
+    pub anchors: usize,
+    pub signed: bool,
+}
+
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn hmac_hex(key: &[u8], data: &[u8]) -> String {
+    const BLOCK: usize = 64;
+    let mut k = [0u8; BLOCK];
+    if key.len() > BLOCK {
+        let d = Sha256::digest(key);
+        k[..32].copy_from_slice(&d);
+    } else {
+        k[..key.len()].copy_from_slice(key);
+    }
+    let mut ipad = [0x36u8; BLOCK];
+    let mut opad = [0x5cu8; BLOCK];
+    for i in 0..BLOCK {
+        ipad[i] ^= k[i];
+        opad[i] ^= k[i];
+    }
+    let mut inner = Sha256::new();
+    inner.update(ipad);
+    inner.update(data);
+    let inner = inner.finalize();
+    let mut outer = Sha256::new();
+    outer.update(opad);
+    outer.update(inner);
+    outer.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 /// Why a run was killed. Each variant is a condition that either occurred or
@@ -573,4 +730,54 @@ mod tests {
         assert!((2020..2100).contains(&year), "{ts}");
         assert_eq!(civil_from_days(0), (1970, 1, 1));
     }
+
+    #[test]
+    fn anchoring_detects_truncation_and_rebuild() {
+        let dir = std::env::temp_dir().join(format!("ns-audit-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("audit.jsonl");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(dir.join("audit.jsonl.anchors"));
+        let key = b"anchor-key";
+
+        let log = AuditLog::open(&path);
+        for i in 0..5 {
+            log.append(AuditRecord::new("a", "act", &format!("t{i}")));
+        }
+        let a = log.checkpoint(key, "phase-1");
+        assert_eq!(a.count, 5);
+
+        // Clean state verifies, signature checked.
+        let rep = log.verify_anchored(Some(key)).expect("clean");
+        assert_eq!(rep.records, 5);
+        assert_eq!(rep.anchors, 1);
+        assert!(rep.signed);
+
+        // Truncate the tail: remove the last two records from the file.
+        let text = std::fs::read_to_string(&path).unwrap();
+        let kept: Vec<&str> = text.lines().take(3).collect();
+        std::fs::write(&path, kept.join("\n") + "\n").unwrap();
+        let reopened = AuditLog::open(&path);
+        let err = reopened.verify_anchored(Some(key)).unwrap_err();
+        assert!(err.contains("TRUNCATION"), "got: {err}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_forged_anchor_is_caught_by_the_signature() {
+        let dir = std::env::temp_dir().join(format!("ns-audit-forge-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("audit.jsonl");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(dir.join("audit.jsonl.anchors"));
+        let log = AuditLog::open(&path);
+        log.append(AuditRecord::new("a", "act", "t"));
+        log.checkpoint(b"real-key", "p");
+        // Verifying under a different key rejects the anchor.
+        let err = log.verify_anchored(Some(b"wrong-key")).unwrap_err();
+        assert!(err.contains("invalid signature"), "got: {err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }

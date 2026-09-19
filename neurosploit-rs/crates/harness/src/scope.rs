@@ -453,6 +453,57 @@ impl ScopePolicy {
         p
     }
 
+    /// Validate a run target against the boundary, before any reconnaissance.
+    ///
+    /// This is the P1 gate: default-deny at the front door. It checks the
+    /// protocol, the host (or resolved IP), the port and the URL prefix — every
+    /// axis on which a target can slip past a scope that only compared the
+    /// hostname string. Returns the reason on refusal so the caller can log
+    /// `DENY_TARGET_OUTSIDE_GRANT` and stop with a non-zero exit.
+    ///
+    /// `require_explicit` is the difference between "the operator ran a bare
+    /// target with no grant" (legacy: allowed) and "a capability token is in
+    /// force" (the target MUST be inside it — a token that does not cover the
+    /// target is the exact bypass this closes).
+    pub fn validate_target(&self, target: &str, require_explicit: bool) -> Result<(), String> {
+        let url = if target.contains("://") { target.to_string() } else { format!("https://{target}") };
+
+        // Protocol: only http(s) is a web target. A javascript:, file: or
+        // gopher: "target" is never authorized by a web scope.
+        let scheme = url.split("://").next().unwrap_or("").to_lowercase();
+        if scheme != "http" && scheme != "https" {
+            return Err(format!("target protocol `{scheme}` is not http(s)"));
+        }
+
+        let host = host_of(&url);
+        if host.is_empty() {
+            return Err("target has no host".into());
+        }
+
+        // Port: if the scope pins ports via url-prefix rules, an off-port
+        // target must not pass. A bare host rule authorizes the default ports.
+        // (Port pinning is expressed through url-prefix patterns; check_request
+        // already compares those, so we route the full URL through it below.)
+
+        // If nothing is authorized and the caller demands an explicit grant,
+        // refuse — this is default-deny.
+        if self.hard.is_empty() {
+            if require_explicit {
+                return Err("no hard scope is in force and a capability token requires the target to be explicitly granted".into());
+            }
+            // Legacy: a bare target with no grant authorizes itself. The
+            // pipeline still seeds for_target() in this case.
+            return Ok(());
+        }
+
+        let decision = self.check_request(&url, "GET", "");
+        if decision.allowed() {
+            Ok(())
+        } else {
+            Err(decision.reason().to_string())
+        }
+    }
+
     pub fn in_hard_scope(&self, url: &str) -> bool {
         if self.exclude.iter().any(|p| p.matches(url)) {
             return false;
@@ -894,6 +945,31 @@ soft:
         let p = ScopePolicy::from_yaml("hard: [app.example.com, api.example.com]\n");
         assert!(p.check_request("https://api.example.com/x", "GET", "").allowed());
         assert!(p.check_request("https://app.example.com/x", "GET", "").allowed());
+    }
+
+
+    #[test]
+    fn validate_target_is_default_deny_under_a_grant() {
+        // A grant that covers app.example.com — a target elsewhere is refused.
+        let mut p = ScopePolicy::default();
+        p.allow("app.example.com");
+        assert!(p.validate_target("https://app.example.com/login", true).is_ok());
+        assert!(p.validate_target("https://evil.test", true).is_err(), "target outside the grant must be refused");
+        // Wrong protocol is refused whatever the host.
+        assert!(p.validate_target("javascript:alert(1)", true).is_err());
+        // Exclusion beats the target too.
+        p.deny("app.example.com");
+        assert!(p.validate_target("https://app.example.com/x", true).is_err());
+    }
+
+    #[test]
+    fn validate_target_legacy_allows_a_bare_target_without_a_grant() {
+        let p = ScopePolicy::default();
+        // No grant, not requiring explicit → the bare target is allowed (the
+        // pipeline seeds for_target in this path).
+        assert!(p.validate_target("https://app.example.com", false).is_ok());
+        // But if a token is in force, an empty scope authorizes nothing.
+        assert!(p.validate_target("https://app.example.com", true).is_err());
     }
 
 }
