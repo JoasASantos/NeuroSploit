@@ -408,11 +408,19 @@ many registrations, report it as a LEAD and STOP rather than mass-creating accou
 fn engagement_ops(cfg: &RunConfig) -> String {
     let (vault, _) = vault_paths(cfg);
     let temp = if cfg.temp_email {
+        match std::env::var("NEUROSPLOIT_TEMP_INBOX").ok().filter(|a| !a.trim().is_empty()) {
+            // The harness already created a disposable inbox (see crate::inbox);
+            // hand the agent that exact address so the inbox is one the harness
+            // owns (for cleanup and audit) rather than an unrecorded one.
+            Some(addr) => Box::leak(format!(
+                "DISPOSABLE EMAIL (enabled): the harness created inbox `{addr}` for you (mail.tm). USE THIS ADDRESS as the                  account email. Read confirmation codes/links by polling `GET https://api.mail.tm/messages` — the harness                  also polls it and records what arrives.", ).into_boxed_str()) as &str,
+            None =>
         "DISPOSABLE EMAIL (enabled): if registration requires an email confirmation code/link, you MAY use the free \
          mail.tm API (no key) — `POST https://api.mail.tm/accounts` {address,password} to create an inbox (get a \
          valid domain from `GET https://api.mail.tm/domains`), `POST https://api.mail.tm/token` for a JWT, then poll \
          `GET https://api.mail.tm/messages` (Bearer JWT) to read the confirmation code/link. Use the mail.tm address \
          as the account email. Guerrilla Mail's API is a fallback. "
+        }
     } else {
         "DISPOSABLE EMAIL (disabled): if registration REQUIRES an email confirmation you cannot receive, stop and \
          report it as a blocker (do not attempt to bypass it). "
@@ -783,6 +791,24 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
             Err(e) => {
                 let _ = tx.send(format!("notify: ⛔ transport failed to come up: {e}")).await;
                 return aborted(&cfg);
+            }
+        }
+    }
+
+    // Disposable inbox: when temp-email is enabled, the HARNESS creates the
+    // mail.tm inbox (via crate::inbox) and hands the agent that exact address,
+    // so the inbox is one we own — recorded, pollable, cleanup-able — instead
+    // of an unrecorded one the agent conjures. Best-effort; on failure the
+    // prompt falls back to letting the agent create its own.
+    if cfg.temp_email && std::env::var("NEUROSPLOIT_TEMP_INBOX").map(|v| v.is_empty()).unwrap_or(true) {
+        match crate::inbox::Inbox::mail_tm().await {
+            Ok(inbox) => {
+                let addr = inbox.identity();
+                std::env::set_var("NEUROSPLOIT_TEMP_INBOX", &addr);
+                let _ = tx.send(format!("notify: 📬 disposable inbox ready — {addr}")).await;
+            }
+            Err(e) => {
+                let _ = tx.send(format!("notify: ⚠ could not create a disposable inbox ({e}) — agent will create its own")).await;
             }
         }
     }
@@ -2093,6 +2119,24 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
     let unc = wm.uncertainty(None);
     if !findings.is_empty() {
         let _ = tx.send(format!("belief uncertainty over confirmed findings: {:.2} (0=sharp,1=diffuse)", unc)).await;
+    }
+    // POMDP anti-hallucination gate: a finding asserted as confirmed while the
+    // belief about it is diffuse or weak is flagged for review. Advisory — it
+    // never deletes, only surfaces a claim the belief does not yet support.
+    let pol = crate::pomdp::Policy::default();
+    let mut gated = 0usize;
+    for f in findings.iter_mut() {
+        if f.validated && f.review_status != "needs-review" && f.review_status != "rejected" {
+            if let Err(why) = crate::pomdp::may_assert(&wm, &f.id, &pol) {
+                f.review_status = "needs-review".into();
+                f.validated = false;
+                f.review_reason = if f.review_reason.is_empty() { format!("belief gate: {why}") } else { format!("{} · belief gate: {why}", f.review_reason) };
+                gated += 1;
+            }
+        }
+    }
+    if gated > 0 {
+        let _ = tx.send(format!("belief gate: {gated} finding(s) held for review — asserted above what the evidence supports")).await;
     }
 
     let _ = tx.send(format!("{} validated finding(s)", findings.len())).await;
