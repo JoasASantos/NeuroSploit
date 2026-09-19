@@ -77,6 +77,11 @@ struct Cli {
     /// uses the Kali image; give a value to override (e.g. --sandbox my/img).
     #[arg(long = "sandbox", global = true, num_args = 0..=1, default_missing_value = "")]
     sandbox: Option<String>,
+    /// TypeSafe System One as an ADDITIONAL confirmation strategy: on · off ·
+    /// auto (default: auto = on when TYPESAFE_API_KEY is set). `off` runs the
+    /// exact same pipeline without it, so runs can be compared with/without.
+    #[arg(long = "typesafe", global = true)]
+    typesafe: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -541,6 +546,16 @@ fn find_base() -> PathBuf {
 async fn main() -> anyhow::Result<()> {
     let mut cli = Cli::parse();
     let base = find_base();
+
+    // Resolve the TypeSafe mode into the env var the pipeline reads, so every
+    // run type (and the REPL) honours one control. `off` disables it entirely;
+    // `on`/`auto` leave it to key presence. This is what makes with/without
+    // TypeSafe an A/B a single flag flips.
+    match cli.typesafe.as_deref().map(|s| s.trim().to_lowercase()) {
+        Some(ref m) if m == "off" || m == "false" || m == "0" => std::env::set_var("NEUROSPLOIT_TYPESAFE", "off"),
+        Some(ref m) if m == "on" || m == "true" || m == "1" || m == "auto" => std::env::set_var("NEUROSPLOIT_TYPESAFE", "on"),
+        _ => {}
+    }
 
     // No subcommand → launch the Claude-Code-style interactive session.
     let cmd = match cli.cmd.take() {

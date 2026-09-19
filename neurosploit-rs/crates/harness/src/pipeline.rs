@@ -664,9 +664,14 @@ fn identify_asset(p: &crate::probe::Probe) -> String {
 /// generator can name the asset and its stack instead of only the URL.
 fn write_meta(cfg: &RunConfig, p: &crate::probe::Probe, asset: &str) {
     let Some(dir) = cfg.workdir.as_deref() else { return };
+    // Record whether TypeSafe was active, so a with/without pair is measurable
+    // from the artifacts alone.
+    let typesafe_on = std::env::var("NEUROSPLOIT_TYPESAFE").unwrap_or_default().trim().to_lowercase() != "off"
+        && std::env::var("TYPESAFE_API_KEY").map(|k| !k.trim().is_empty()).unwrap_or(false);
     let meta = serde_json::json!({
         "target": cfg.target, "asset": asset, "title": p.title, "brand": p.brand,
         "tech": p.tech, "server": p.server, "status": p.status,
+        "typesafe": typesafe_on,
     });
     if let Ok(j) = serde_json::to_string_pretty(&meta) {
         let _ = std::fs::write(format!("{}/meta.json", dir.trim_end_matches('/')), j);
@@ -2262,6 +2267,42 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
     // finding to needs-review. Off with NEUROSPLOIT_TYPESAFE=off.
     if std::env::var("NEUROSPLOIT_TYPESAFE").unwrap_or_default().trim().to_lowercase() != "off" {
         if let Some(ts) = crate::typesafe::TypeSafe::from_env() {
+            // Additional confirmation strategy: a code-owned loop where TypeSafe
+            // picks payloads and judges responses over the REAL replay engine.
+            // Applied to enumerable-class findings that are unconfirmed or in
+            // needs-review — the recall lever. A confirmation raises the
+            // finding to validated with a calibrated probability; it never
+            // downgrades (that is the deterministic layer's job).
+            let agent = crate::typesafe_agent::TypeSafeAgent::new(ts.clone(), crate::replay::ReplayEngine::new(effective_scope(&cfg)))
+                .with_oob(cfg.oob_domain.clone());
+            let mut confirmed_by_agent = 0usize;
+            for f in findings.iter_mut() {
+                let unconfirmed = !f.validated || f.review_status == "needs-review";
+                if unconfirmed && crate::typesafe_agent::handles(&f.cwe, &f.title) {
+                    if let Some(c) = agent.confirm(f).await {
+                        audit.append(
+                            crate::audit::AuditRecord::new("typesafe-agent", "confirmation-loop", &f.endpoint)
+                                .hypothesis(&f.id)
+                                .decision(&format!("{}: {}", if c.confirmed { "confirm" } else { "inconclusive" }, c.detail))
+                                .tool("typesafe:jev-latest")
+                                .capability(&cap_id)
+                                .result(&f.title),
+                        );
+                        if c.confirmed {
+                            f.validated = true;
+                            f.review_status = "confirmed".into();
+                            f.confidence = f.confidence.max(c.probability);
+                            if f.payload.trim().is_empty() { f.payload = c.payload.clone(); }
+                            f.review_reason = format!("TypeSafe confirmation loop: {}", c.detail);
+                            confirmed_by_agent += 1;
+                        }
+                    }
+                }
+            }
+            if confirmed_by_agent > 0 {
+                let _ = tx.send(format!("notify: 🧮 TypeSafe confirmation loop confirmed {confirmed_by_agent} finding(s) the LLM path left unconfirmed")).await;
+            }
+
             let _ = tx.send("notify: 🧮 TypeSafe System One adjudicating findings…".to_string()).await;
             let mut refined = 0usize;
             for f in findings.iter_mut() {

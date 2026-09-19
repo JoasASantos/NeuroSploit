@@ -498,6 +498,7 @@ function renderReview() {
     { k: 'Intercept', v: $('#fieldIntercept').value === 'off' ? 'direct' : $('#fieldIntercept').value },
     { k: 'Sandbox', v: $('#fieldSandbox').value ? 'Kali container' : 'host' },
     { k: 'PoC re-validation', v: $('#fieldRevalidatePoc').checked ? 'on' : 'off' },
+    { k: 'TypeSafe', v: $('#fieldTypesafe') ? $('#fieldTypesafe').value : 'auto' },
     { k: 'Compliance', v: (['fieldCompPci', 'fieldCompHipaa', 'fieldCompSoc2'].map((id) => $(`#${id}`).checked && $(`#${id}`).value).filter(Boolean).join(', ')) || 'none' },
     { k: 'Target auth', v: state.auth.header ? 'header set' : (state.auth.roles.length ? `${state.auth.roles.length} role(s)` : 'none') },
   ];
@@ -543,6 +544,7 @@ async function startExploitation() {
     intercept: $('#fieldIntercept').value,
     sandbox: $('#fieldSandbox').value || undefined,
     revalidatePoc: $('#fieldRevalidatePoc').checked,
+    typesafe: $('#fieldTypesafe') ? $('#fieldTypesafe').value : undefined,
     compliance: ['fieldCompPci', 'fieldCompHipaa', 'fieldCompSoc2'].map((id) => $(`#${id}`).checked && $(`#${id}`).value).filter(Boolean),
     tokenLimit: Number($('#fieldTokenLimit').value) || undefined,
     order: $('#fieldOrder').value,

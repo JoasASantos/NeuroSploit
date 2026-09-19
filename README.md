@@ -540,6 +540,19 @@ Disable with `NEUROSPLOIT_TYPESAFE=off`. This is the RLCD (Reinforcement
 Learning for Calibrated Decisions) tier of the model stack — typed judgments
 where the harness needs a number, not a paragraph.
 
+**As an additional confirmation strategy** (`typesafe_agent`), a code-owned loop
+where TypeSafe picks the next payload (`Choice`) and judges the real response
+(`Noul`) over the replay engine — for enumerable classes (XSS, SQLi, open
+redirect, path traversal, SSRF, IDOR). It runs only on findings the LLM path
+left unconfirmed or in needs-review (the recall lever), can only raise a finding
+to confirmed with a calibrated probability, never downgrades, and refuses edge
+(WAF) responses. It is **not** a discovery agent — System One does not generate.
+
+**Flag & A/B.** `--typesafe on|off|auto` (default auto = on when the key is set).
+`off` runs the *identical* pipeline without it, and the run's `meta.json` records
+`"typesafe": true|false` — so a with/without pair against the same target is a
+clean measurement of what it adds.
+
 ### Scope-evasion resistance, evidence integrity, untrusted output
 
 Three hardening passes, all enforced in code:

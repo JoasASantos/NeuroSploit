@@ -48,6 +48,7 @@ pub mod taint;
 pub mod transport;
 pub mod types;
 pub mod typesafe;
+pub mod typesafe_agent;
 pub mod uncertainty;
 pub mod validation;
 pub mod waf;

@@ -269,6 +269,14 @@
             <div class="field-group"><label class="field-label">PoC re-validation</label>
               <div class="check-row"><input type="checkbox" id="fieldRevalidatePoc" /> <label for="fieldRevalidatePoc">Re-run every PoC; demote what no longer reproduces</label></div>
             </div>
+            <div class="field-group"><label class="field-label" for="fieldTypesafe">TypeSafe (System One)</label>
+              <select class="narrow" id="fieldTypesafe">
+                <option value="auto" selected>auto — on if TYPESAFE_API_KEY set</option>
+                <option value="on">on — calibrated confirmation + adjudication</option>
+                <option value="off">off — same pipeline, no TypeSafe (for A/B)</option>
+              </select>
+              <div class="field-help">Additional confirmation strategy (Choice/Noul over real replays). Off runs the identical pipeline so you can compare with/without.</div>
+            </div>
           </div>
           <div class="field-group">
             <label class="field-label">Compliance mapping</label>

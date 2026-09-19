@@ -646,6 +646,7 @@ function buildArgs(body) {
   if (body.oobHttp) args.push('--oob-http', body.oobHttp);
   if (body.oobDns) args.push('--oob-dns', body.oobDns);
   if (body.sms) args.push('--sms', body.sms);
+  if (body.typesafe) args.push('--typesafe', body.typesafe);
   if (body.intercept && body.intercept !== 'off') args.push('--intercept', body.intercept);
   if (body.sandbox) args.push('--sandbox', body.sandbox === 'default' ? '' : body.sandbox);
   if (body.revalidatePoc) args.push('--revalidate-poc');
@@ -722,6 +723,7 @@ function authArgs(body) {
   if (body.oobHttp) args.push('--oob-http', body.oobHttp);
   if (body.oobDns) args.push('--oob-dns', body.oobDns);
   if (body.sms) args.push('--sms', body.sms);
+  if (body.typesafe) args.push('--typesafe', body.typesafe);
   if (body.intercept && body.intercept !== 'off') args.push('--intercept', body.intercept);
   if (body.sandbox) args.push('--sandbox', body.sandbox === 'default' ? '' : body.sandbox);
   if (body.revalidatePoc) args.push('--revalidate-poc');
