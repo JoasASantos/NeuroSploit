@@ -146,6 +146,14 @@ impl PocValidator {
             Err(reason) => return self.unverifiable(f, &reason),
         };
 
+        // If the re-run was answered by a WAF/CDN rather than the application,
+        // the PoC was NOT tested — do not report it as "no longer reproduces".
+        // This is the deterministic WAF classifier running on a real exchange.
+        let verdict_edge = crate::waf::classify_exchange(&fresh);
+        if !verdict_edge.origin.supports_a_finding() {
+            return self.unverifiable(f, &format!("re-run was answered by the edge, not the application: {}", verdict_edge.reason));
+        }
+
         // Rebuild the evidence with the fresh responses, keep the finding's
         // markers, and ask the same deterministic judge.
         let mut fresh_ev = Evidence {
@@ -205,6 +213,9 @@ impl PocValidator {
         }
         match self.engine.send(&spec).await {
             Ok(fresh) => {
+                if !crate::waf::classify_exchange(&fresh).origin.supports_a_finding() {
+                    return self.unverifiable(f, "re-fetch was answered by a WAF/CDN, not the application");
+                }
                 let fresh_ev = Evidence { attack: Some(fresh), baseline: ev.baseline.clone(), identity_a: ev.identity_a.clone(), identity_b: ev.identity_b.clone(), ..ev.clone() };
                 match judge(f, Some(&fresh_ev)) {
                     Verdict::Confirmed(r) => PocResult { finding_id: f.id.clone(), reproduction: Reproduction::Reproduced, detail: format!("re-fetched; still validates: {r}"), reverdict: Some(r), replayed: Some(spec.url) },

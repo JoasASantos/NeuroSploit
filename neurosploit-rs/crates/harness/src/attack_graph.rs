@@ -261,6 +261,67 @@ fn temporal(f: &Finding) -> (&'static str, &'static str) {
 }
 
 /// Derive a CVSS v3.1 base score + vector for a finding.
+/// Evidence-graded CVSS via the FIRST-verbatim calculator in `crate::cvss`.
+///
+/// The class proposes the vector's shape (which of C/I/A it *can* affect, the
+/// scope, the exploitability axes); the demonstrated rung decides which impact
+/// metrics actually have a receipt. `crate::cvss::grade` then keeps two scores:
+/// the demonstrated one (what the evidence proved, the reported number) and the
+/// potential one (what the class could reach). This is what wires the real
+/// CVSS 3.1 equation — the older `cvss_for` is kept only as a fallback for a
+/// finding with no structured evidence to grade.
+pub fn cvss_graded(f: &Finding) -> Option<crate::cvss::Graded> {
+    use crate::cvss::{Ac, Av, Imp, Pr, Scope, Ui, Vector};
+    let n: u32 = f.cwe.chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(0);
+    if n == 0 {
+        return None;
+    }
+    let imp = |s: &str| match s { "H" => Imp::High, "L" => Imp::Low, _ => Imp::None };
+    // Class → the impact shape it CAN have (the potential ceiling) + scope.
+    let (c, i, a, scope) = match n {
+        77 | 78 | 94 | 95 | 502 | 917 | 1336 => ("H", "H", "H", Scope::Changed),
+        89 | 943 | 564 => ("H", "H", "L", Scope::Unchanged),
+        22 | 23 | 35 | 98 | 73 => ("H", "N", "N", Scope::Unchanged),
+        918 => ("H", "L", "N", Scope::Changed),
+        639 | 862 | 863 | 284 | 285 | 306 | 566 | 425 => ("H", "H", "N", Scope::Unchanged),
+        287 | 288 | 289 | 290 | 347 | 345 | 384 => ("H", "H", "N", Scope::Unchanged),
+        79 | 80 | 83 | 87 => ("L", "L", "N", Scope::Changed),
+        352 => ("N", "H", "N", Scope::Unchanged),
+        611 | 776 | 827 => ("H", "N", "L", Scope::Changed),
+        319 | 522 | 798 | 312 | 256 | 257 | 321 => ("H", "N", "N", Scope::Unchanged),
+        200 | 209 | 538 | 540 | 548 | 532 | 530 => ("L", "N", "N", Scope::Unchanged),
+        307 | 799 | 770 | 400 => ("N", "N", "L", Scope::Unchanged),
+        601 => ("L", "L", "N", Scope::Changed),
+        1021 => ("N", "L", "N", Scope::Unchanged),
+        113 | 93 | 644 => ("L", "L", "N", Scope::Unchanged),
+        525 | 524 => ("L", "N", "N", Scope::Unchanged),
+        _ => ("L", "N", "N", Scope::Unchanged),
+    };
+    let authenticated = f.auth_context.eq_ignore_ascii_case("authenticated") || !f.account.is_empty();
+    let proposed = Vector {
+        // Web engagement defaults; the class overrides where it matters.
+        av: Av::Network,
+        ac: match n { 362 | 208 | 385 => Ac::High, _ => Ac::Low }, // race/timing = high AC
+        pr: if authenticated { Pr::Low } else { Pr::None },
+        ui: match n { 79 | 80 | 83 | 87 | 352 | 601 | 1021 => Ui::Required, _ => Ui::None },
+        scope,
+        c: imp(c),
+        i: imp(i),
+        a: imp(a),
+    };
+    // The demonstrated rung decides which impact metrics carry a receipt.
+    let rung = demonstrated_rung(f);
+    let has_c = matches!(rung, Rung::ReadData | Rung::ReadSensitive | Rung::Wrote | Rung::Executed | Rung::CrossedSystem);
+    let has_i = matches!(rung, Rung::Wrote | Rung::Executed | Rung::CrossedSystem);
+    let has_a = matches!(rung, Rung::Executed | Rung::CrossedSystem);
+    Some(crate::cvss::grade(proposed, move |m| match m {
+        "C" => has_c,
+        "I" => has_i,
+        "A" => has_a,
+        _ => true,
+    }))
+}
+
 pub fn cvss_for(f: &Finding) -> (f64, String) {
     let n: u32 = f.cwe.chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(0);
     let authenticated = f.auth_context.eq_ignore_ascii_case("authenticated") || !f.account.is_empty();
@@ -389,8 +450,22 @@ pub fn enrich(findings: &mut [Finding]) {
         // A severity word without the industry-standard number makes the reader
         // re-derive it by hand or take it on faith.
         if f.cvss.is_empty() {
-            let (score, vector) = cvss_for(f);
-            if score > 0.0 { f.cvss = format!("{score:.1} ({vector})"); }
+            // Evidence-graded first (FIRST-verbatim, demonstrated vs potential);
+            // fall back to the class ladder only when there is no evidence to grade.
+            match cvss_graded(f) {
+                Some(g) if g.demonstrated_score > 0.0 => {
+                    f.cvss = format!("{:.1} ({})", g.demonstrated_score, g.demonstrated.vector_string());
+                    // Record the potential ceiling in the impact text when it is
+                    // meaningfully higher, so the reader sees both numbers.
+                    if g.potential_score - g.demonstrated_score > 0.5 && !f.impact.contains("potential CVSS") {
+                        f.impact = format!("{} (potential CVSS {:.1} if fully exploited)", f.impact, g.potential_score).trim().to_string();
+                    }
+                }
+                _ => {
+                    let (score, vector) = cvss_for(f);
+                    if score > 0.0 { f.cvss = format!("{score:.1} ({vector})"); }
+                }
+            }
         }
     }
 }
@@ -732,5 +807,18 @@ mod ladder_tests {
             }
         }
         assert_eq!(temporal_factor("H", "C"), 1.0);
+    }
+
+
+    #[test]
+    fn graded_cvss_wires_the_first_calculator_and_splits_demonstrated_from_potential() {
+        let reached = sqli(Some(Evidence { attack: Some(ex(200, "ok")), ..Default::default() }));
+        let g = cvss_graded(&reached).expect("graded");
+        assert!(g.demonstrated_score <= g.potential_score);
+
+        let proven = sqli(Some(Evidence { attack: Some(ex(200, "password=hunter2 bearer eyJ...")), ..Default::default() }));
+        let g2 = cvss_graded(&proven).expect("graded");
+        assert!(g2.demonstrated_score >= g.demonstrated_score, "reading data cannot lower the score");
+        assert!(g2.demonstrated.vector_string().contains("CVSS:3.1/"));
     }
 }

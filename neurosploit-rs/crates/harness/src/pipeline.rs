@@ -1514,18 +1514,80 @@ async fn select_agents(pool: &ModelPool, recon: &str, focus: &str, catalog: &[Ag
     let user = format!("{focus_line}RECON:\n{recon_trim}\n\nAGENT CATALOG (name — title [cwe]):\n{list}\n\nReturn a JSON array of agent names to run.");
     match pool.complete_routed(Task::Select, "select", SELECT_SYS, &user).await {
         Ok((m, text)) => {
-            let names = parse_string_array(&text);
+            let mut names = parse_string_array(&text);
             if names.is_empty() {
                 let preview: String = text.chars().take(120).collect();
                 let _ = tx.send(format!("agent selection via {} returned no parseable list ({} chars): {}", m.label(), text.len(), preview.replace('\n', " "))).await;
             } else {
                 let _ = tx.send(format!("agent selection via {} → {} agent(s) chosen", m.label(), names.len())).await;
+                // System One refinement: ask TypeSafe, in ONE batched request
+                // (the fan-out pattern), whether each chosen agent is relevant to
+                // the observed surface, and drop the ones it calibrates as clearly
+                // irrelevant. Additive — it only prunes obvious mismatches, never
+                // adds agents, and is skipped entirely when TypeSafe is absent.
+                names = typesafe_prune_agents(recon, catalog, names, tx).await;
             }
             names
         }
         Err(e) => {
             let _ = tx.send(format!("agent selection failed ({e}) — falling back to RL ranking")).await;
             vec![]
+        }
+    }
+}
+
+/// Prune agent choices TypeSafe judges irrelevant to the observed surface.
+///
+/// One request, one Noul per chosen agent (they run in parallel and cannot see
+/// one another). An agent is dropped only when the probability it is relevant is
+/// clearly low (< 0.25) — a conservative gate, because a false drop costs a
+/// missed class while a false keep only costs one agent's budget. No key, or any
+/// error, means the LLM's selection stands unchanged.
+async fn typesafe_prune_agents(recon: &str, catalog: &[Agent], chosen: Vec<String>, tx: &Sender<String>) -> Vec<String> {
+    if std::env::var("NEUROSPLOIT_TYPESAFE").unwrap_or_default().trim().to_lowercase() == "off" {
+        return chosen;
+    }
+    let Some(ts) = crate::typesafe::TypeSafe::from_env() else { return chosen };
+    use std::collections::BTreeMap;
+    let mut qs: BTreeMap<String, crate::typesafe::Question> = BTreeMap::new();
+    for name in &chosen {
+        if let Some(a) = catalog.iter().find(|a| &a.name == name) {
+            qs.insert(
+                name.clone(),
+                crate::typesafe::Question::noul(
+                    &format!("Given the observed attack surface, is the '{}' test ({}, {}) relevant enough to be worth running?", a.name, a.title, a.cwe),
+                    "the surface plausibly has this class or the technique applies",
+                    "the surface shows no sign this class could exist here",
+                ),
+            );
+        }
+    }
+    if qs.is_empty() {
+        return chosen;
+    }
+    let fallback = chosen.clone(); // the LLM's selection stands on any failure
+    let state = serde_json::json!({ "recon": recon.chars().take(4000).collect::<String>() });
+    match ts.evaluate(state, qs).await {
+        Ok(answers) => {
+            let before = chosen.len();
+            let kept: Vec<String> = chosen.into_iter().filter(|name| {
+                // Keep unless TypeSafe is clearly confident it is irrelevant.
+                answers.get(name).and_then(|a| a.noul).map(|p| p >= 0.25).unwrap_or(true)
+            }).collect();
+            let dropped = before - kept.len();
+            // Never prune to nothing — a total rejection is more likely a bad
+            // question than a truly empty surface; keep the LLM's call.
+            if kept.is_empty() {
+                return fallback;
+            }
+            if dropped > 0 {
+                let _ = tx.send(format!("notify: 🧮 TypeSafe pruned {dropped} agent(s) as irrelevant to the surface")).await;
+            }
+            kept
+        }
+        Err(e) => {
+            let _ = tx.send(format!("notify: ⚠ TypeSafe agent pruning unavailable ({e}) — keeping the selection")).await;
+            fallback
         }
     }
 }
@@ -2219,6 +2281,22 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
                                     "TypeSafe: p(confirmed)={:.2}, impact={:.2} — below the bar for auto-confirm",
                                     adj.p_confirmed, adj.impact_demonstrated
                                 );
+                            }
+                            // CVSS via System One: re-grade the vector using the
+                            // calibrated impact judgment as the impact receipt,
+                            // not just the deterministic rung. A finding TypeSafe
+                            // says shows no real impact loses its C/I/A the same
+                            // way an absent receipt would — the demonstrated
+                            // score follows the evidence, calibrated.
+                            if adj.impact_demonstrated < 0.5 {
+                                if let Some(g) = crate::attack_graph::cvss_graded(f) {
+                                    // Strip demonstrated impact the model is not
+                                    // convinced of; keep potential as context.
+                                    let dropped = crate::cvss::grade(g.potential, |_| false);
+                                    if dropped.demonstrated_score < g.demonstrated_score {
+                                        f.cvss = format!("{:.1} ({})", dropped.demonstrated_score, dropped.demonstrated.vector_string());
+                                    }
+                                }
                             }
                             refined += 1;
                         }
