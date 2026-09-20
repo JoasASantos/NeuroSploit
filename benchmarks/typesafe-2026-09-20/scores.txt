@@ -1,4 +1,11 @@
 
+== runs/ns-1789937421-localhost_3000 ==
+  findings reported : 22
+  targets hit       : 8/13  (recall 0.615)
+  hit               : api_bola_orders, web_crlf_header_go, web_idor_invoice, web_sqli_blind_time, web_sqli_login_bypass, web_sqli_second_order, web_sqli_union_search, web_xss_reflected_search
+  missed            : web_open_redirect_login, web_sqli_blind_boolean, web_xss_dom_redirect, web_xss_stored_review, web_xss_svg_upload
+  extra findings    : 14
+
 == runs/ns-1789919119-localhost_3000 ==
   findings reported : 22
   targets hit       : 7/13  (recall 0.538)

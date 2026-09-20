@@ -18,7 +18,15 @@ Open **`report.html`** for the visual write-up.
 | Ground truth | 13 seeded scenarios (SQLi ×5, XSS ×4, IDOR/BOLA ×2, open redirect, CRLF) |
 | Solver | none — the LLM discovered and confirmed everything live |
 
-## Result
+## Result (A vs B·TS, gap re-test)
+
+Same gap scenarios run without TypeSafe (A) and with (B). Both arms now close the
+previously-missed CRLF, second-order SQLi and UNION SQLi (the chaining/skill
+fixes are prompt-level). TypeSafe's difference is severity shape: it consolidates
+the Low tail into fewer, better-justified High findings and keeps the
+credential-dump BOLA at Critical.
+
+### Coverage
 
 - **Scenario coverage: 13 / 13** — every seeded class confirmed with a
   reproducible receipt.

@@ -1,0 +1,10 @@
+{
+  "asset": "NimbusCart Inc",
+  "brand": "NimbusCart Inc",
+  "server": "",
+  "status": 200,
+  "target": "http://localhost:3000",
+  "tech": [],
+  "title": "Home · NimbusCart",
+  "typesafe": false
+}

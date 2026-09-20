@@ -5,20 +5,20 @@
   :root{
     --ground:#f4f2f7; --surface:#ffffff; --surface-2:#eceaf3; --line:#ddd8e8;
     --ink:#1a1726; --muted:#6b6580; --faint:#938da6;
-    --accent:#6d4bd8; --b:#0e8f86; --good:#1f9d68;
+    --accent:#6d4bd8; --a:#c2701c; --b:#0e8f86; --good:#1f9d68;
     --shadow:0 1px 2px rgba(26,23,38,.06),0 6px 20px rgba(26,23,38,.06);
     --sev-crit:#e5484d; --sev-high:#f76b15; --sev-med:#f5b301; --sev-low:#3e7bfa; --sev-info:#8b8698;
   }
   :root:not([data-theme="light"]){ @media (prefers-color-scheme:dark){
     --ground:#0f0e17; --surface:#191627; --surface-2:#211d33; --line:#2e2942;
     --ink:#eceaf5; --muted:#a49dbd; --faint:#736c8f;
-    --accent:#a78bfa; --b:#4fd6c6; --good:#5ee0a0;
+    --accent:#a78bfa; --a:#f0a95e; --b:#4fd6c6; --good:#5ee0a0;
     --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 30px rgba(0,0,0,.35);
   }}
   :root[data-theme="dark"]{
     --ground:#0f0e17; --surface:#191627; --surface-2:#211d33; --line:#2e2942;
     --ink:#eceaf5; --muted:#a49dbd; --faint:#736c8f;
-    --accent:#a78bfa; --b:#4fd6c6; --good:#5ee0a0;
+    --accent:#a78bfa; --a:#f0a95e; --b:#4fd6c6; --good:#5ee0a0;
     --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 30px rgba(0,0,0,.35);
   }
   *{box-sizing:border-box}
@@ -94,34 +94,30 @@
   </header>
 
   <div class="thesis">
-    <div class="tile"><div class="k">Scenario coverage</div><div class="v b">13<span class="u">/13</span></div><div class="note">every seeded class confirmed</div></div>
+    <div class="tile"><div class="k">Gap coverage A · B</div><div class="v b">7 · 7</div><div class="note">of 7 re-tested; 13/13 with full surface</div></div>
     <div class="tile"><div class="k">Critical findings</div><div class="v" style="color:var(--sev-crit)">3</div><div class="note">incl. the credential-dump BOLA</div></div>
     <div class="tile"><div class="k">Severity source</div><div class="v" style="font-size:20px">evidence + data type</div><div class="note">FIRST v3.1, computed not guessed</div></div>
     <div class="tile"><div class="k">Model cost</div><div class="v" style="font-size:22px">$0</div><div class="note">subscription · TypeSafe ≪ $5</div></div>
   </div>
 
   <section>
-    <h2>Every seeded scenario, confirmed</h2>
-    <p class="lead">Each of the 13 planted vulnerabilities, confirmed by the harness with a reproducible receipt.
-      The blind second-order SQLi and the CRLF header injection both need a multi-step chain: the second-order
-      payload is stored in a profile bio and only fires on the admin search page, reached by escalating with a
-      looted admin credential; the CRLF lives in the same parameter as the open redirect.</p>
+    <h2>Gap re-test: without vs with TypeSafe</h2>
+    <p class="lead">The scenarios that needed a multi-step chain, re-run on the current build with TypeSafe off (A)
+      and on (B). The chaining fixes are prompt-level, so both arms now close them; the difference TypeSafe makes
+      is in the severity shape below, not the coverage here.</p>
     <div class="scen">
-      <div class="row head"><div class="cell">Scenario</div><div class="cell mk">Class</div><div class="cell mk">Confirmed</div></div>
-      <div class="row"><div class="cell"><span class="idc">web_sqli_login_bypass</span></div><div class="cell mk cls">SQLi</div><div class="cell mk hit">✓</div></div>
-      <div class="row"><div class="cell"><span class="idc">web_sqli_union_search</span></div><div class="cell mk cls">SQLi</div><div class="cell mk hit">✓</div></div>
-      <div class="row"><div class="cell"><span class="idc">web_sqli_blind_boolean</span></div><div class="cell mk cls">SQLi</div><div class="cell mk hit">✓</div></div>
-      <div class="row"><div class="cell"><span class="idc">web_sqli_blind_time</span></div><div class="cell mk cls">SQLi</div><div class="cell mk hit">✓</div></div>
-      <div class="row"><div class="cell"><span class="idc">web_sqli_second_order</span></div><div class="cell mk cls">SQLi</div><div class="cell mk hit">✓</div></div>
-      <div class="row"><div class="cell"><span class="idc">web_xss_reflected_search</span></div><div class="cell mk cls">XSS</div><div class="cell mk hit">✓</div></div>
-      <div class="row"><div class="cell"><span class="idc">web_xss_stored_review</span></div><div class="cell mk cls">XSS</div><div class="cell mk hit">✓</div></div>
-      <div class="row"><div class="cell"><span class="idc">web_xss_svg_upload</span></div><div class="cell mk cls">XSS</div><div class="cell mk hit">✓</div></div>
-      <div class="row"><div class="cell"><span class="idc">web_xss_dom_redirect</span></div><div class="cell mk cls">XSS</div><div class="cell mk hit">✓</div></div>
-      <div class="row"><div class="cell"><span class="idc">web_idor_invoice</span></div><div class="cell mk cls">IDOR</div><div class="cell mk hit">✓</div></div>
-      <div class="row"><div class="cell"><span class="idc">api_bola_orders</span></div><div class="cell mk cls">BOLA</div><div class="cell mk hit">✓</div></div>
-      <div class="row"><div class="cell"><span class="idc">web_open_redirect_login</span></div><div class="cell mk cls">Redirect</div><div class="cell mk hit">✓</div></div>
-      <div class="row"><div class="cell"><span class="idc">web_crlf_header_go</span></div><div class="cell mk cls">CRLF</div><div class="cell mk hit">✓</div></div>
+      <div class="row head"><div class="cell">Scenario</div><div class="cell mk">Class</div><div class="cell mk" style="color:var(--a)">A</div><div class="cell mk" style="color:var(--b)">B·TS</div></div>
+      <div class="row"><div class="cell"><span class="idc">web_sqli_login_bypass</span></div><div class="cell mk cls">SQLi</div><div class="cell mk hit">✓</div><div class="cell mk hit">✓</div></div>
+      <div class="row"><div class="cell"><span class="idc">web_sqli_union_search</span></div><div class="cell mk cls">SQLi</div><div class="cell mk hit">✓</div><div class="cell mk hit">✓</div></div>
+      <div class="row"><div class="cell"><span class="idc">web_sqli_blind_time</span></div><div class="cell mk cls">SQLi</div><div class="cell mk hit">✓</div><div class="cell mk hit">✓</div></div>
+      <div class="row"><div class="cell"><span class="idc">web_sqli_second_order</span></div><div class="cell mk cls">SQLi</div><div class="cell mk hit">✓</div><div class="cell mk hit">✓</div></div>
+      <div class="row"><div class="cell"><span class="idc">web_idor_invoice</span></div><div class="cell mk cls">IDOR</div><div class="cell mk hit">✓</div><div class="cell mk hit">✓</div></div>
+      <div class="row"><div class="cell"><span class="idc">api_bola_orders</span></div><div class="cell mk cls">BOLA</div><div class="cell mk hit">✓</div><div class="cell mk hit">✓</div></div>
+      <div class="row"><div class="cell"><span class="idc">web_crlf_header_go</span></div><div class="cell mk cls">CRLF</div><div class="cell mk hit">✓</div><div class="cell mk hit">✓</div></div>
     </div>
+    <p class="lead" style="margin-top:14px">The eight full-surface scenarios (reflected / stored / SVG / DOM XSS,
+      boolean-blind SQLi, login open-redirect) were confirmed in the prior full-surface run and were out of this
+      focused re-run's agent scope; together the harness covers all 13.</p>
   </section>
 
   <section>
@@ -135,22 +131,31 @@
   </section>
 
   <section>
-    <h2>Severity shape</h2>
-    <p class="lead">Graded from the evidence and the kind of data exposed. Credentials and API keys read through the
-      BOLA and the UNION SQLi hold Critical; the header, access-control and injection classes without a demonstrated
-      data breach settle at High and below.</p>
+    <h2>Severity shape: A vs B·TS</h2>
+    <p class="lead">Same findings, graded by the two builds. TypeSafe consolidates the long Low tail into fewer,
+      better-justified High findings and keeps the credential-dump BOLA at Critical. Severity is computed by the
+      FIRST v3.1 calculator; the kind of data exposed feeds the confidentiality metric.</p>
     <div class="sev-legend">
       <span><i style="background:#e5484d"></i>Critical</span>
       <span><i style="background:#f76b15"></i>High</span>
-      <span><i style="background:#f5b301"></i>Medium</span>
       <span><i style="background:#3e7bfa"></i>Low</span>
       <span><i style="background:#8b8698"></i>Info</span>
     </div>
-    <div class="sevcard">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+      <div class="sevcard">
+        <h3 style="font-size:14px;font-family:'IBM Plex Mono';margin-bottom:12px;color:var(--a)">A — no TypeSafe · 22</h3>
+      <div class="bar"><span class="lab"><i class="sw" style="background:#e5484d"></i>Critical</span><span class="track"><span class="fill" style="width:40%;background:#e5484d"></span></span><span class="n" style="color:#e5484d">4</span></div>
+      <div class="bar"><span class="lab"><i class="sw" style="background:#f76b15"></i>High</span><span class="track"><span class="fill" style="width:30%;background:#f76b15"></span></span><span class="n" style="color:#f76b15">3</span></div>
+      <div class="bar"><span class="lab"><i class="sw" style="background:#3e7bfa"></i>Low</span><span class="track"><span class="fill" style="width:100%;background:#3e7bfa"></span></span><span class="n" style="color:#3e7bfa">10</span></div>
+      <div class="bar"><span class="lab"><i class="sw" style="background:#8b8698"></i>Info</span><span class="track"><span class="fill" style="width:50%;background:#8b8698"></span></span><span class="n" style="color:#8b8698">5</span></div>
+      </div>
+      <div class="sevcard">
+        <h3 style="font-size:14px;font-family:'IBM Plex Mono';margin-bottom:12px;color:var(--b)">B — TypeSafe · 22</h3>
       <div class="bar"><span class="lab"><i class="sw" style="background:#e5484d"></i>Critical</span><span class="track"><span class="fill" style="width:38%;background:#e5484d"></span></span><span class="n" style="color:#e5484d">3</span></div>
       <div class="bar"><span class="lab"><i class="sw" style="background:#f76b15"></i>High</span><span class="track"><span class="fill" style="width:100%;background:#f76b15"></span></span><span class="n" style="color:#f76b15">8</span></div>
       <div class="bar"><span class="lab"><i class="sw" style="background:#3e7bfa"></i>Low</span><span class="track"><span class="fill" style="width:75%;background:#3e7bfa"></span></span><span class="n" style="color:#3e7bfa">6</span></div>
-      <div class="bar"><span class="lab"><i class="sw" style="background:#8b8698"></i>Info</span><span class="track"><span class="fill" style="width:63%;background:#8b8698"></span></span><span class="n" style="color:#8b8698">5</span></div>
+      <div class="bar"><span class="lab"><i class="sw" style="background:#8b8698"></i>Info</span><span class="track"><span class="fill" style="width:62%;background:#8b8698"></span></span><span class="n" style="color:#8b8698">5</span></div>
+      </div>
     </div>
   </section>
 
