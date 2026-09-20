@@ -351,6 +351,20 @@ impl ChatClient {
         if stdout.is_empty() {
             return Err(anyhow!("{} subscription CLI returned empty output", bin));
         }
+        // Subscription CLIs report a hit session/usage limit as ordinary stdout
+        // with a ZERO exit code — a short sentence, not an error. Left as Ok it
+        // becomes a "response" the agent then fails to parse, and the run burns
+        // every remaining agent against a dead session instead of pausing. Catch
+        // the sentinel (kept short so a real finding that merely mentions "rate
+        // limit" is not misread) and surface it as exhaustion so the pool parks.
+        let low = stdout.to_lowercase();
+        let session_dead = stdout.len() < 300 && [
+            "session limit", "you've hit your", "you have hit your", "usage limit",
+            "resets ", "reset at", "try again later", "come back later",
+        ].iter().any(|k| low.contains(k));
+        if session_dead {
+            return Err(anyhow!("{} subscription session/usage limit reached: {}", bin, truncate(&stdout, 160)));
+        }
         Ok(stdout)
     }
 

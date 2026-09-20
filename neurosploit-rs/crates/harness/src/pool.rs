@@ -15,6 +15,7 @@ pub fn is_exhaustion(e: &anyhow::Error) -> bool {
         "quota", "insufficient_quota", "insufficient quota", "out of credit",
         "credit balance", "billing", "exhausted", "overloaded", "capacity",
         "usage limit", "resource_exhausted", "resource exhausted",
+        "session limit", "session/usage limit", "you've hit your",
     ]
     .iter()
     .any(|k| s.contains(k))
