@@ -201,6 +201,39 @@ const SENSITIVE: &[&str] = &[
 /// Only observations count. A finding that says "could lead to RCE" without an
 /// observation of code running stays where its evidence put it — which is the
 /// entire point of grading this way.
+/// The kind of data a finding demonstrably exposed, read from any slot the
+/// agent used (structured evidence body, or the prose evidence/impact). This is
+/// the "data type" axis: a credential or key dump is a confidentiality breach
+/// regardless of whether the receipt landed in the structured slot, and it must
+/// not be recalibrated away just because `evidence_data` was left null.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataClass { None, Data, Sensitive }
+
+const CREDENTIALS: &[&str] = &[
+    "password", "passwd", "senha", "bcrypt", "$2y$", "$2a$", "api_key", "apikey",
+    "api key", "secret", "private key", "begin rsa", "bearer ", "authorization:",
+    "aws_secret", "aws_access_key", "credit card", "card_number",
+    "cvv", "ssn", "cpf",
+];
+
+pub fn data_class(f: &Finding) -> DataClass {
+    let mut hay = format!("{} {} {}", f.evidence, f.impact, f.payload).to_lowercase();
+    if let Some(e) = f.evidence_data.as_ref() {
+        for ex in [e.attack.as_ref(), e.baseline.as_ref(), e.identity_a.as_ref(), e.identity_b.as_ref()].into_iter().flatten() {
+            hay.push(' ');
+            hay.push_str(&ex.body.to_lowercase());
+        }
+    }
+    if CREDENTIALS.iter().any(|s| hay.contains(s)) {
+        return DataClass::Sensitive;
+    }
+    // A record dump without a credential signature is still data read.
+    if SENSITIVE.iter().any(|s| hay.contains(s)) {
+        return DataClass::Data;
+    }
+    DataClass::None
+}
+
 pub fn demonstrated_rung(f: &Finding) -> Rung {
     let ev = f.evidence_data.as_ref();
     let text = format!("{} {}", f.evidence, f.impact).to_lowercase();
@@ -311,7 +344,12 @@ pub fn cvss_graded(f: &Finding) -> Option<crate::cvss::Graded> {
     };
     // The demonstrated rung decides which impact metrics carry a receipt.
     let rung = demonstrated_rung(f);
-    let has_c = matches!(rung, Rung::ReadData | Rung::ReadSensitive | Rung::Wrote | Rung::Executed | Rung::CrossedSystem);
+    // Data type is a first-class impact receipt: a demonstrated credential/PII
+    // exposure grants the confidentiality metric even if the rung slot was
+    // empty (e.g. the agent recorded the dump in prose, not evidence_data).
+    let dc = data_class(f);
+    let has_c = matches!(rung, Rung::ReadData | Rung::ReadSensitive | Rung::Wrote | Rung::Executed | Rung::CrossedSystem)
+        || dc != DataClass::None;
     let has_i = matches!(rung, Rung::Wrote | Rung::Executed | Rung::CrossedSystem);
     let has_a = matches!(rung, Rung::Executed | Rung::CrossedSystem);
     Some(crate::cvss::grade(proposed, move |m| match m {
@@ -439,8 +477,39 @@ fn min_impact(a: &'static str, b: &'static str) -> &'static str {
 }
 
 /// Fill in any empty mapping fields on each finding (does not overwrite model-set values).
+/// Back-fill a minimal structured `evidence_data` from a finding's prose when
+/// the agent left it null but clearly recorded a proof in text. It does NOT
+/// invent evidence: it copies what the finding already states (the endpoint as
+/// the attack URL, the evidence text as the response body) into the structured
+/// slot the deterministic grader and TypeSafe read, so a proof written as
+/// narrative is no longer treated as "no receipt". A credential/PII dump that
+/// lived only in prose then keeps its severity.
+pub fn backfill_evidence(f: &mut Finding) {
+    if f.evidence_data.is_some() {
+        return;
+    }
+    // Only salvage when there is a substantive textual proof to carry over.
+    let body = if !f.evidence.trim().is_empty() { f.evidence.clone() } else { return };
+    if body.len() < 12 {
+        return;
+    }
+    let url = f.endpoint.split_whitespace().last().unwrap_or(&f.endpoint).to_string();
+    let ex = crate::validation::Exchange {
+        method: f.endpoint.split_whitespace().next().filter(|m| m.chars().all(|c| c.is_ascii_uppercase())).unwrap_or("GET").to_string(),
+        url,
+        status: 200,
+        body,
+        content_type: String::new(),
+        ..Default::default()
+    };
+    f.evidence_data = Some(crate::validation::Evidence { attack: Some(ex), ..Default::default() });
+}
+
 pub fn enrich(findings: &mut [Finding]) {
     for f in findings.iter_mut() {
+        // Salvage a structured receipt from prose BEFORE grading, so a proof the
+        // agent wrote as narrative is graded, not discarded.
+        backfill_evidence(f);
         let (owasp, mitre, stage) = map_cwe(&f.cwe);
         if f.owasp.is_empty() { f.owasp = owasp.into(); }
         if f.mitre.is_empty() { f.mitre = mitre.into(); }
@@ -821,4 +890,32 @@ mod ladder_tests {
         assert!(g2.demonstrated_score >= g.demonstrated_score, "reading data cannot lower the score");
         assert!(g2.demonstrated.vector_string().contains("CVSS:3.1/"));
     }
+    #[test]
+    fn data_class_reads_credentials_from_prose_and_backfills() {
+        // The exact benchmark case: a BOLA whose proof (admin password dump) is
+        // in prose, evidence_data null. data_class must see the credential, and
+        // backfill must give the grader a structured receipt.
+        let mut f = Finding {
+            cwe: "CWE-639".into(),
+            title: "BOLA on /api/v2/users/:id".into(),
+            endpoint: "GET https://t.test/api/v2/users/1".into(),
+            evidence: "GET /api/v2/users/1 with a customer token returned admin record incl. password=SuperSecret and apiKey=nk_live_x".into(),
+            ..Default::default()
+        };
+        assert_eq!(data_class(&f), DataClass::Sensitive, "a credential dump is sensitive data");
+        assert!(f.evidence_data.is_none());
+        backfill_evidence(&mut f);
+        assert!(f.evidence_data.is_some(), "prose proof is salvaged into the structured slot");
+        // Now the graded CVSS keeps a confidentiality receipt (data type), not 0.
+        let g = cvss_graded(&f).expect("graded");
+        assert!(g.demonstrated_score > 0.0, "a demonstrated credential exposure is not zero");
+    }
+
+    #[test]
+    fn backfill_does_not_invent_evidence_when_there_is_none() {
+        let mut f = Finding { cwe: "CWE-79".into(), endpoint: "https://t.test/x".into(), evidence: "".into(), ..Default::default() };
+        backfill_evidence(&mut f);
+        assert!(f.evidence_data.is_none(), "no prose proof, nothing to salvage");
+    }
+
 }

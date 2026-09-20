@@ -194,12 +194,30 @@ impl TypeSafe {
             Question::noul(
                 "Does the evidence show REAL impact (data read/written, code executed, a boundary crossed), as opposed to only that a payload was reflected or an error appeared?",
                 "concrete impact is shown in the evidence",
-                "no impact is shown — only a mechanic or a reflection",
+                "no impact is shown - only a mechanic or a reflection",
+            ),
+        );
+        // Data type is a separate axis from "was impact demonstrated": a flaw
+        // that exposes credentials or PII is severe by the KIND of data it
+        // touched, even when the receipt is thin. Scored so the calibration can
+        // consider it instead of collapsing purely on the impact Noul.
+        qs.insert(
+            "data_sensitivity".to_string(),
+            Question::score(
+                "Judging only by what the evidence shows was exposed or affected, how sensitive is that data?",
+                &[
+                    "nothing sensitive: only reflection, an error, or public content",
+                    "internal or low-sensitivity data (ids, non-secret fields)",
+                    "personal data (PII): emails, names, addresses, phone numbers",
+                    "secrets: passwords, API keys, tokens, private keys, payment data",
+                ],
             ),
         );
         let answers = self.evaluate(state, qs).await?;
         let verdict = answers.get("verdict").cloned().unwrap_or_default();
         let impact = answers.get("impact_demonstrated").and_then(|a| a.noul).unwrap_or(0.0);
+        // Score returns a weighted position on the 0..3 ladder; normalise to 0..1.
+        let data_sensitivity = answers.get("data_sensitivity").and_then(|a| a.score).map(|s| (s / 3.0).clamp(0.0, 1.0)).unwrap_or(0.0);
         Ok(Adjudication {
             verdict: verdict.choice.clone().unwrap_or_else(|| "needs-review".into()),
             p_confirmed: verdict.p("confirmed"),
@@ -207,6 +225,7 @@ impl TypeSafe {
             p_rejected: verdict.p("rejected"),
             confidence: verdict.confidence.unwrap_or(0.0),
             impact_demonstrated: impact,
+            data_sensitivity,
         })
     }
 }
@@ -222,6 +241,11 @@ pub struct Adjudication {
     pub confidence: f64,
     /// Probability real impact was shown (0..1).
     pub impact_demonstrated: f64,
+    /// Calibrated data-sensitivity (0..1): 1.0 = secrets/credentials exposed.
+    /// A high value means the finding must NOT be recalibrated down just because
+    /// the impact receipt was thin - the KIND of data is itself the impact.
+    #[serde(default)]
+    pub data_sensitivity: f64,
 }
 
 impl Adjudication {
@@ -280,7 +304,7 @@ mod tests {
     #[test]
     fn calibrated_confidence_folds_in_demonstrated_impact() {
         // High p_confirmed but NO demonstrated impact → confidence is held back.
-        let a = Adjudication { verdict: "confirmed".into(), p_confirmed: 0.9, p_needs_review: 0.05, p_rejected: 0.05, confidence: 0.8, impact_demonstrated: 0.0 };
+        let a = Adjudication { verdict: "confirmed".into(), p_confirmed: 0.9, p_needs_review: 0.05, p_rejected: 0.05, confidence: 0.8, impact_demonstrated: 0.0, data_sensitivity: 0.0 };
         assert!((a.calibrated_confidence() - 0.45).abs() < 1e-9, "no impact halves the weight");
 
         // Same, with full impact → near p_confirmed.
@@ -290,9 +314,9 @@ mod tests {
 
     #[test]
     fn review_is_wanted_on_a_split_distribution() {
-        let split = Adjudication { verdict: "confirmed".into(), p_confirmed: 0.45, p_needs_review: 0.3, p_rejected: 0.25, confidence: 0.4, impact_demonstrated: 0.5 };
+        let split = Adjudication { verdict: "confirmed".into(), p_confirmed: 0.45, p_needs_review: 0.3, p_rejected: 0.25, confidence: 0.4, impact_demonstrated: 0.5, data_sensitivity: 0.0 };
         assert!(split.wants_review(), "no option clears 0.6 — a human should look");
-        let clear = Adjudication { verdict: "confirmed".into(), p_confirmed: 0.88, p_needs_review: 0.08, p_rejected: 0.04, confidence: 0.8, impact_demonstrated: 0.9 };
+        let clear = Adjudication { verdict: "confirmed".into(), p_confirmed: 0.88, p_needs_review: 0.08, p_rejected: 0.04, confidence: 0.8, impact_demonstrated: 0.9, data_sensitivity: 1.0 };
         assert!(!clear.wants_review());
     }
 

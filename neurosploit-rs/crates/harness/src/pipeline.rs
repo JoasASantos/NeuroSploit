@@ -2373,13 +2373,28 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
                             // says shows no real impact loses its C/I/A the same
                             // way an absent receipt would — the demonstrated
                             // score follows the evidence, calibrated.
-                            if adj.impact_demonstrated < 0.5 {
+                            // Data type is a guardrail against over-recalibration.
+                            // The impact is only stripped when BOTH the model was
+                            // unconvinced AND nothing sensitive was actually shown
+                            // (no credential/PII signature, and the calibrated
+                            // data-sensitivity is low). A demonstrated credential
+                            // or PII exposure keeps its severity even on a thin
+                            // receipt — the KIND of data is itself the impact.
+                            let dc = crate::attack_graph::data_class(f);
+                            let sensitive_shown = dc != crate::attack_graph::DataClass::None || adj.data_sensitivity >= 0.5;
+                            if adj.impact_demonstrated < 0.5 && !sensitive_shown {
                                 if let Some(g) = crate::attack_graph::cvss_graded(f) {
-                                    // Strip demonstrated impact the model is not
-                                    // convinced of; keep potential as context.
                                     let dropped = crate::cvss::grade(g.potential, |_| false);
                                     if dropped.demonstrated_score < g.demonstrated_score {
                                         f.cvss = format!("{:.1} ({})", dropped.demonstrated_score, dropped.demonstrated.vector_string());
+                                    }
+                                }
+                            } else if sensitive_shown && f.cvss.is_empty() {
+                                // Sensitive data shown but no score yet: grade it
+                                // WITH the data-type receipt rather than leaving it blank.
+                                if let Some(g) = crate::attack_graph::cvss_graded(f) {
+                                    if g.demonstrated_score > 0.0 {
+                                        f.cvss = format!("{:.1} ({})", g.demonstrated_score, g.demonstrated.vector_string());
                                     }
                                 }
                             }
