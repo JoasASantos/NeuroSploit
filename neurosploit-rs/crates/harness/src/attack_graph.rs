@@ -45,6 +45,9 @@ fn map_cwe(cwe: &str) -> (&'static str, &'static str, &'static str) {
         // Session fixation.
         384 => ("A07:2021-Auth-Failures", "T1539", "credential-access"),
         601 => ("A01:2021-Broken-Access-Control", "T1566", "initial-access"),
+        113 | 93 => ("A03:2021-Injection", "T1557", "initial-access"),
+        644 => ("A03:2021-Injection", "T1557", "initial-access"),
+        564 => ("A03:2021-Injection", "T1190", "execution"),
         352 => ("A01:2021-Broken-Access-Control", "T1189", "execution"),
         434 => ("A04:2021-Insecure-Design", "T1505.003", "execution"),
         1321 | 915 => ("A08:2021-Software-Data-Integrity", "T1059", "execution"),

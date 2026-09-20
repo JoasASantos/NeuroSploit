@@ -20,6 +20,13 @@ You are testing **{target}** for Open Redirect vulnerabilities.
 - Follow the redirect chain manually
 - Check if Location header points to external domain
 - Verify the browser actually navigates to evil.com
+### 3b. Same param, test CRLF / header injection
+A parameter that lands in the `Location` header is also a response-splitting
+sink. On the SAME parameter, try:
+- `/go?url=/%0d%0aX-Injected:%20pwned` — look for `X-Injected: pwned` as a real response header
+- `/go?url=/%0d%0aSet-Cookie:%20session=attacker` — a planted cookie header
+- If the marker appears as a HEADER (not the body), that is CRLF injection (CWE-113), report it IN ADDITION to the open redirect. Never stop at the redirect.
+
 ### 4. Chain with Other Vulns
 - OAuth token theft via redirect_uri manipulation
 - Phishing: redirect from trusted domain to fake login

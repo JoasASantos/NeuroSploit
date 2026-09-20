@@ -90,6 +90,9 @@ pub fn provides(f: &Finding) -> Vec<Capability> {
             }
         }
         209 | 532 | 538 | 540 | 548 | 693 | 1021 => vec![Capability::InternalKnowledge],
+        // CRLF / response splitting / host-header: header control feeds cache
+        // poisoning and redirect abuse downstream.
+        113 | 93 | 644 => vec![Capability::InternalKnowledge, Capability::SessionMaterial],
         // Missing throttling turns any guess into an unlimited one.
         307 | 770 | 799 | 400 => vec![Capability::UnlimitedAttempts],
         // Password policy.
@@ -130,6 +133,9 @@ pub fn requires(f: &Finding) -> Vec<Capability> {
         614 | 1004 | 1275 => vec![Capability::SessionMaterial],
         // Escalation needs a foothold.
         269 | 250 | 668 => vec![Capability::PrivilegedContext],
+        // Second-order SQLi: the stored payload only fires on the (often
+        // privileged) trigger page, so it needs that context to be reached.
+        564 => vec![Capability::PrivilegedContext],
         _ => vec![],
     }
 }
