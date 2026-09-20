@@ -506,6 +506,19 @@ neurosploit run https://app --typesafe off    # the identical pipeline, no TypeS
 records `"typesafe": true|false` — a clean with/without measurement you can run
 against your own target.
 
+**Pluggable decision backend.** The calibrated System One layer runs against
+either backend, chosen with `--decision-backend`:
+
+- `typesafe` — the hosted API (set `TYPESAFE_API_KEY`).
+- `laya` — [Laya](https://github.com/NandhaKishorM/laya), a local, open-source
+  System One engine (Apache 2.0) with the same primitives. Picking it downloads
+  the model on first use, runs it on this machine, needs no API key, and keeps
+  the engagement's evidence on the box — the right choice for air-gapped or OT
+  work. It starts a small local shim (`tools/laya_shim.py`) automatically.
+
+Both speak the same contract, so adjudication, CVSS grading, agent pruning and
+the confirmation loop behave identically whichever you pick.
+
 ### Scope-evasion resistance, evidence integrity, untrusted output
 
 Three hardening passes, all enforced in code:

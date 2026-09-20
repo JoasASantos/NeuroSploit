@@ -2349,7 +2349,7 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
                 let _ = tx.send(format!("notify: 🧮 TypeSafe confirmation loop confirmed {confirmed_by_agent} finding(s) the LLM path left unconfirmed")).await;
             }
 
-            let _ = tx.send("notify: 🧮 TypeSafe System One adjudicating findings…".to_string()).await;
+            let _ = tx.send(format!("notify: 🧮 System One adjudicating findings via {}…", ts.backend_label())).await;
             let mut refined = 0usize;
             for f in findings.iter_mut() {
                 let state = typesafe_state(f);

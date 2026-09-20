@@ -795,7 +795,7 @@ neurosploit run https://app --typesafe on     # calibrated adjudication + confir
 neurosploit run https://app --typesafe off    # the identical pipeline, no TypeSafe (for A/B)
 ```
 
-`--typesafe auto` (default) turns it on when the key is set. It adjudicates each
+`--typesafe auto` (default) turns it on when the key is set. Choose the engine with `--decision-backend typesafe` (hosted) or `--decision-backend laya` (local, free, downloads the model on first use — evidence never leaves the box; see `tools/laya_shim.py`). It adjudicates each
 finding with a calibrated `{confirmed/needs-review/rejected}` judgment over the
 *evidence*, re-grades CVSS when impact isn't demonstrated, prunes irrelevant
 agents, and runs a code-owned confirmation loop over enumerable classes. It is

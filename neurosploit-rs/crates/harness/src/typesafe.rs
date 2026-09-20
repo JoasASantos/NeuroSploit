@@ -33,8 +33,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-const ENDPOINT: &str = "https://api.typesafe.ai/v1/systemone";
-const MODEL: &str = "jev-latest";
+const DEFAULT_ENDPOINT: &str = "https://api.typesafe.ai/v1/systemone";
+const DEFAULT_MODEL: &str = "jev-latest";
 
 /// A question to evaluate against the state.
 #[derive(Debug, Clone, Serialize)]
@@ -123,32 +123,57 @@ struct ApiResponse {
 pub struct TypeSafe {
     key: String,
     client: reqwest::Client,
+    /// Endpoint to POST to. Defaults to TypeSafe's hosted API; a local backend
+    /// (e.g. the Laya shim) is selected by setting `NEUROSPLOIT_DECISION_ENDPOINT`.
+    endpoint: String,
+    /// Model id sent in the request. `NEUROSPLOIT_DECISION_MODEL` overrides it.
+    model: String,
+    /// Whether to send `Authorization: Bearer`. A local backend needs no key.
+    bearer: bool,
 }
 
 impl TypeSafe {
     /// Build from `TYPESAFE_API_KEY`. None when unset — the caller then skips
     /// System One entirely rather than failing.
     pub fn from_env() -> Option<TypeSafe> {
-        let key = std::env::var("TYPESAFE_API_KEY").ok().filter(|k| !k.trim().is_empty())?;
+        let key = std::env::var("TYPESAFE_API_KEY").ok().filter(|k| !k.trim().is_empty());
+        // A local decision backend (the Laya shim) is configured by its endpoint
+        // and needs no key. The hosted TypeSafe path is unchanged: a key alone
+        // still works exactly as before.
+        let endpoint = std::env::var("NEUROSPLOIT_DECISION_ENDPOINT").ok().filter(|e| !e.trim().is_empty());
+        if key.is_none() && endpoint.is_none() {
+            return None;
+        }
+        let bearer = key.is_some();
         Some(TypeSafe {
-            key,
-            client: reqwest::Client::builder().timeout(Duration::from_secs(30)).build().unwrap_or_default(),
+            key: key.unwrap_or_default(),
+            client: reqwest::Client::builder().timeout(Duration::from_secs(60)).build().unwrap_or_default(),
+            endpoint: endpoint.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string()),
+            model: std::env::var("NEUROSPLOIT_DECISION_MODEL").ok().filter(|m| !m.trim().is_empty()).unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+            bearer,
         })
     }
 
     pub fn new(key: &str) -> TypeSafe {
-        TypeSafe { key: key.to_string(), client: reqwest::Client::new() }
+        TypeSafe { key: key.to_string(), client: reqwest::Client::new(), endpoint: DEFAULT_ENDPOINT.to_string(), model: DEFAULT_MODEL.to_string(), bearer: true }
+    }
+
+    /// Which backend this instance talks to, for the run banner.
+    pub fn backend_label(&self) -> String {
+        if self.bearer { format!("TypeSafe ({})", self.model) } else { format!("local decision backend ({})", self.endpoint) }
     }
 
     /// Evaluate a set of independent questions over one state, in parallel (the
     /// API runs them together — they cannot see one another's answers).
     pub async fn evaluate(&self, state: serde_json::Value, questions: BTreeMap<String, Question>) -> Result<BTreeMap<String, Answer>, String> {
-        let req = Request { model: MODEL.into(), state, questions };
+        let req = Request { model: self.model.clone(), state, questions };
         // A short retry on the documented transient codes (429/529).
         let mut attempt = 0;
         loop {
             attempt += 1;
-            let resp = self.client.post(ENDPOINT).bearer_auth(&self.key).json(&req).send().await;
+            let mut rb = self.client.post(&self.endpoint).json(&req);
+            if self.bearer { rb = rb.bearer_auth(&self.key); }
+            let resp = rb.send().await;
             match resp {
                 Ok(r) => {
                     let status = r.status().as_u16();

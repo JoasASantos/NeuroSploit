@@ -82,6 +82,12 @@ struct Cli {
     /// exact same pipeline without it, so runs can be compared with/without.
     #[arg(long = "typesafe", global = true)]
     typesafe: Option<String>,
+    /// Decision backend for the calibrated System One layer:
+    /// typesafe (hosted API, needs TYPESAFE_API_KEY) or laya (local, free,
+    /// open-source — downloads the model on first use and keeps evidence on the
+    /// box). Default: whichever is configured. See tools/laya_shim.py.
+    #[arg(long = "decision-backend", global = true)]
+    decision_backend: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -550,6 +556,71 @@ fn find_base() -> PathBuf {
 }
 
 /// Where the harness caches an auto-fetched `agents_md/` (`~/.neurosploit/cache`).
+/// Bring up the local Laya decision backend and point the client at it.
+///
+/// Idempotent: if the shim already answers on its port, we just set the env and
+/// return. Otherwise we start `tools/laya_shim.py` (which downloads the model on
+/// first run) in the background and wait for it to become ready. `pip install
+/// laya` is attempted once if the import is missing. Everything here is optional
+/// and only runs when the operator explicitly picks `--decision-backend laya`.
+fn ensure_laya_backend() -> Result<(), String> {
+    let port = std::env::var("LAYA_SHIM_PORT").unwrap_or_else(|_| "8799".into());
+    let endpoint = format!("http://127.0.0.1:{port}/systemone");
+    let health = format!("http://127.0.0.1:{port}/health");
+
+    let ready = |url: &str| -> bool {
+        std::process::Command::new("curl")
+            .args(["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "3", url])
+            .output().ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "200")
+            .unwrap_or(false)
+    };
+
+    if ready(&health) {
+        std::env::set_var("NEUROSPLOIT_DECISION_ENDPOINT", &endpoint);
+        std::env::set_var("NEUROSPLOIT_DECISION_MODEL", "laya");
+        println!("  \x1b[2mdecision backend: laya (already running on :{port})\x1b[0m");
+        return Ok(());
+    }
+
+    // Locate the shim next to the binary/checkout.
+    let shim = [
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tools").join("laya_shim.py"),
+        std::env::current_dir().unwrap_or_default().join("neurosploit-rs/tools/laya_shim.py"),
+        std::env::current_dir().unwrap_or_default().join("tools/laya_shim.py"),
+    ].into_iter().find(|p| p.exists())
+        .ok_or_else(|| "laya_shim.py not found (expected under tools/)".to_string())?;
+
+    let py = if std::process::Command::new("python3").arg("--version").output().is_ok() { "python3" } else { "python" };
+    // Best-effort install of laya if it is missing.
+    let has_laya = std::process::Command::new(py).args(["-c", "import laya"]).output().map(|o| o.status.success()).unwrap_or(false);
+    if !has_laya {
+        println!("  \x1b[2minstalling laya (first run only)…\x1b[0m");
+        let _ = std::process::Command::new(py).args(["-m", "pip", "install", "-q", "laya"]).status();
+    }
+
+    println!("  \x1b[2mstarting laya shim (downloads the model on first use)…\x1b[0m");
+    std::process::Command::new(py)
+        .arg(&shim)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .map_err(|e| format!("could not start the shim: {e}"))?;
+
+    // Wait for readiness (model download can take a while on the first run).
+    for _ in 0..120 {
+        if ready(&health) {
+            std::env::set_var("NEUROSPLOIT_DECISION_ENDPOINT", &endpoint);
+            std::env::set_var("NEUROSPLOIT_DECISION_MODEL", "laya");
+            println!("  \x1b[1;32m✓ laya backend ready\x1b[0m on :{port} — evidence stays local, no API key");
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+    Err("laya shim did not become ready in time".into())
+}
+
 fn agents_cache_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from).map(|h| h.join(".neurosploit").join("cache"))
         .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from).map(|l| l.join("NeuroSploit").join("cache")))
@@ -615,6 +686,17 @@ async fn main() -> anyhow::Result<()> {
     // run type (and the REPL) honours one control. `off` disables it entirely;
     // `on`/`auto` leave it to key presence. This is what makes with/without
     // TypeSafe an A/B a single flag flips.
+    // Decision backend selection is additive: it only sets the endpoint/model
+    // env vars the client already reads. `typesafe` (or unset) leaves the hosted
+    // default untouched; `laya` points at a local shim and starts it if needed.
+    if let Some(be) = cli.decision_backend.as_deref().map(|s| s.trim().to_lowercase()) {
+        if be == "laya" {
+            if let Err(e) = ensure_laya_backend() {
+                eprintln!("  \x1b[33m⚠ laya backend: {e} — falling back to whatever else is configured\x1b[0m");
+            }
+        }
+        // `typesafe` needs no action: the client's defaults already point there.
+    }
     match cli.typesafe.as_deref().map(|s| s.trim().to_lowercase()) {
         Some(ref m) if m == "off" || m == "false" || m == "0" => std::env::set_var("NEUROSPLOIT_TYPESAFE", "off"),
         Some(ref m) if m == "on" || m == "true" || m == "1" || m == "auto" => std::env::set_var("NEUROSPLOIT_TYPESAFE", "on"),
