@@ -64,9 +64,7 @@ Control TUI**.
 > (`--compliance pci-dss,hipaa,soc2`); an **internal-network / AD attack graph**;
 > a **reasoning-budget governor** (`--budget`); and **TypeSafe System One**
 > (`--typesafe on|off|auto`) as a calibrated confirmation + adjudication layer.
-> 27 deterministic per-CWE validators, 446 agents. See
-> [benchmarks/typesafe-2026-09-20](benchmarks/typesafe-2026-09-20/) for a
-> with/without measurement.
+> 27 deterministic per-CWE validators, 446 agents.
 
 - 🧠 **POMDP belief + anti-hallucination gate** — findings aren't booleans; a
   property-graph belief carries probabilities, and `may_assert` refuses to claim
@@ -505,8 +503,8 @@ neurosploit run https://app --typesafe off    # the identical pipeline, no TypeS
 ```
 
 `--typesafe auto` (default) is on when the key is set. Each run's `meta.json`
-records `"typesafe": true|false` — a clean with/without measurement, one of
-which lives in [`benchmarks/typesafe-2026-09-20/`](benchmarks/typesafe-2026-09-20/).
+records `"typesafe": true|false` — a clean with/without measurement you can run
+against your own target.
 
 ### Scope-evasion resistance, evidence integrity, untrusted output
 

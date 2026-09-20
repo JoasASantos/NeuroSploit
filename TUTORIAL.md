@@ -800,8 +800,9 @@ finding with a calibrated `{confirmed/needs-review/rejected}` judgment over the
 *evidence*, re-grades CVSS when impact isn't demonstrated, prunes irrelevant
 agents, and runs a code-owned confirmation loop over enumerable classes. It is
 **additive** — a deterministic validator still rules; TypeSafe can only lower
-confidence or flag for review, never resurrect a rejected claim. A with/without
-measurement lives in [`benchmarks/typesafe-2026-09-20/`](benchmarks/typesafe-2026-09-20/).
+confidence or flag for review, never resurrect a rejected claim. Run it with
+`--typesafe on` and `--typesafe off` against the same target to measure the
+difference (`meta.json` records which mode ran).
 
 ### Internal network / AD & reasoning budget
 
