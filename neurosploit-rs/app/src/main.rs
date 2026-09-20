@@ -5,6 +5,7 @@ mod repl;
 mod tui;
 
 use clap::{Parser, Subcommand};
+mod mcp;
 use harness::{agents, models::ModelRef, pool::ModelPool, types::RunConfig, RunOutput};
 use std::path::{Path, PathBuf};
 
@@ -187,6 +188,9 @@ enum Cmd {
         #[arg(short, long)]
         verbose: bool,
     },
+    /// Run NeuroSploit as an MCP server (stdio) so Claude Code, Codex, Cursor
+    /// and other MCP clients can drive it as a set of tools.
+    Mcp,
     /// Rebuild a finished run's report artifacts (md · json · html · pdf) from
     /// its findings, without re-running the engagement.
     Rebuild {
@@ -741,6 +745,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Cmd::Mcp => { mcp::serve()?; }
         Cmd::Rebuild { run } => {
             // Accept either a path or a bare run id, resolved against the same
             // runs root the engagement wrote to.

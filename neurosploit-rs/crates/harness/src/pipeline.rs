@@ -300,6 +300,26 @@ fn tool_doctrine(mcp_on: bool) -> String {
            (`timeout 90 <install> || echo skip`) and try each at most once — if it fails, isn't packaged, has no network \
            or hangs, SKIP it and fall back to curl/nc/dig/python3. A missing or un-downloadable tool is NEVER a reason \
            to stall: move on with what you have.\n\
+         - PICK THE BEST TOOL, DON'T SETTLE FOR THIS LIST: the tools above are a starting menu, not a limit.            You are expected to reason about the CONTEXT and reach for (or install) the strongest tool for THAT job,            the way a real operator does — if a better/more specific tool exists, research it, provision it (see TOOL            DOWNLOAD), and use it. Prefer battle-tested tooling over hand-rolled scripts when it fits.
+         - CONTEXT TOOLBOXES (provision what the detected surface calls for; time-box each install, skip on failure):
+           · Active Directory / Windows / SMB / LDAP / Kerberos: `netexec`(nxc)/`crackmapexec`, the `impacket` suite              (secretsdump, GetUserSPNs, GetNPUsers, ntlmrelayx, psexec/wmiexec/smbexec), `bloodhound-python`/`bloodhound-ce`              + neo4j for the AD graph, `kerbrute`, `certipy` (AD CS/ESC), `ldapdomaindump`, `enum4linux-ng`, `responder`,              `evil-winrm`, `Coercer`/`PetitPotam`, `adidnsdump`. Map credential→identity→permission→machine and feed the              internal attack graph.
+           · Web / API deep recon: `httpx`, `katana`, `gau`, `waybackurls`, `subfinder`/`amass` (only in-scope),              `arjun` (param mining), `nuclei` (targeted), `feroxbuster`/`ffuf`, `jwt_tool`, `graphw00f`/`clairvoyance`              (GraphQL), `trufflehog`/`gitleaks` on exposed repos.
+           · Cloud: `pacu`, `scoutsuite`, `prowler`, `trivy`, the provider CLIs (`aws`/`gcloud`/`az`), `cloud_enum`.
+           · Exploitation frameworks: `metasploit`/`msfconsole` and `msfvenom` for payloads/PoCs, `sqlmap` for deep SQLi,              `commix` for command injection — use surgically, non-destructively, never a blind auto-exploit.
+           · Secrets/creds & cracking (offline, on captured material only): `hashcat`/`john`, `trufflehog`.
+           · Mobile (APK/IPA): `mobsf` (run HEADLESS via its Docker image / REST API, not the GUI), `apktool`, `jadx`, \
+             `apkleaks`, `objection`/`frida`; `nuclei` on discovered endpoints.\n\
+           · Reverse engineering / binaries: `ghidra` HEADLESS (`analyzeHeadless`), `radare2`/`rizin`, `binwalk`, \
+             `checksec`, `gdb`; decompile and triage without any GUI.\n\
+           · Any GUI tool runs HEADLESS: prefer a CLI / REST / `analyzeHeadless` / `--no-gui` mode or the Docker \
+             image; never require an X display. If a tool is GUI-only, drive its API or skip it.\n\
+         - HEAVY TOOLBOX: many of these ship in `kali-linux-large` or install via apt/pipx/go — when running in the Kali            sandbox they are one `apt install`/`pipx install` away; provision on demand for the context at hand.
+         - CVE -> PoC SOURCING (core capability, not a last resort): the moment you fingerprint a concrete version            (WordPress core/plugin/theme, a CMS, framework/library, an OS package, a service banner), find and run a real            proof-of-concept for its known CVEs:
+           · `searchsploit <product> <version>` (Exploit-DB, offline in Kali); `searchsploit -m <id>` copies a PoC              locally, `-x` reads it, `-u` updates the DB.
+           · Search Exploit-DB, GitHub (`github.com/search?q=CVE-XXXX-YYYY`), PacketStorm, Vulners and the GHSA/NVD              advisory for a working PoC; `git clone` the specific repo (pinned) or fetch the single script.
+           · WordPress: `wpscan --url <t> --enumerate vp,vt,u` to pin vulnerable plugins/themes, then pull the PoC.
+           · BUILD when needed: compile C/Go/Rust PoCs (`gcc`/`make`/`go build`/`cargo build`) or install Python/Ruby              deps in the sandbox; READ the exploit first, adapt hardcoded targets/ports to THIS engagement, run it              non-destructively (benign marker/`id`/OOB callback as proof, never a destructive payload).
+           · Vet everything: reputable source, pinned version, read before running, time-box each fetch/build; if no PoC              exists or it will not build, fall back to a manual attempt or report the version as a lead. This is how you              exploit CVEs that have a public PoC.
          - {browser}\n\
          - {ua}{proxy}{pocs}\
          Use only what is installed; degrade gracefully. Never block on a single tool install. Never run destructive or DoS actions.\n\n",

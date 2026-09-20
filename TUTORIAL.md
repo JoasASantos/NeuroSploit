@@ -431,7 +431,63 @@ neurosploit tui http://testphp.vulnweb.com/ --subscription --model anthropic:cla
 
 ---
 
-## 8. Web console
+## 8. NeuroSploit as an MCP server
+
+Run NeuroSploit as a Model Context Protocol server and any MCP client (Claude
+Code, Codex, Cursor, ...) can drive it as tools, from inside your normal agent
+session.
+
+```bash
+neurosploit mcp        # speaks MCP over stdio
+```
+
+### Install in Claude Code
+
+```bash
+claude mcp add neurosploit -- neurosploit mcp
+```
+
+Or add it by hand to `~/.claude.json` (or a project `.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "neurosploit": { "command": "neurosploit", "args": ["mcp"] }
+  }
+}
+```
+
+### Install in Codex / Cursor / generic MCP client
+
+Point the client at the command `neurosploit mcp` (stdio transport). For Codex,
+add to its MCP config:
+
+```toml
+[mcp_servers.neurosploit]
+command = "neurosploit"
+args = ["mcp"]
+```
+
+### Tools it exposes
+
+| Tool | What it does |
+|---|---|
+| `neurosploit_run` | Launch an engagement (target, mode, model, focus, scope-file, sandbox, typesafe) |
+| `neurosploit_list_runs` | List finished runs |
+| `neurosploit_findings` | Read a run's findings JSON |
+| `neurosploit_report` | Read a run's Markdown report |
+| `neurosploit_rebuild` | Rebuild a run's report (no model calls) |
+| `neurosploit_internal` | Internal / AD attack-graph analysis |
+| `neurosploit_compliance` | Map a run onto PCI-DSS / HIPAA / SOC 2 |
+
+Each tool shells out to the same `neurosploit` binary, so authorization, scope
+and safety are identical to the CLI. The MCP server needs `neurosploit` on
+`PATH` (or use an absolute path in the config) and, for a run, whatever the
+engagement needs (a model API key or `--subscription`).
+
+---
+
+## 8b. Web console
 
 A browser UI for the same harness — one `node` process serves the SPA and drives the compiled
 `neurosploit` binary; nothing about the harness logic is reimplemented in the browser.

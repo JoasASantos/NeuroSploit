@@ -681,6 +681,22 @@ Critical is not a Critical.
 
 ---
 
+## 🔌 Run it as an MCP server
+
+Drive NeuroSploit from Claude Code, Codex or Cursor as tools:
+
+```bash
+neurosploit mcp                              # MCP server over stdio
+claude mcp add neurosploit -- neurosploit mcp
+```
+
+Exposes `neurosploit_run`, `neurosploit_findings`, `neurosploit_report`,
+`neurosploit_rebuild`, `neurosploit_internal`, `neurosploit_compliance`,
+`neurosploit_list_runs`. Each shells out to the same binary, so scope, safety
+and authorization are identical to the CLI. See TUTORIAL section 8.
+
+---
+
 ## 📊 How we compare
 
 A rough, honest capability benchmark against Strix, Shannon, Penligent and the

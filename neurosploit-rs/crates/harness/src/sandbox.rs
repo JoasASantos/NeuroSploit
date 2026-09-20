@@ -82,7 +82,7 @@ pub struct SandboxConfig {
 impl Default for SandboxConfig {
     fn default() -> Self {
         SandboxConfig {
-            image: "kalilinux/kali-rolling".into(),
+            image: "kalilinux/kali-rolling".into(), // override with --sandbox kalilinux/kali-linux-large for the full toolbox
             name: "neurosploit-kali".into(),
             workdir: None,
             env: Vec::new(),
