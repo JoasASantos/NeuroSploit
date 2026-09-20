@@ -1,17 +1,17 @@
 {
   "engine": "neurosploit",
-  "version": "4.0.0",
-  "build": "49d3d3ceb1df",
-  "run": "ns-1789870577-localhost_3000",
+  "version": "4.1.0",
+  "build": "4171e1cb7a4c",
+  "run": "ns-1789919119-localhost_3000",
   "target": "http://localhost:3000",
-  "generated": 1789872190,
-  "findings": 18,
+  "generated": 1789922220,
+  "findings": 22,
   "artifacts": [
     {
       "name": "findings.json",
       "present": true,
-      "sha256": "9827d2c67a851679ce8462fc1885d2c4ddfeb0a70180db293029f33d362d108f",
-      "bytes": 112054,
+      "sha256": "d7ff6d7b9cdb7aa69eb150a200627ca863dfa6bcd2c814fb35c82039190441fa",
+      "bytes": 177712,
       "role": "the findings, each stamped with the engine build (P5)"
     },
     {
@@ -23,35 +23,36 @@
     {
       "name": "recon.json",
       "present": true,
-      "sha256": "18a9d9456b5d239905a8c5a2d0647b272f8b9e5b5ff7f20c6ed26e7bf5164258",
-      "bytes": 11611,
+      "sha256": "21cddfca567ce1529a07e9f66d2383a7f7678985b34a0ee12327a6f973c79b4b",
+      "bytes": 11522,
       "role": "reconnaissance facts"
     },
     {
       "name": "audit.jsonl",
       "present": true,
-      "sha256": "11e92303952192781686111381c17e37326ecedc1969b2c0d17b8d810fffebdd",
-      "bytes": 32535,
+      "sha256": "3a08799df1f2186aa306d7360a33b708607405c92424ecc2b99d77bd5e800831",
+      "bytes": 36241,
       "role": "hash-chained decision log — every ALLOW/DENY (P1/P2/P4)"
     },
     {
       "name": "audit.jsonl.anchors",
       "present": true,
-      "sha256": "a0dd67ad35b530842fc0221ead9536b3ce19d45be251e8568b80909f4859d7cb",
+      "sha256": "640b91b803e803b3dde6e599d6d96b7d3bf8cac37f1303a2cbc4344fe6d68979",
       "bytes": 213,
       "role": "external anchors of the audit chain (P4)"
     },
     {
       "name": "provenance.json",
       "present": true,
-      "sha256": "ac45f0856813ca943713ff782a784e34ccc08038794fd5dfa00d6f060eac803c",
+      "sha256": "2768af4cdeee160c4e587bfb64f0f75d271781fb94e5c2a54e6a44d811a908de",
       "bytes": 297,
       "role": "signed provenance manifest — build + structural signature (P5)"
     },
     {
       "name": "out-of-scope-findings.json",
-      "present": false,
-      "bytes": 0,
+      "present": true,
+      "sha256": "0e097f3b35cb2ac1016ba8bde0201b9873cf3127ffb73641d9fd61555437dd0c",
+      "bytes": 26406,
       "role": "findings quarantined for being outside scope (P2)"
     },
     {
@@ -83,7 +84,8 @@
       "name": "Scope enforcement",
       "status": "present",
       "evidenced_by": [
-        "audit.jsonl"
+        "audit.jsonl",
+        "out-of-scope-findings.json"
       ],
       "note": "scope decisions recorded, including denials/quarantine"
     },
@@ -94,7 +96,7 @@
       "evidenced_by": [
         "findings.json"
       ],
-      "note": "0/18 findings carry structured evidence · 16 with CVSS · 17 voted · 16 PoC(s) · 0 screenshot(s) · 14 evidence file(s)"
+      "note": "22/22 findings carry structured evidence · 22 with CVSS · 21 voted · 31 PoC(s) · 0 screenshot(s) · 7 evidence file(s)"
     },
     {
       "id": "P4",
@@ -116,5 +118,5 @@
       "note": "signed provenance manifest with structural signature"
     }
   ],
-  "bundle_hash": "85b0ef6f4789f08cb6bde0669b45aefb9f9f6bcb5f853a811c20f725a58e1eb1"
+  "bundle_hash": "1764e1a46e0e60a1ac33c8c599e69d2d93dd96438e02aa0d5e597ecab4758659"
 }

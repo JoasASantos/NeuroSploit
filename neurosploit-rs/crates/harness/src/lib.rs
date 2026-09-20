@@ -76,3 +76,17 @@ pub use scope::{Action as ScopeAction, Decision as ScopeDecision, ScopePolicy};
 pub use types::{Finding, RunConfig};
 pub use uncertainty::{assess as assess_uncertainty, Assessment, Gap, Rounds};
 pub use validation::{judge as judge_finding, CweValidator, Evidence, Verdict};
+
+
+/// Download bytes over HTTPS with a bounded timeout. Used by the app to fetch
+/// the pinned agent library when it is not present next to the binary.
+pub async fn fetch_bytes(url: &str, timeout_secs: u64) -> anyhow::Result<Vec<u8>> {
+    let b = reqwest::Client::new()
+        .get(url)
+        .header("user-agent", "neurosploit")
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .send().await?
+        .error_for_status()?
+        .bytes().await?;
+    Ok(b.to_vec())
+}

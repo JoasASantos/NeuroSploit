@@ -534,7 +534,14 @@ fn find_base() -> PathBuf {
         let c = la.join("NeuroSploit");
         if c.join("agents_md").is_dir() { return c; }
     }
-    // 5) Last resort: the build-time layout.
+    // 5) A cache the harness populates itself (see ensure_agents). A binary
+    // downloaded on its own, with no agents_md/ beside it, lands here.
+    if let Some(cache) = agents_cache_dir() {
+        if cache.join("agents_md").is_dir() {
+            return cache;
+        }
+    }
+    // 6) Last resort: the build-time layout.
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|p| p.parent())
@@ -542,10 +549,67 @@ fn find_base() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// Where the harness caches an auto-fetched `agents_md/` (`~/.neurosploit/cache`).
+fn agents_cache_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from).map(|h| h.join(".neurosploit").join("cache"))
+        .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from).map(|l| l.join("NeuroSploit").join("cache")))
+}
+
+/// Make sure `<base>/agents_md/` exists; if not, fetch it from the pinned
+/// release into the cache and use that. The agent library is prompt/markdown,
+/// not code, and is fetched over HTTPS from the official repo at this exact
+/// version tag. Opt out with NEUROSPLOIT_NO_FETCH=1 (offline/air-gapped).
+async fn ensure_agents(base: &Path) -> PathBuf {
+    if base.join("agents_md").is_dir() {
+        return base.to_path_buf();
+    }
+    if std::env::var("NEUROSPLOIT_NO_FETCH").ok().as_deref() == Some("1") {
+        return base.to_path_buf();
+    }
+    let Some(cache) = agents_cache_dir() else { return base.to_path_buf() };
+    if cache.join("agents_md").is_dir() {
+        return cache;
+    }
+    let tag = format!("v{}", env!("CARGO_PKG_VERSION"));
+    let url = format!("https://codeload.github.com/JoasASantos/NeuroSploit/tar.gz/refs/tags/{tag}");
+    eprintln!("  \x1b[2magents_md/ not found locally — fetching the agent library for {tag} from GitHub…\x1b[0m");
+    if let Err(e) = fetch_agents(&url, &cache).await {
+        eprintln!("  \x1b[33m⚠ could not fetch agents_md ({e}). Run from a checkout, or set NEUROSPLOIT_BASE to a folder that has agents_md/.\x1b[0m");
+        return base.to_path_buf();
+    }
+    if cache.join("agents_md").is_dir() {
+        eprintln!("  \x1b[2m✓ agent library cached at {}\x1b[0m", cache.display());
+        cache
+    } else {
+        base.to_path_buf()
+    }
+}
+
+/// Download the release tarball and extract only its `agents_md/` into `cache`.
+async fn fetch_agents(url: &str, cache: &Path) -> anyhow::Result<()> {
+    let bytes = harness::fetch_bytes(url, 120).await?;
+    std::fs::create_dir_all(cache)?;
+    // Extract with the system tar (no new crate dependency): the tarball's top
+    // dir is `NeuroSploit-<version>/`, and we keep only its agents_md subtree.
+    let tmp = cache.join(".download.tar.gz");
+    std::fs::write(&tmp, &bytes)?;
+    let status = std::process::Command::new("tar")
+        .arg("-xzf").arg(&tmp)
+        .arg("-C").arg(cache)
+        .arg("--strip-components=1")
+        .arg("--wildcards").arg("*/agents_md")
+        .status();
+    let _ = std::fs::remove_file(&tmp);
+    match status {
+        Ok(s) if s.success() && cache.join("agents_md").is_dir() => Ok(()),
+        _ => anyhow::bail!("tar extraction failed or agents_md not in the archive"),
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut cli = Cli::parse();
-    let base = find_base();
+    let base = ensure_agents(&find_base()).await;
 
     // Resolve the TypeSafe mode into the env var the pipeline reads, so every
     // run type (and the REPL) honours one control. `off` disables it entirely;

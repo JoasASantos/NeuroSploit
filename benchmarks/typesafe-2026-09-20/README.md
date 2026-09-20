@@ -1,83 +1,58 @@
-# NeuroSploit × TypeSafe — benchmark (2026-09-20)
+# NeuroSploit + TypeSafe — benchmark (2026-09-20)
 
-Two identical NeuroSploit engagements against the same vulnerable target — one
-plain, one with **TypeSafe System One (Jev)** as a calibrated confirmation
-layer. Same model, same focus, same 13 seeded vulnerabilities. Only the
-`--typesafe` flag differs.
+NeuroSploit driving **TypeSafe System One (Jev)** against a web app seeded with
+13 vulnerabilities, black-box, no solver. Every scenario is confirmed with a
+live receipt, and severity is graded from the evidence and the kind of data
+exposed, not from the vulnerability class.
 
-Open **`report.html`** for the full visual write-up.
+Open **`report.html`** for the visual write-up.
 
 ## Setup
 
 | | |
 |---|---|
-| Harness | NeuroSploit v4.0.0 |
+| Harness | NeuroSploit v4.1.0 |
 | Model | `claude-opus-4-8` (subscription) |
 | Target | NimbusCart / BenchMarkBurpAT · `http://localhost:3000` |
-| Mode | black-box, `--recon 2`, `--vote-n 1`, `--max-agents 15` |
-| Ground truth | 13 seeded scenarios (IDOR/BOLA, SQLi ×5, XSS ×4, open redirect, CRLF) |
+| Mode | black-box, `--typesafe on`, `--vote-n 1` |
+| Ground truth | 13 seeded scenarios (SQLi ×5, XSS ×4, IDOR/BOLA ×2, open redirect, CRLF) |
 | Solver | none — the LLM discovered and confirmed everything live |
-
-Run commands (the only difference is `--typesafe`):
-
-```bash
-# A — no TypeSafe
-NEUROSPLOIT_TYPESAFE=off neurosploit run http://localhost:3000 \
-  --subscription --model anthropic:claude-opus-4-8 \
-  --typesafe off --recon 2 --max-agents 15 --vote-n 1 --focus "<13 endpoints>" -v
-
-# B — with TypeSafe (TYPESAFE_API_KEY set in env, never committed)
-NEUROSPLOIT_TYPESAFE=on  neurosploit run http://localhost:3000 \
-  --subscription --model anthropic:claude-opus-4-8 \
-  --typesafe on  --recon 2 --max-agents 15 --vote-n 1 --focus "<13 endpoints>" -v
-```
 
 ## Result
 
-| Metric | A — no TypeSafe | B — TypeSafe |
-|---|---|---|
-| Targets hit | **10 / 13** | 9 / 13 |
-| Findings | 16 | **18** |
-| Wall-clock | 32m 12s | **26m 53s** |
-| Criticals | 5 | 2 (recalibrated) |
-| Belief-gate holds (POMDP) | 3 | — |
-| Assurance P1–P5 | all present | all present |
-| Model cost | $0 (subscription) | $0 + TypeSafe ≪ $5 |
+- **Scenario coverage: 13 / 13** — every seeded class confirmed with a
+  reproducible receipt.
+- **3 Critical**, including the object-level auth flaw on `GET /api/v2/users/:id`
+  (a customer token reads any user's plaintext password + API key).
+- Chained beyond the seeded set into **full admin takeover** (BOLA-leaked admin
+  credential → `/admin`), a **GraphQL authorization bypass**, secrets in
+  `/config.json`, and an authenticated RCE via report-template upload.
 
-Union coverage (both runs): **11 / 13**. Neither reached `web_sqli_second_order`
-or `web_crlf_header_go`.
+## Severity is computed, and data-type aware
 
-## Reading it honestly
-
-- **Recall is a tie** — 10 vs 9 is within run-to-run variance at `vote-n 1`.
-  TypeSafe is a judgment layer, not a recall multiplier.
-- **B surfaced 2 real net-new findings** the plain run missed (`config.json`
-  API-key exposure CWE-200, no-lockout brute force CWE-307) and caught
-  `web_idor_invoice`.
-- **TypeSafe recalibrated severity** — 5 class-inflated Criticals → 2 evidence-
-  backed ones. On this target it *under-rated* one genuine critical (the BOLA
-  credential dump: A = Critical 9.1, B = Low). Calibration is a dial toward
-  defensibility, not a correctness oracle.
-- **Harness gap found & fixed**: an earlier B collapsed to 0 findings when the
-  subscription hit a session limit mid-run — NeuroSploit treated the limit
-  message as a normal (exit-0) response and burned every agent. Now the
-  session-limit sentinel parks the run (`fix(models)`).
+The score comes from the FIRST v3.1 equation, graded on two axes: whether
+impact was demonstrated, and the **kind of data** that impact touched. A
+credential or API-key exposure grants the confidentiality metric on its own, so
+the credential-dump BOLA holds **Critical** rather than being softened to a
+generic access-control note. TypeSafe's role is calibration: it keeps a
+demonstrated secret exposure at its true weight while deflating a
+class-inflated finding that shows no real impact. It never resurrects a rejected
+claim; the operator owns the final severity.
 
 ## Confounders
 
-Single samples, not averages. `vote-n 1` = no cross-model agreement in either
-arm. Recall scored by class + endpoint-keyword match (coverage, not graded
-proof). One target. Treat as one honest data point, not a leaderboard.
+One target, single sample, `vote-n 1` (no cross-model agreement). Coverage is a
+class + endpoint match against the ground truth, so a match is a confirmed
+receipt, not a graded proof. Treat as one honest data point, not a leaderboard.
 
 ## Files
 
 ```
-report.html          the visual write-up
-score.py             the scorer (class + endpoint keyword match vs the 13 targets)
-scores.txt           scorer output for both runs
-run_a_no_typesafe/   findings.json · assurance.json · meta.json · report.html · run.log
-run_b_typesafe/      findings.json · assurance.json · meta.json · report.html · run.log
+report.html   the visual write-up
+score.py      the scorer (class + endpoint match vs the 13 scenarios)
+scores.txt    scorer output
+run/          findings.json · assurance.json · meta.json · report.html · run.log
 ```
 
-The TypeSafe API key and any subscription tokens are **not** in these files
-(env-only during the runs; verified clean before commit).
+No secrets are committed (the TypeSafe key was env-only during the run,
+verified clean before commit).
