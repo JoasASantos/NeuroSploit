@@ -1,0 +1,282 @@
+<title>NeuroSploit × TypeSafe Benchmark</title>
+<meta name="description" content="Head-to-head of NeuroSploit against a vulnerable target, with and without TypeSafe System One as a confirmation layer.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=Chivo:wght@600;700;800&display=swap">
+<style>
+  :root{
+    --ground:#f4f2f7; --surface:#ffffff; --surface-2:#eceaf3; --line:#ddd8e8;
+    --ink:#1a1726; --muted:#6b6580; --faint:#938da6;
+    --accent:#6d4bd8;        /* neuro violet */
+    --a:#c2701c;             /* run A — amber (no typesafe) */
+    --b:#0e8f86;             /* run B — teal (typesafe) */
+    --crit:#c8324a; --high:#d9743a; --med:#c2a01c; --low:#4a76c4; --info:#7b7590; --good:#1f9d68;
+    --shadow:0 1px 2px rgba(26,23,38,.06),0 6px 20px rgba(26,23,38,.06);
+    /* severity — vivid, identical in both themes (severity is not theme-relative) */
+    --sev-crit:#e5484d; --sev-high:#f76b15; --sev-med:#f5b301; --sev-low:#3e7bfa; --sev-info:#8b8698;
+  }
+  :root:not([data-theme="light"]){ @media (prefers-color-scheme:dark){
+    --ground:#0f0e17; --surface:#191627; --surface-2:#211d33; --line:#2e2942;
+    --ink:#eceaf5; --muted:#a49dbd; --faint:#736c8f;
+    --accent:#a78bfa; --a:#f0a95e; --b:#4fd6c6;
+    --crit:#f26d7d; --high:#f0965e; --med:#e6cd52; --low:#7aa6f0; --info:#9a93b4; --good:#5ee0a0;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 30px rgba(0,0,0,.35);
+  }}
+  :root[data-theme="dark"]{
+    --ground:#0f0e17; --surface:#191627; --surface-2:#211d33; --line:#2e2942;
+    --ink:#eceaf5; --muted:#a49dbd; --faint:#736c8f;
+    --accent:#a78bfa; --a:#f0a95e; --b:#4fd6c6;
+    --crit:#f26d7d; --high:#f0965e; --med:#e6cd52; --low:#7aa6f0; --info:#9a93b4; --good:#5ee0a0;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 30px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  body{background:var(--ground);color:var(--ink);font-family:"IBM Plex Sans",system-ui,sans-serif;line-height:1.55;
+    -webkit-font-smoothing:antialiased;margin:0}
+  .wrap{max-width:1000px;margin:0 auto;padding:clamp(24px,5vw,64px) clamp(18px,4vw,40px)}
+  h1,h2,h3{font-family:"Chivo","IBM Plex Sans",sans-serif;text-wrap:balance;line-height:1.1;margin:0}
+  code,.mono,.num{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}
+  .eyebrow{font-family:"IBM Plex Mono",monospace;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);font-weight:600}
+
+  /* header */
+  header{border-bottom:1px solid var(--line);padding-bottom:28px;margin-bottom:36px}
+  h1{font-size:clamp(30px,5.5vw,50px);font-weight:800;margin:10px 0 8px;letter-spacing:-.02em}
+  .sub{color:var(--muted);font-size:16px;max-width:64ch}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:18px;font-family:"IBM Plex Mono",monospace;font-size:12.5px;color:var(--faint)}
+  .meta b{color:var(--ink);font-weight:500}
+
+  /* thesis tiles */
+  .thesis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin:34px 0}
+  .tile{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px 18px 16px;box-shadow:var(--shadow)}
+  .tile .k{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+  .tile .v{font-family:"Chivo",sans-serif;font-weight:800;font-size:30px;letter-spacing:-.02em;margin-top:6px;display:flex;align-items:baseline;gap:8px}
+  .tile .u{font-size:13px;font-weight:500;color:var(--muted);font-family:"IBM Plex Sans"}
+  .tile .note{font-size:12.5px;color:var(--muted);margin-top:4px}
+  .swatchA{color:var(--a)} .swatchB{color:var(--b)}
+
+  section{margin:44px 0}
+  h2{font-size:22px;font-weight:700;margin-bottom:4px}
+  .lead{color:var(--muted);font-size:15px;margin:6px 0 20px;max-width:70ch}
+
+  /* comparison table */
+  .cmp{width:100%;border-collapse:collapse;font-size:14.5px;background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:var(--shadow)}
+  .cmp th,.cmp td{padding:12px 16px;text-align:left;border-bottom:1px solid var(--line)}
+  .cmp thead th{font-family:"IBM Plex Mono",monospace;font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:600;background:var(--surface-2)}
+  .cmp tbody tr:last-child td{border-bottom:none}
+  .cmp td.metric{color:var(--muted)}
+  .cmp td .num{font-weight:600;font-size:15px}
+  .colA{color:var(--a)} .colB{color:var(--b)}
+  .win{position:relative}
+  .win::after{content:"▲";font-size:9px;margin-left:6px;vertical-align:middle;color:var(--good)}
+
+  /* per-scenario grid */
+  .scen{display:grid;grid-template-columns:1fr auto auto;gap:0;background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:var(--shadow)}
+  .scen .row{display:contents}
+  .scen .cell{padding:10px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+  .scen .row:last-child .cell{border-bottom:none}
+  .scen .head .cell{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);background:var(--surface-2);font-weight:600}
+  .scen .idc{font-family:"IBM Plex Mono",monospace;font-size:13px}
+  .scen .cls{font-size:11px;color:var(--faint);font-family:"IBM Plex Mono";margin-left:auto;padding-left:10px}
+  .mk{width:60px;justify-content:center;font-family:"IBM Plex Mono";font-size:13px;font-weight:600}
+  .hit{color:var(--good)} .miss{color:var(--crit);opacity:.7}
+  .hdrA{color:var(--a)} .hdrB{color:var(--b)}
+
+  /* severity bars */
+  .sev-wrap{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:640px){.sev-wrap{grid-template-columns:1fr}}
+  .sevcard{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px;box-shadow:var(--shadow)}
+  .sevcard h3{font-size:14px;font-family:"IBM Plex Mono";letter-spacing:.05em;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+  .bar{display:flex;align-items:center;gap:12px;margin:9px 0;font-size:13px}
+  .bar .lab{width:70px;color:var(--muted);font-family:"IBM Plex Mono";font-size:11.5px;display:flex;align-items:center;gap:7px}
+  .bar .lab .sw{width:9px;height:9px;border-radius:2px;flex:none}
+  .bar .track{flex:1;height:22px;background:var(--surface-2);border-radius:5px;overflow:hidden;border:1px solid var(--line)}
+  .bar .fill{height:100%;border-radius:4px;min-width:6px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+  .bar .n{width:22px;text-align:right;font-family:"IBM Plex Mono";font-weight:700;font-size:14px}
+  .sev-legend{display:flex;flex-wrap:wrap;gap:14px;margin:0 0 18px;font-family:"IBM Plex Mono";font-size:11.5px;color:var(--muted)}
+  .sev-legend span{display:inline-flex;align-items:center;gap:6px}
+  .sev-legend i{width:11px;height:11px;border-radius:3px;display:inline-block}
+
+  /* callout */
+  .callout{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;padding:20px 22px;box-shadow:var(--shadow)}
+  .callout h3{font-size:16px;margin-bottom:10px}
+  .callout p{margin:8px 0;font-size:14.5px;color:var(--ink)}
+  .callout .contrast{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+  @media(max-width:560px){.callout .contrast{grid-template-columns:1fr}}
+  .cbox{background:var(--surface-2);border-radius:8px;padding:12px 14px}
+  .cbox .t{font-family:"IBM Plex Mono";font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
+  .cbox .r{font-size:13px;color:var(--muted)}
+  .cbox .g{font-size:20px;font-family:"Chivo";font-weight:800;margin-top:4px}
+
+  ul.take{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:12px}
+  ul.take li{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;font-size:14.5px;display:flex;gap:12px;box-shadow:var(--shadow)}
+  ul.take .tag{font-family:"IBM Plex Mono";font-size:10.5px;font-weight:600;letter-spacing:.06em;padding:3px 8px;border-radius:5px;height:fit-content;white-space:nowrap;text-transform:uppercase}
+  .tag.even{background:color-mix(in srgb,var(--info) 22%,transparent);color:var(--info)}
+  .tag.plus{background:color-mix(in srgb,var(--good) 20%,transparent);color:var(--good)}
+  .tag.minus{background:color-mix(in srgb,var(--crit) 18%,transparent);color:var(--crit)}
+  .tag.note{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent)}
+
+  .disclaim{margin-top:44px;padding-top:22px;border-top:1px solid var(--line);color:var(--faint);font-size:12.5px;line-height:1.6}
+  .disclaim b{color:var(--muted)}
+  a{color:var(--accent)}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">NeuroSploit · assurance benchmark · 2026-09-20</div>
+    <h1>Does TypeSafe make the run better?</h1>
+    <p class="sub">Two identical NeuroSploit engagements against the same vulnerable target — one plain,
+      one with TypeSafe System One (Jev) as a calibrated confirmation layer. Same model, same focus,
+      same 13 seeded vulnerabilities. Only the <code>--typesafe</code> flag differs.</p>
+    <div class="meta">
+      <span>target <b>NimbusCart (BenchMarkBurpAT)</b> · localhost:3000</span>
+      <span>model <b>claude-opus-4-8</b> (subscription)</span>
+      <span>recon <b>2</b> · vote-n <b>1</b> · max-agents <b>15</b></span>
+      <span>ground truth <b>13 targets</b></span>
+    </div>
+  </header>
+
+  <div class="thesis">
+    <div class="tile">
+      <div class="k">Recall — no TypeSafe</div>
+      <div class="v swatchA">10<span class="u">/13</span></div>
+      <div class="note">16 findings · 32m12s</div>
+    </div>
+    <div class="tile">
+      <div class="k">Recall — with TypeSafe</div>
+      <div class="v swatchB">9<span class="u">/13</span></div>
+      <div class="note">18 findings · 26m53s</div>
+    </div>
+    <div class="tile">
+      <div class="k">Union coverage</div>
+      <div class="v">11<span class="u">/13</span></div>
+      <div class="note">the two runs together</div>
+    </div>
+    <div class="tile">
+      <div class="k">TypeSafe recalibrated</div>
+      <div class="v swatchB">9</div>
+      <div class="note">findings, calibrated confidence</div>
+    </div>
+  </div>
+
+  <section>
+    <h2>Head to head</h2>
+    <p class="lead">The recall is a tie inside the noise; the real difference is <em>shape</em>. TypeSafe was
+      faster, surfaced two real findings the plain run missed, and pulled inflated severities down toward what the
+      evidence actually demonstrated — at the cost of being conservative enough to drop two scenarios and under-rate
+      one genuine critical.</p>
+    <div style="overflow-x:auto">
+    <table class="cmp">
+      <thead><tr><th>Metric</th><th class="colA">A — no TypeSafe</th><th class="colB">B — TypeSafe</th></tr></thead>
+      <tbody>
+        <tr><td class="metric">Seeded targets hit</td><td class="colA win"><span class="num">10 / 13</span></td><td class="colB"><span class="num">9 / 13</span></td></tr>
+        <tr><td class="metric">Total findings reported</td><td class="colA"><span class="num">16</span></td><td class="colB win"><span class="num">18</span></td></tr>
+        <tr><td class="metric">Findings beyond the 13 targets</td><td class="colA"><span class="num">6</span></td><td class="colB win"><span class="num">9</span> <span style="color:var(--muted);font-size:12px">(2 real: config leak, no-lockout)</span></td></tr>
+        <tr><td class="metric">Wall-clock time</td><td class="colA"><span class="num">32m 12s</span></td><td class="colB win"><span class="num">26m 53s</span></td></tr>
+        <tr><td class="metric">Criticals reported</td><td class="colA"><span class="num">5</span></td><td class="colB"><span class="num">2</span> <span style="color:var(--muted);font-size:12px">(recalibrated)</span></td></tr>
+        <tr><td class="metric">Belief-gate holds (POMDP)</td><td class="colA"><span class="num">3</span></td><td class="colB"><span class="num">—</span></td></tr>
+        <tr><td class="metric">Assurance P1–P5</td><td class="colA"><span class="num">all present</span></td><td class="colB"><span class="num">all present</span></td></tr>
+        <tr><td class="metric">Model API cost</td><td class="colA"><span class="num">$0</span> subscription</td><td class="colB"><span class="num">$0</span> + TypeSafe ≪ $5</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Per-scenario coverage</h2>
+    <p class="lead">Each seeded vulnerability, and whether each run confirmed it. Neither run reached the
+      second-order SQLi or the CRLF header injection — the two that need a multi-step chain the single-vote
+      config didn't pursue.</p>
+    <div class="scen">
+      <div class="row head">
+        <div class="cell">Scenario</div>
+        <div class="cell mk hdrA">A</div>
+        <div class="cell mk hdrB">B·TS</div>
+      </div>
+      <!-- rows -->
+      <div class="row"><div class="cell"><span class="idc">web_sqli_login_bypass</span><span class="cls">SQLi</span></div><div class="cell mk hit">✓</div><div class="cell mk hit">✓</div></div>
+      <div class="row"><div class="cell"><span class="idc">web_sqli_union_search</span><span class="cls">SQLi</span></div><div class="cell mk hit">✓</div><div class="cell mk miss">✕</div></div>
+      <div class="row"><div class="cell"><span class="idc">web_sqli_blind_boolean</span><span class="cls">SQLi</span></div><div class="cell mk hit">✓</div><div class="cell mk hit">✓</div></div>
+      <div class="row"><div class="cell"><span class="idc">web_sqli_blind_time</span><span class="cls">SQLi</span></div><div class="cell mk hit">✓</div><div class="cell mk miss">✕</div></div>
+      <div class="row"><div class="cell"><span class="idc">web_sqli_second_order</span><span class="cls">SQLi</span></div><div class="cell mk miss">✕</div><div class="cell mk miss">✕</div></div>
+      <div class="row"><div class="cell"><span class="idc">web_xss_reflected_search</span><span class="cls">XSS</span></div><div class="cell mk hit">✓</div><div class="cell mk hit">✓</div></div>
+      <div class="row"><div class="cell"><span class="idc">web_xss_stored_review</span><span class="cls">XSS</span></div><div class="cell mk hit">✓</div><div class="cell mk hit">✓</div></div>
+      <div class="row"><div class="cell"><span class="idc">web_xss_svg_upload</span><span class="cls">XSS</span></div><div class="cell mk hit">✓</div><div class="cell mk hit">✓</div></div>
+      <div class="row"><div class="cell"><span class="idc">web_xss_dom_redirect</span><span class="cls">XSS</span></div><div class="cell mk hit">✓</div><div class="cell mk hit">✓</div></div>
+      <div class="row"><div class="cell"><span class="idc">web_idor_invoice</span><span class="cls">IDOR</span></div><div class="cell mk miss">✕</div><div class="cell mk hit">✓</div></div>
+      <div class="row"><div class="cell"><span class="idc">api_bola_orders</span><span class="cls">BOLA</span></div><div class="cell mk hit">✓</div><div class="cell mk hit">✓</div></div>
+      <div class="row"><div class="cell"><span class="idc">web_open_redirect_login</span><span class="cls">Redirect</span></div><div class="cell mk hit">✓</div><div class="cell mk hit">✓</div></div>
+      <div class="row"><div class="cell"><span class="idc">web_crlf_header_go</span><span class="cls">CRLF</span></div><div class="cell mk miss">✕</div><div class="cell mk miss">✕</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Severity shape</h2>
+    <p class="lead">The clearest effect of TypeSafe: the severity distribution flattens. The plain run stacks
+      five Criticals; the calibrated run keeps two and pushes the rest down to where the demonstrated-impact
+      evidence puts them.</p>
+      <div class="sev-legend"><span><i style="background:#e5484d"></i>Critical</span><span><i style="background:#f76b15"></i>High</span><span><i style="background:#f5b301"></i>Medium</span><span><i style="background:#3e7bfa"></i>Low</span><span><i style="background:#8b8698"></i>Info</span></div>
+    <div class="sev-wrap">
+      <div class="sevcard">
+        <h3 class="swatchA"><span class="dot" style="background:var(--a)"></span> A — no TypeSafe · 16</h3>
+        <div class="bar"><span class="lab"><i class="sw" style="background:#e5484d"></i>Critical</span><span class="track"><span class="fill" style="width:100%;background:#e5484d"></span></span><span class="n" style="color:#e5484d">5</span></div>
+        <div class="bar"><span class="lab"><i class="sw" style="background:#f76b15"></i>High</span><span class="track"><span class="fill" style="width:80%;background:#f76b15"></span></span><span class="n" style="color:#f76b15">4</span></div>
+        <div class="bar"><span class="lab"><i class="sw" style="background:#f5b301"></i>Medium</span><span class="track"><span class="fill" style="width:20%;background:#f5b301"></span></span><span class="n" style="color:#f5b301">1</span></div>
+        <div class="bar"><span class="lab"><i class="sw" style="background:#3e7bfa"></i>Low</span><span class="track"><span class="fill" style="width:40%;background:#3e7bfa"></span></span><span class="n" style="color:#3e7bfa">2</span></div>
+        <div class="bar"><span class="lab"><i class="sw" style="background:#8b8698"></i>Info</span><span class="track"><span class="fill" style="width:80%;background:#8b8698"></span></span><span class="n" style="color:#8b8698">4</span></div>
+      </div>
+      <div class="sevcard">
+        <h3 class="swatchB"><span class="dot" style="background:var(--b)"></span> B — TypeSafe · 18</h3>
+        <div class="bar"><span class="lab"><i class="sw" style="background:#e5484d"></i>Critical</span><span class="track"><span class="fill" style="width:40%;background:#e5484d"></span></span><span class="n" style="color:#e5484d">2</span></div>
+        <div class="bar"><span class="lab"><i class="sw" style="background:#f76b15"></i>High</span><span class="track"><span class="fill" style="width:80%;background:#f76b15"></span></span><span class="n" style="color:#f76b15">4</span></div>
+        <div class="bar"><span class="lab"><i class="sw" style="background:#f5b301"></i>Medium</span><span class="track"><span class="fill" style="width:60%;background:#f5b301"></span></span><span class="n" style="color:#f5b301">3</span></div>
+        <div class="bar"><span class="lab"><i class="sw" style="background:#3e7bfa"></i>Low</span><span class="track"><span class="fill" style="width:80%;background:#3e7bfa"></span></span><span class="n" style="color:#3e7bfa">4</span></div>
+        <div class="bar"><span class="lab"><i class="sw" style="background:#8b8698"></i>Info</span><span class="track"><span class="fill" style="width:100%;background:#8b8698"></span></span><span class="n" style="color:#8b8698">5</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What calibration actually did</h2>
+    <div class="callout">
+      <h3>The same BOLA, two severities</h3>
+      <p>Both runs found the object-level auth flaw on <code>GET /api/v2/users/:id</code> — a customer token
+        reads any user's full record, including the admin's plaintext password. The plain run rated it
+        <b>Critical (9.1)</b> on the class. TypeSafe, grading against the demonstrated-impact receipts and its
+        calibrated judgment, rated it <b>Low</b>.</p>
+      <div class="contrast">
+        <div class="cbox"><div class="t swatchA">A — class-graded</div><div class="g swatchA">Critical 9.1</div><div class="r">BOLA + excessive data exposure</div></div>
+        <div class="cbox"><div class="t swatchB">B — evidence-graded</div><div class="g swatchB">Low</div><div class="r">same finding, impact receipts weighted</div></div>
+      </div>
+      <p style="margin-top:14px"><b>Why it fired:</b> the severity is graded from the <em>structured</em> evidence
+        slot (the recorded request/response exchange), not the agent's prose. This finding proved the dump in its
+        narrative and claims ledger but left <code>evidence_data</code> null — so the demonstrated-impact rung saw no
+        machine-readable C/I/A receipt, and the calibrated grader dropped the impact metrics to <code>None</code>,
+        collapsing 9.1 → Low. The proof existed; it just wasn't in the slot the grader reads.</p>
+      <p>This is the honest edge: calibration removes inflated Criticals (good — most scanners over-rate by class),
+        but a receipt in the wrong slot gets under-rated. It is a dial toward defensibility, not a correctness
+        oracle — the operator still owns the final severity, and the fix is to make agents populate
+        <code>evidence_data</code> for impact, not to loosen the grader.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Takeaways</h2>
+    <ul class="take">
+      <li><span class="tag even">tie</span><div><b>Recall is a wash.</b> 10 vs 9 of 13 is within run-to-run variance at vote-n 1. TypeSafe is not a recall multiplier — it is a judgment layer.</div></li>
+      <li><span class="tag plus">gain</span><div><b>Two real net-new findings.</b> The TypeSafe run surfaced a <code>config.json</code> API-key exposure (CWE-200) and a no-lockout brute-force (CWE-307) the plain run never reported — and it caught <code>web_idor_invoice</code>, which the plain run missed.</div></li>
+      <li><span class="tag plus">gain</span><div><b>Faster and calibrated.</b> 5m19s quicker, and it recalibrated 9 findings' confidence — collapsing five class-inflated Criticals to two evidence-backed ones.</div></li>
+      <li><span class="tag minus">cost</span><div><b>Conservatism has a price.</b> It dropped <code>union_search</code> and <code>blind_time</code>, and under-rated the credential-dump BOLA. A confirmation layer that demands receipts will sometimes discard a real thing it couldn't re-prove in-budget.</div></li>
+      <li><span class="tag note">cheap</span><div><b>Negligible cost.</b> TypeSafe adds no LLM tokens of its own — one probe call billed 319 in / 21 out. The whole run stayed far under the $5 budget.</div></li>
+    </ul>
+  </section>
+
+  <div class="disclaim">
+    <b>Method &amp; honesty.</b> Both runs: NeuroSploit v4.0.0, <code>claude-opus-4-8</code> via subscription,
+    black-box, recon intensity 2, single-model vote (<code>vote-n 1</code>), same natural-language focus naming
+    the 13 endpoints, no pre-baked solver — the LLM discovered and confirmed everything live. Recall is scored by
+    class + endpoint keyword match against the target's ground-truth list, so a match is coverage, not a graded
+    proof. <b>Confounders:</b> the two runs are single samples, not averages; an earlier TypeSafe run collapsed to
+    zero when the subscription hit a session limit mid-run (a real harness gap, since fixed — session-limit stdout
+    now parks the run instead of burning agents); vote-n 1 means no cross-model agreement in either arm. Treat this
+    as one honest data point on one target, not a leaderboard. <b>Not measured here:</b> multi-sample variance,
+    higher vote-n, and TypeSafe's agent-pruning effect on a broader agent set.
+  </div>
+</div>

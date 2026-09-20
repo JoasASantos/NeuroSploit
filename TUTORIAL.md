@@ -1,4 +1,4 @@
-# NeuroSploit — Tutorial & User Guide (v4.0.0)
+# NeuroSploit — Tutorial & User Guide (v4.1.0)
 
 A complete, hands-on guide to installing, configuring and running NeuroSploit —
 the autonomous, multi-model penetration-testing harness.
@@ -31,7 +31,8 @@ the autonomous, multi-model penetration-testing harness.
 14. [The agent library](#14-the-agent-library)
 15. [Playwright MCP & extra tools](#15-playwright-mcp--extra-tools)
 16. [Tips, tuning & troubleshooting](#16-tips-tuning--troubleshooting)
-17. [Command & flag reference](#17-command--flag-reference)
+17. [Assurance & authorization (v4.1.0)](#17-assurance--authorization)
+18. [Command & flag reference](#18-command--flag-reference)
 
 ---
 
@@ -99,7 +100,7 @@ Agents **degrade gracefully**: if `rustscan` is absent they use `nmap`; if neith
 ### Verify
 
 ```bash
-neurosploit --version          # neurosploit 4.0.0
+neurosploit --version          # neurosploit 4.1.0
 neurosploit agents             # {"vulns":241,...,"ai":30,...,"total":430}
 neurosploit models             # all providers & models
 ```
@@ -713,7 +714,110 @@ back to `curl`. You can add more MCP servers by placing a `mcp.servers.json`
 
 ---
 
-## 17. Command & flag reference
+## 17. Assurance & authorization
+
+v4.1.0 adds a layer of controls that make a run **defensible**, not just
+productive. All are enforced in code (not prompt text) and every decision lands
+in the hash-chained audit trail.
+
+### Target authorization gate (default-deny)
+
+Before any recon, the target is checked against the capability grant — protocol,
+host, port, URL prefix. A signed token that does not cover the target **refuses
+the run** and exits non-zero:
+
+```bash
+# mint a grant for one host, then run against a different one → refused
+neurosploit capability issue --scope app.example.com --issuer you --subject op --hours 8
+neurosploit run https://other.example.com --capability-token <tok>
+#   ⛔ DENY_TARGET_OUTSIDE_GRANT — other.example.com is outside the authorized scope
+#   (non-zero exit; nothing was tested; the denial is audited)
+```
+
+Loopback (`localhost`/`127.0.0.1`) is exempt — it is unambiguous.
+
+### Hard scope from a file
+
+```bash
+neurosploit run https://app.example.com --scope-file scope.yaml
+```
+
+```yaml
+# scope.yaml — enforced in code; a capability token still caps it
+hard:    [ app.example.com, "*.staging.example.com", 10.20.30.0/24 ]
+exclude: [ payments.example.com ]
+soft:
+  observe_only: [ cdn.example.com ]
+  allow_destructive_methods: false
+  max_requests_per_minute: 240
+  forbidden_payloads: [ "drop table", "rm -rf /" ]
+  notes: [ "SOW-2026-0142; window 02:00-06:00 UTC" ]
+```
+
+Alt-IP encodings (`0x7f000001`, `2130706433`, `0177.0.0.1`,
+`::ffff:127.0.0.1`) all normalize to dotted-quad, so an exclude can't be dodged
+by re-spelling; redirects to a private/loopback address are refused; a
+DNS-rebinding guard refuses a name that re-resolves to a new internal address.
+
+### Evidence-graded CVSS
+
+The score is computed from the FIRST v3.1 equation, and each impact metric is
+graded against a receipt. SQLi that reached the interpreter but extracted
+nothing scores **demonstrated 0 / potential 9.8** — never a manufactured
+critical. The vector travels with the number in the report.
+
+### Audit anchoring & the assurance bundle
+
+```bash
+neurosploit audit <run> --anchor        # chain + signed anchors: catch truncation/rebuild/forgery
+neurosploit assurance <run>             # P1–P5 in one manifest (authorization/enforcement/evidence/integrity/provenance)
+neurosploit assurance <run> --verify    # re-hash every artifact + check the signature
+```
+
+Set `NEUROSPLOIT_ANCHOR_DIR` to also write anchors to external append-only
+(ideally WORM) storage, and `NEUROSPLOIT_PROVENANCE_KEY` to sign them.
+
+### Tooling: sandbox · proxy · PoC re-validation · compliance
+
+```bash
+--sandbox                              # run agent commands in a Kali container (docker/podman)
+--intercept burp|caido|zap|mitmproxy   # route through a tool …
+--intercept own | own+burp             # … or the harness's own recording interceptor
+--revalidate-poc                       # re-run each PoC; demote what no longer reproduces
+--compliance pci-dss,hipaa,soc2        # map findings onto control requirements in the report
+```
+
+### TypeSafe System One (calibrated confirmation)
+
+```bash
+export TYPESAFE_API_KEY=...            # then:
+neurosploit run https://app --typesafe on     # calibrated adjudication + confirmation loop
+neurosploit run https://app --typesafe off    # the identical pipeline, no TypeSafe (for A/B)
+```
+
+`--typesafe auto` (default) turns it on when the key is set. It adjudicates each
+finding with a calibrated `{confirmed/needs-review/rejected}` judgment over the
+*evidence*, re-grades CVSS when impact isn't demonstrated, prunes irrelevant
+agents, and runs a code-owned confirmation loop over enumerable classes. It is
+**additive** — a deterministic validator still rules; TypeSafe can only lower
+confidence or flag for review, never resurrect a rejected claim. A with/without
+measurement lives in [`benchmarks/typesafe-2026-09-20/`](benchmarks/typesafe-2026-09-20/).
+
+### Internal network / AD & reasoning budget
+
+```bash
+neurosploit internal --graph g.json --scaffold corp.local --from foothold --mermaid
+neurosploit run https://app --budget eco|balanced|aggressive   # ration reasoning; default unlimited
+```
+
+The internal graph models an engagement as `Asset → Exposure → Weakness →
+Credential → Privilege → Movement → Crown Jewel` and answers the question a
+CVSS-sorted list can't: **which single edge, removed, cuts the most paths to the
+crown jewels** (`choke_points`).
+
+---
+
+## 18. Command & flag reference
 
 ```
 neurosploit                       # interactive REPL (resumes per project)

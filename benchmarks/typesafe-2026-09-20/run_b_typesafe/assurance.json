@@ -1,0 +1,120 @@
+{
+  "engine": "neurosploit",
+  "version": "4.0.0",
+  "build": "49d3d3ceb1df",
+  "run": "ns-1789870577-localhost_3000",
+  "target": "http://localhost:3000",
+  "generated": 1789872190,
+  "findings": 18,
+  "artifacts": [
+    {
+      "name": "findings.json",
+      "present": true,
+      "sha256": "9827d2c67a851679ce8462fc1885d2c4ddfeb0a70180db293029f33d362d108f",
+      "bytes": 112054,
+      "role": "the findings, each stamped with the engine build (P5)"
+    },
+    {
+      "name": "report.html",
+      "present": false,
+      "bytes": 0,
+      "role": "the human report"
+    },
+    {
+      "name": "recon.json",
+      "present": true,
+      "sha256": "18a9d9456b5d239905a8c5a2d0647b272f8b9e5b5ff7f20c6ed26e7bf5164258",
+      "bytes": 11611,
+      "role": "reconnaissance facts"
+    },
+    {
+      "name": "audit.jsonl",
+      "present": true,
+      "sha256": "11e92303952192781686111381c17e37326ecedc1969b2c0d17b8d810fffebdd",
+      "bytes": 32535,
+      "role": "hash-chained decision log — every ALLOW/DENY (P1/P2/P4)"
+    },
+    {
+      "name": "audit.jsonl.anchors",
+      "present": true,
+      "sha256": "a0dd67ad35b530842fc0221ead9536b3ce19d45be251e8568b80909f4859d7cb",
+      "bytes": 213,
+      "role": "external anchors of the audit chain (P4)"
+    },
+    {
+      "name": "provenance.json",
+      "present": true,
+      "sha256": "ac45f0856813ca943713ff782a784e34ccc08038794fd5dfa00d6f060eac803c",
+      "bytes": 297,
+      "role": "signed provenance manifest — build + structural signature (P5)"
+    },
+    {
+      "name": "out-of-scope-findings.json",
+      "present": false,
+      "bytes": 0,
+      "role": "findings quarantined for being outside scope (P2)"
+    },
+    {
+      "name": "flows.jsonl",
+      "present": false,
+      "bytes": 0,
+      "role": "intercepted request/response flows"
+    },
+    {
+      "name": "meta.json",
+      "present": true,
+      "sha256": "c879fc77b942399b73b8050f258d00b4e671b38bdaa00ef7eebfac356484864c",
+      "bytes": 197,
+      "role": "target metadata"
+    }
+  ],
+  "properties": [
+    {
+      "id": "P1",
+      "name": "Signed authorization",
+      "status": "present",
+      "evidenced_by": [
+        "audit.jsonl"
+      ],
+      "note": "capability recorded and decisions logged"
+    },
+    {
+      "id": "P2",
+      "name": "Scope enforcement",
+      "status": "present",
+      "evidenced_by": [
+        "audit.jsonl"
+      ],
+      "note": "scope decisions recorded, including denials/quarantine"
+    },
+    {
+      "id": "P3",
+      "name": "Evidence & CVSS",
+      "status": "present",
+      "evidenced_by": [
+        "findings.json"
+      ],
+      "note": "0/18 findings carry structured evidence · 16 with CVSS · 17 voted · 16 PoC(s) · 0 screenshot(s) · 14 evidence file(s)"
+    },
+    {
+      "id": "P4",
+      "name": "Audit integrity",
+      "status": "present",
+      "evidenced_by": [
+        "audit.jsonl",
+        "audit.jsonl.anchors"
+      ],
+      "note": "hash chain plus signed anchors (truncation/rebuild detectable)"
+    },
+    {
+      "id": "P5",
+      "name": "Provenance",
+      "status": "present",
+      "evidenced_by": [
+        "provenance.json"
+      ],
+      "note": "signed provenance manifest with structural signature"
+    }
+  ],
+  "bundle_hash": "85b0ef6f4789f08cb6bde0669b45aefb9f9f6bcb5f853a811c20f725a58e1eb1"
+}

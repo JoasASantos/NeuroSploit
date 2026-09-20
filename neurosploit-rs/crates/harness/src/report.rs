@@ -242,7 +242,7 @@ pub fn html_with_pocs(target: &str, findings: &[Finding], meta: &EngagementMeta,
          <h2>Executive Summary</h2><div class=summary-grid>{summary_grid}</div>\
          {vuln_summary}\
          <h2>Findings ({n})</h2>{body}\
-         <p class=footer>Authorized testing only. Confirmed findings passed multi-model voting, receipt grounding and adversarial refute; \"needs-review\" are flagged for a human.<br>NeuroSploit v4.0.0 · by <b>Joas A Santos</b> &amp; <b>Red Team Leaders</b><br><span style=\"font-family:ui-monospace,monospace\">{provenance}</span></p></body></html>",
+         <p class=footer>Authorized testing only. Confirmed findings passed multi-model voting, receipt grounding and adversarial refute; \"needs-review\" are flagged for a human.<br>NeuroSploit v4.1.0 · by <b>Joas A Santos</b> &amp; <b>Red Team Leaders</b><br><span style=\"font-family:ui-monospace,monospace\">{provenance}</span></p></body></html>",
         t = esc(target), n = sorted.len(), body = body, summary_grid = summary_grid, vuln_summary = vuln_summary,
         // Which build produced this document. A report that circulates without
         // it is a report nobody can trace back to the run that made it.

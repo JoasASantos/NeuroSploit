@@ -1,0 +1,14 @@
+
+== /opt/neurosploit-rs/runs/ns-1789853137-localhost_3000 ==
+  findings reported : 16
+  targets hit       : 10/13  (recall 0.769)
+  hit               : api_bola_orders, web_open_redirect_login, web_sqli_blind_boolean, web_sqli_blind_time, web_sqli_login_bypass, web_sqli_union_search, web_xss_dom_redirect, web_xss_reflected_search, web_xss_stored_review, web_xss_svg_upload
+  missed            : web_crlf_header_go, web_idor_invoice, web_sqli_second_order
+  extra findings    : 6
+
+== /opt/neurosploit-rs/runs/ns-1789855082-localhost_3000 ==
+  findings reported : 0
+  targets hit       : 0/13  (recall 0.0)
+  hit               : —
+  missed            : api_bola_orders, web_crlf_header_go, web_idor_invoice, web_open_redirect_login, web_sqli_blind_boolean, web_sqli_blind_time, web_sqli_login_bypass, web_sqli_second_order, web_sqli_union_search, web_xss_dom_redirect, web_xss_reflected_search, web_xss_stored_review, web_xss_svg_upload
+  extra findings    : 0

@@ -1,4 +1,4 @@
-<h1 align="center">🧠 NeuroSploit v4.0.0</h1>
+<h1 align="center">🧠 NeuroSploit v4.1.0</h1>
 
 <p align="center">
   <a href="https://github.com/JoasASantos/NeuroSploit/stargazers"><img src="https://img.shields.io/github/stars/JoasASantos/NeuroSploit?style=for-the-badge&logo=github&color=8b5cf6" alt="Stars"></a>
@@ -8,10 +8,10 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-4.0.0-blue?style=flat-square">
+  <img src="https://img.shields.io/badge/Version-4.1.0-blue?style=flat-square">
   <img src="https://img.shields.io/badge/Harness-Rust%20%7C%20tokio-e6b673?style=flat-square">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
-  <img src="https://img.shields.io/badge/MD%20Agents-435-red?style=flat-square">
+  <img src="https://img.shields.io/badge/MD%20Agents-446-red?style=flat-square">
   <img src="https://img.shields.io/badge/Models-18%20providers-success?style=flat-square">
   <img src="https://img.shields.io/badge/Modes-Black%20%7C%20White%20%7C%20Grey%20%7C%20Host%20%7C%20AI-9cf?style=flat-square">
   <img src="https://img.shields.io/badge/Auth-API%20key%20%7C%20Subscription-orange?style=flat-square">
@@ -50,50 +50,43 @@ Control TUI**.
 
 ### Highlights
 
-- 🧠 **POMDP belief + value-of-information** — the target is partially observable,
-  so findings aren't booleans: a property-graph **belief** carries probabilities,
-  and "scan more vs exploit now" falls out of belief entropy. The `may_assert`
-  gate is a **mathematical anti-hallucination rule** (don't claim exploitability
-  while the belief is diffuse).
-- 🧾 **Grounding** — hard rule: **no claim without a receipt** (evidence, not
-  paraphrase). Empirical (raw tool output) for black-box/host/AI, **symbolic**
-  (`file:line` into the reviewed source — a code citation *is* the receipt) for
-  white-box SAST & skills audits, and **either** for grey-box; ungrounded claims
-  are demoted.
-- 🔬 **Deterministic HTTP probe** — before the model recon, the harness runs a
-  **real** request/response analysis (status/redirects, security headers, cookie
-  flags, CORS reflection, tech fingerprint, linked JS, 404 baseline, high-signal
-  paths) and feeds those observed facts into recon, so agent selection and
-  exploitation decisions are grounded in evidence — not the model's guess.
-- 🔗 **Attack chaining — any primitive pivots.** 13 multi-stage chain agents
-  (SQLi→RCE→LPE, SSRF→cloud creds, upload→LFI→RCE→LPE, CVE→RCE→pivot, …) **plus a
-  chaining doctrine** that turns *any* confirmed foothold into the next step:
-  reduce it to a primitive (exec / read / write / request-forgery / identity /
-  secret) and pivot — file-upload→RCE, SSRF→metadata creds, IDOR→takeover — reusing
-  looted creds and reasoning about **business logic** (payment/tenancy/workflow
-  abuse). Each stage proven; strictly non-destructive (no data loss, no DB
-  overwrite, no DoS).
-- ☁️ **Cloud testing** — AWS / GCP / Azure agents that drive the provider CLIs
-  (`aws`/`gcloud`/`az`). Connect via `creds.yaml`: AWS keys, a Google
-  service-account JSON, or an Azure service principal — see
-  [Cloud credentials](#cloud-credentials-awsgcpazure).
-- 🤖 **LLM red-teaming** — 30 AI agents that jailbreak & prompt-inject a live AI
-  system across scenarios: **AdvPrefix**, **PAIR**, **TAP**, **Crescendo**,
-  many-shot, persona/DAN, encoding/obfuscation, refusal-suppression; plus
-  **indirect injection** (RAG/web/email/tool output), **goal hijacking**,
-  tool/function-call abuse, and system-prompt exfiltration. Each runs an
-  attacker→**LLM-judge** loop (baseline refusal → technique → verdict) and proves
-  the bypass with a **benign, redacted** receipt. Maps to OWASP LLM Top 10 (2025),
-  MCP threats & OWASP AI Exchange; Skill/plugin & **n8n** files audited white-box.
-- 🧰 **Misconfig & CVE hunting → exploitation, safely** — a full CVE pipeline:
-  **version fingerprint** (pin exact versions) → **research analyst** (map to
-  NVD/GHSA CVEs, judge reachability) → **PoC finder** (locate/vet/adapt a public
-  PoC) → **exploit scripter** (write a custom exploit when none exists). Every PoC
-  is written to the run's **`pocs/` folder and referenced in the report** so
-  findings are reproducible. Plus absurd-misconfig agents (exposed `.git`/`.env`,
-  debug/actuator, default creds, dashboards, CORS) and rate-limit testing — all
-  under a strict **data-safety/PII guardrail** (no destructive/state-changing
-  actions; PII proven with a masked sample, never dumped).
+> **New in v4.1.0** — evidence-graded CVSS computed from the FIRST v3.1 equation
+> (not guessed by class); a **target-authorization gate** (default-deny, refuses a
+> target outside the capability grant before any recon); **audit anchoring** that
+> detects truncation & silent rebuilds; a signed **assurance bundle** (P1–P5 in one
+> manifest per run); **scope-evasion resistance** (alt-IP-encoding normalization,
+> redirect-to-private-IP block, DNS-rebinding guard); **evidence-integrity** checks
+> (cross-target / reused-receipt / foreign-marker / orphan-claim rejection);
+> **untrusted-output taint** (prompt-injection stripping + data fencing); a
+> **`--scope-file` YAML loader** + web Scoping/Guardrails UI; a **Kali sandbox**
+> (`--sandbox`), **intercept proxy** (`--intercept burp|caido|zap|mitmproxy|own`),
+> **PoC re-validation** (`--revalidate-poc`), **compliance mapping**
+> (`--compliance pci-dss,hipaa,soc2`); an **internal-network / AD attack graph**;
+> a **reasoning-budget governor** (`--budget`); and **TypeSafe System One**
+> (`--typesafe on|off|auto`) as a calibrated confirmation + adjudication layer.
+> 27 deterministic per-CWE validators, 446 agents. See
+> [benchmarks/typesafe-2026-09-20](benchmarks/typesafe-2026-09-20/) for a
+> with/without measurement.
+
+- 🧠 **POMDP belief + anti-hallucination gate** — findings aren't booleans; a
+  property-graph belief carries probabilities, and `may_assert` refuses to claim
+  exploitability while the belief is diffuse.
+- 🧾 **Grounding — no claim without a receipt.** Empirical (raw tool output) or
+  symbolic (`file:line` into the reviewed source); ungrounded claims are demoted.
+- 🔬 **Deterministic HTTP probe** feeds observed facts (headers, cookies, CORS,
+  fingerprint, JS, 404 baseline) into recon — decisions grounded in evidence,
+  not the model's guess.
+- 🔗 **Attack chaining — any primitive pivots.** Reduce a foothold to a primitive
+  (exec/read/write/request-forgery/identity/secret) and pivot; each stage proven,
+  strictly non-destructive.
+- ☁️ **Cloud testing** — AWS / GCP / Azure agents driving `aws`/`gcloud`/`az` via
+  `creds.yaml` ([details](#cloud-credentials-awsgcpazure)).
+- 🤖 **LLM red-teaming** — jailbreak & prompt-inject a live AI system (AdvPrefix,
+  PAIR, TAP, Crescendo, indirect injection, goal hijacking) via an attacker→judge
+  loop; maps to OWASP LLM Top 10.
+- 🧰 **Misconfig & CVE pipeline** — fingerprint → CVE research → PoC finder →
+  exploit scripter; every PoC written to `pocs/` and referenced in the report,
+  under a strict data-safety/PII guardrail.
 - 🎯 **Re-test one vulnerability** — `--only <agent>` (repeatable /
   comma-separated) runs exactly the agent(s) you name and skips recon-based
   selection — re-test a single finding fast. Works on `run` / `whitebox` /
@@ -495,63 +488,25 @@ neurosploit run https://app.example --creds creds.yaml \
 Each finding is proven with the **authorized vs unauthorized** request pair, under
 the data-safety guardrail (read-only, PII masked).
 
-## 🏷️ Identification & attribution (anti-plagiarism)
+## 🧮 TypeSafe System One — calibrated adjudication
 
-Every request is tagged with an identifying **User-Agent** (default
-`NeuroSploit/<ver> …`, change with **`/ua`** or `NEUROSPLOIT_UA`) plus an
-`X-NeuroSploit-Scan` header, and every finding is **stamped** "Identified and
-validated by NeuroSploit" — so provenance travels in the traffic, the finding
-text, `findings.json` and the report footer.
-
-### Provenance — which build made this, and does it still match
-
-Attribution that survives someone else's copy-paste:
-
-- **`JOASNSCOPE`** leads every canary the harness mints, so a marker that
-  turns up later — in a response body, a customer's log, somebody else's
-  report — extracts whole and names the build that made it.
-- **Per-build fingerprint** (`neurosploit provenance show`), plus an optional
-  per-customer build id via `NEUROSPLOIT_CUSTOMER_ID`.
-- **`findings.json` is stamped** with `_engine`, and a **signed
-  `provenance.json`** ships beside it (`NEUROSPLOIT_PROVENANCE_KEY`).
-- **Structural signature** over the finding set's shape — it survives
-  rewording and reformatting, but not a changed result.
-- **Prompts are watermarked** at the single model-pool chokepoint
-  (`NEUROSPLOIT_WATERMARK=off` to disable).
+Set `TYPESAFE_API_KEY` and NeuroSploit adjudicates each finding with TypeSafe's
+System One model (Jev): a calibrated `{confirmed, needs-review, rejected}`
+judgment over the *evidence* (not the prose), plus a check on whether real
+impact was demonstrated. It refines confidence, re-grades CVSS when impact is
+unproven, and runs a code-owned confirmation loop over enumerable classes
+(XSS/SQLi/redirect/traversal/SSRF/IDOR). **Additive** — a deterministic
+validator still rules; TypeSafe only lowers confidence or flags for review,
+never resurrects a rejected claim.
 
 ```bash
-neurosploit provenance show                 # this build's identity
-neurosploit provenance scan report.pdf.txt  # is this ours? which build?
-neurosploit provenance verify runs/ns-…     # manifest vs findings
+neurosploit run https://app --typesafe on     # calibrated adjudication + confirmation
+neurosploit run https://app --typesafe off    # the identical pipeline, no TypeSafe (A/B)
 ```
 
-### TypeSafe System One — calibrated adjudication (RLCD)
-
-When `TYPESAFE_API_KEY` is set, each finding is adjudicated by TypeSafe's
-System One model (Jev) — a **calibrated decision** over its *evidence*, not its
-prose: a `Choice` of `{confirmed, needs-review, rejected}` with a probability
-distribution, plus a `Noul` on whether real impact was demonstrated. The result
-refines the finding's confidence and moves borderline cases to needs-review.
-
-It is **additive**: a deterministic validator still rules (a rejected finding
-stays rejected), and TypeSafe can only lower confidence or flag for review,
-never resurrect a claim. Every adjudication is written to the audit trail.
-Disable with `NEUROSPLOIT_TYPESAFE=off`. This is the RLCD (Reinforcement
-Learning for Calibrated Decisions) tier of the model stack — typed judgments
-where the harness needs a number, not a paragraph.
-
-**As an additional confirmation strategy** (`typesafe_agent`), a code-owned loop
-where TypeSafe picks the next payload (`Choice`) and judges the real response
-(`Noul`) over the replay engine — for enumerable classes (XSS, SQLi, open
-redirect, path traversal, SSRF, IDOR). It runs only on findings the LLM path
-left unconfirmed or in needs-review (the recall lever), can only raise a finding
-to confirmed with a calibrated probability, never downgrades, and refuses edge
-(WAF) responses. It is **not** a discovery agent — System One does not generate.
-
-**Flag & A/B.** `--typesafe on|off|auto` (default auto = on when the key is set).
-`off` runs the *identical* pipeline without it, and the run's `meta.json` records
-`"typesafe": true|false` — so a with/without pair against the same target is a
-clean measurement of what it adds.
+`--typesafe auto` (default) is on when the key is set. Each run's `meta.json`
+records `"typesafe": true|false` — a clean with/without measurement, one of
+which lives in [`benchmarks/typesafe-2026-09-20/`](benchmarks/typesafe-2026-09-20/).
 
 ### Scope-evasion resistance, evidence integrity, untrusted output
 

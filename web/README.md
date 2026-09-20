@@ -1,4 +1,4 @@
-# NeuroSploit v4.0.0 — web console
+# NeuroSploit v4.1.0 — web console
 
 A browser UI for the `neurosploit` CLI harness: a 5-step engagement wizard (Asset → Scope & Auth
 → Leads → Model & Run → Review), a live structured findings view with a generative attack-path
