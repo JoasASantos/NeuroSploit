@@ -27,7 +27,7 @@ pub fn providers() -> Vec<Provider> {
         Provider { key: "openai", label: "OpenAI (ChatGPT)", base_url: "https://api.openai.com/v1", env_key: "OPENAI_API_KEY", kind: "cli",
             models: vec!["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2", "gpt-5.1", "gpt-5.1-codex", "o4"] },
         Provider { key: "xai", label: "xAI Grok", base_url: "https://api.x.ai/v1", env_key: "XAI_API_KEY", kind: "cli",
-            models: vec!["grok-4.5", "grok-4", "grok-4-fast"] },
+            models: vec!["grok-4.7", "grok-4.5", "grok-4", "grok-4-fast"] },
         Provider { key: "gemini", label: "Google Gemini", base_url: "https://generativelanguage.googleapis.com/v1beta/openai", env_key: "GEMINI_API_KEY", kind: "cli",
             models: vec!["gemini-3-pro", "gemini-2.5-pro", "gemini-2.5-flash"] },
         Provider { key: "nvidia_nim", label: "NVIDIA NIM", base_url: "https://integrate.api.nvidia.com/v1", env_key: "NVIDIA_NIM_API_KEY", kind: "api",
@@ -59,7 +59,7 @@ pub fn providers() -> Vec<Provider> {
         // `opencode` agentic CLI on the user's own Zen/plan login — no key
         // needed in that mode. `kind: "cli"` reflects the latter.
         Provider { key: "opencode", label: "OpenCode Zen", base_url: "https://opencode.ai/zen/v1", env_key: "OPENCODE_API_KEY", kind: "cli",
-            models: vec!["claude-opus-5", "claude-sonnet-5", "gpt-5.6-sol", "gpt-5.5", "gemini-3-pro", "grok-4.5", "deepseek-v4-pro", "qwen3.7-max", "kimi-k3"] },
+            models: vec!["claude-opus-5", "claude-sonnet-5", "gpt-5.6-sol", "gpt-5.5", "gemini-3-pro", "grok-4.7", "grok-4.5", "deepseek-v4-pro", "qwen3.7-max", "kimi-k3"] },
         // Nous Research — Hermes models via the Nous Portal. As an API-key
         // provider here (OpenAI-compatible `inference-api.nousresearch.com`),
         // or (with --subscription) driven through the `hermes` CLI

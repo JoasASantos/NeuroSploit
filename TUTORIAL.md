@@ -149,7 +149,7 @@ Install and log into a local agentic CLI, then pass `--subscription`:
 | `anthropic:` | Claude Code (`claude`) | `claude` → `/login` |
 | `openai:` | Codex (`codex`) | codex login |
 | `gemini:` | Gemini (`gemini`) | gemini login |
-| `xai:` | Grok (`grok`) | grok login |
+| `xai:` | Grok (`grok`) — incl. `xai:grok-4.7` | grok login |
 
 ```bash
 neurosploit run http://testphp.vulnweb.com/ --subscription --model anthropic:claude-opus-4-8 --mcp -v

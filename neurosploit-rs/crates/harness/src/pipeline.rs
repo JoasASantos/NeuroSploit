@@ -400,7 +400,7 @@ fn pocs_line() -> String {
              and the observable proof (response snippet, status code, timing, etc.). Header comment: what it \
              proves, how to run it. Actually RUN it once to confirm it works before citing it. Put the exact file \
              name (e.g. `pocs/idor_order_id.py`) in the finding's `evidence` field so the report and UI can link \
-             it — a finding without a cited PoC path looks unproven.\n         "),
+             it — a finding without a cited PoC path looks unproven. SAVE EVERY exploitation artifact you write              into {d}/ so it can be retrieved after the run: repro scripts, Frida hook scripts (`{d}/<slug>.frida.js`),              custom exploit code (any language), the compiled binary or its source, request collections, and any              downloaded-and-adapted public PoC. Keep the exact command to run each in its header comment.\n         "),
         None => String::new(),
     }
 }
@@ -3244,7 +3244,8 @@ fn collect_repo_context(root: &Path, max_files: usize, max_bytes: usize) -> Stri
 
 const MOBILE_RECON_SYS: &str = "You are a mobile/binary reverse-engineering recon specialist on an AUTHORIZED assessment of a LOCAL artifact (a binary, APK or IPA on disk). Identify format/arch, package metadata, entry points, protection layers (RASP/anti-tamper, root/JB and anti-debug detection, TLS pinning, obfuscation/packing), the attack surface (exported components, URL schemes, entitlements, linked frameworks) and hardcoded secrets/endpoints. Run everything HEADLESS (MobSF REST/Docker, Ghidra analyzeHeadless, apktool, jadx, otool/nm, r2). Do not ask permission; proceed. Reply with a compact JSON object (format, arch, package, protections, surface, secrets). No prose.";
 
-const MOBILE_TOOLING: &str = "TOOLING (all HEADLESS; provision on demand, time-box installs): APK/IPA static -> MobSF via its REST API (Docker image), `apktool`, `jadx`, `apkleaks`; binaries -> Ghidra `analyzeHeadless`, `radare2`/`rizin`, `binwalk`, `checksec`, `nm`/`otool`/`objdump`, `class-dump`; dynamic -> `frida`/`objection` for detection/pinning/anti-debug bypass; secrets -> `trufflehog`/`gitleaks`. Never require a GUI or an X display. Analyse and instrument non-destructively; never exfiltrate real user data.\n\n";
+const MOBILE_TOOLING: &str = "TOOLING (all HEADLESS; provision on demand, time-box installs): APK/IPA static -> MobSF via its REST API (Docker image), `apktool`, `jadx`, `apkleaks`; binaries -> Ghidra `analyzeHeadless`, `radare2`/`rizin`, `binwalk`, `checksec`, `nm`/`otool`/`objdump`, `class-dump`; dynamic -> `frida`/`objection` for detection/pinning/anti-debug bypass; secrets -> `trufflehog`/`gitleaks`. Never require a GUI or an X display. Analyse and instrument non-destructively; never exfiltrate real user data.\n\
+         SAVE ARTIFACTS: write every Frida hook script, bypass script, patched-binary diff, decompiled-snippet PoC and          exploit you produce into $NEUROSPLOIT_POCS (e.g. `<slug>.frida.js`, `<slug>_bypass.js`, `<slug>.py`) with a          header comment saying what it proves and how to run it, and cite the path in the finding's `evidence`, so the          scripts can be retrieved and re-run after the engagement.\n\n";
 
 /// Mobile / binary engagement: analyse a LOCAL artifact (binary, APK or IPA) and
 /// run the mobile RE agents. Mirrors the host pipeline but the target is a file
