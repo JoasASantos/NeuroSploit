@@ -1,5 +1,5 @@
 'use strict';
-/* NeuroSploit v4.1.0 — web console frontend. Vanilla JS, no build step. */
+/* NeuroSploit v4.2.0 — web console frontend. Vanilla JS, no build step. */
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));

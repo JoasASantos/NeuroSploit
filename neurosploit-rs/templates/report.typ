@@ -1,4 +1,4 @@
-// NeuroSploit v4.1.0 — Typst report template (blank, structured).
+// NeuroSploit v4.2.0 — Typst report template (blank, structured).
 //
 // The harness generates `report.typ` per run by prepending a `findings` array
 // and a `meta` dict, then including this template's rendering logic. This file
@@ -53,7 +53,7 @@
 
 #set page(margin: 2cm, numbering: "1", footer: context [
   #set text(size: 8pt, fill: gray)
-  NeuroSploit v4.1.0 · #meta.target · confidential
+  NeuroSploit v4.2.0 · #meta.target · confidential
   #h(1fr)
   // Build+run identity, so a page that circulates on its own still says which
   // engagement produced it.

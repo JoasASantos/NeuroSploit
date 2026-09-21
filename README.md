@@ -1,4 +1,4 @@
-<h1 align="center">🧠 NeuroSploit v4.1.0</h1>
+<h1 align="center">🧠 NeuroSploit v4.2.0</h1>
 
 <p align="center">
   <a href="https://github.com/JoasASantos/NeuroSploit/stargazers"><img src="https://img.shields.io/github/stars/JoasASantos/NeuroSploit?style=for-the-badge&logo=github&color=8b5cf6" alt="Stars"></a>
@@ -8,12 +8,12 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-4.1.0-blue?style=flat-square">
+  <img src="https://img.shields.io/badge/Version-4.2.0-blue?style=flat-square">
   <img src="https://img.shields.io/badge/Harness-Rust%20%7C%20tokio-e6b673?style=flat-square">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
-  <img src="https://img.shields.io/badge/MD%20Agents-446-red?style=flat-square">
+  <img src="https://img.shields.io/badge/MD%20Agents-458-red?style=flat-square">
   <img src="https://img.shields.io/badge/Models-18%20providers-success?style=flat-square">
-  <img src="https://img.shields.io/badge/Modes-Black%20%7C%20White%20%7C%20Grey%20%7C%20Host%20%7C%20AI-9cf?style=flat-square">
+  <img src="https://img.shields.io/badge/Modes-Black%20%7C%20White%20%7C%20Grey%20%7C%20Host%20%7C%20AI%20%7C%20Mobile-9cf?style=flat-square">
   <img src="https://img.shields.io/badge/Auth-API%20key%20%7C%20Subscription-orange?style=flat-square">
 </p>
 
@@ -45,10 +45,21 @@ Control TUI**.
 | **Host/Infra** | `neurosploit host <ip> --creds creds.yaml` | Linux / Windows / AD **and cloud** (AWS/GCP/Azure) testing |
 | **AI / LLM red-team** | `neurosploit aitest <ai-url>` | jailbreaks & prompt injection + OWASP LLM Top 10 / MCP against a live AI agent |
 | **AI Skills / n8n** | `neurosploit skills <file\|folder>` | white-box audit of Skill/plugin & n8n workflow definitions |
+| **Mobile / Binary** | `neurosploit mobile <app.apk\|app.ipa\|binary>` | reverse-engineer a local artifact: RASP, root/JB, pinning, anti-debug, obfuscation, secrets (Ghidra headless / MobSF / Frida) |
 | **Mission Control** | `neurosploit tui <url>` | live TUI panels + composer during the run |
 | **Interactive** | `neurosploit` | persistent REPL session (resumes per project) |
 
 ### Highlights
+
+> **New in v4.2.0** — **binary / APK / IPA testing**: a new `mobile` mode analyses
+> a local artifact with 12 reverse-engineering skills (static binary triage,
+> APK/IPA static analysis, RASP & anti-tamper mapping, root/jailbreak, TLS
+> pinning, anti-debug, obfuscation deobfuscation, integrity/tamper checks,
+> hardcoded-secret extraction, insecure storage, traffic analysis) driven by
+> Ghidra headless, MobSF, Frida and apktool/jadx. Plus NeuroSploit as an **MCP
+> server** (`neurosploit mcp`), a **pluggable decision backend** (TypeSafe or
+> local Laya), **context tool-discovery** (AD/web/cloud/exploitation), and
+> **CVE→PoC sourcing** (searchsploit/Exploit-DB/GitHub, compile & run).
 
 > **New in v4.1.0** — evidence-graded CVSS computed from the FIRST v3.1 equation
 > (not guessed by class); a **target-authorization gate** (default-deny, refuses a
@@ -678,6 +689,27 @@ neurosploit internal --graph graph.json --scaffold corp.local --from prn01 --mer
 
 One assumed hop caps the whole chain at informational — a hypothesis about a
 Critical is not a Critical.
+
+---
+
+## 📱 Mobile / binary testing
+
+Point it at a local artifact and it reverse-engineers it headless:
+
+```bash
+neurosploit mobile app.apk --subscription --model anthropic:claude-opus-4-8 -v
+neurosploit mobile app.ipa
+neurosploit mobile ./some_binary
+```
+
+Twelve RE skills, all headless (Ghidra `analyzeHeadless`, MobSF REST/Docker,
+Frida, apktool/jadx, radare2), provisioned on demand: static binary triage,
+APK/IPA static analysis, **RASP & anti-tamper mapping**, **root/jailbreak
+detection + bypass**, **TLS pinning detection + bypass**, anti-debug bypass,
+**obfuscation analysis & deobfuscation**, code-integrity/tamper-check bypass,
+hardcoded-secret extraction, insecure local storage, and mobile traffic
+analysis. Findings are proven from the artifact (decompilation or Frida trace),
+non-destructively.
 
 ---
 

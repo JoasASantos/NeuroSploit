@@ -3242,6 +3242,94 @@ fn collect_repo_context(root: &Path, max_files: usize, max_bytes: usize) -> Stri
     out
 }
 
+const MOBILE_RECON_SYS: &str = "You are a mobile/binary reverse-engineering recon specialist on an AUTHORIZED assessment of a LOCAL artifact (a binary, APK or IPA on disk). Identify format/arch, package metadata, entry points, protection layers (RASP/anti-tamper, root/JB and anti-debug detection, TLS pinning, obfuscation/packing), the attack surface (exported components, URL schemes, entitlements, linked frameworks) and hardcoded secrets/endpoints. Run everything HEADLESS (MobSF REST/Docker, Ghidra analyzeHeadless, apktool, jadx, otool/nm, r2). Do not ask permission; proceed. Reply with a compact JSON object (format, arch, package, protections, surface, secrets). No prose.";
+
+const MOBILE_TOOLING: &str = "TOOLING (all HEADLESS; provision on demand, time-box installs): APK/IPA static -> MobSF via its REST API (Docker image), `apktool`, `jadx`, `apkleaks`; binaries -> Ghidra `analyzeHeadless`, `radare2`/`rizin`, `binwalk`, `checksec`, `nm`/`otool`/`objdump`, `class-dump`; dynamic -> `frida`/`objection` for detection/pinning/anti-debug bypass; secrets -> `trufflehog`/`gitleaks`. Never require a GUI or an X display. Analyse and instrument non-destructively; never exfiltrate real user data.\n\n";
+
+/// Mobile / binary engagement: analyse a LOCAL artifact (binary, APK or IPA) and
+/// run the mobile RE agents. Mirrors the host pipeline but the target is a file
+/// and the agent set is `mobile`.
+pub async fn run_mobile(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<String>) -> RunOutput {
+    pool.set_progress(tx.clone());
+    let _ = tx.send(format!("MOBILE/BINARY - artifact: {} - {} mobile agents - models: {}", cfg.target, lib.mobile.len(),
+        pool.candidates.iter().map(|m| m.label()).collect::<Vec<_>>().join(", "))).await;
+
+    let recon = if cfg.offline {
+        "{}".to_string()
+    } else {
+        let user = format!("{}{}Artifact path: {}", operator_directives(&cfg), MOBILE_TOOLING, cfg.target);
+        match pool.complete_routed(Task::Recon, "recon", MOBILE_RECON_SYS, &user).await {
+            Ok((m, t)) => { let _ = tx.send(format!("recon complete via {}", m.label())).await; t }
+            Err(e) => { let _ = tx.send(format!("recon failed ({e})")).await; "{}".to_string() }
+        }
+    };
+
+    let mut rl = cfg.rl_path.as_ref().map(|p| RlState::load(Path::new(p))).unwrap_or_default();
+    let mut ranked: Vec<Agent> = lib.mobile.clone();
+    ranked.sort_by(|a, b| rl.weight(&b.name).partial_cmp(&rl.weight(&a.name)).unwrap_or(std::cmp::Ordering::Equal));
+    let cap = if cfg.max_agents > 0 { cfg.max_agents.min(ranked.len()) } else { ranked.len() };
+    let focus = cfg.instructions.clone().unwrap_or_default();
+
+    if cfg.offline {
+        let selected: Vec<Agent> = ranked.into_iter().take(cap).collect();
+        let _ = tx.send(format!("offline: selected {} mobile agent(s); no live analysis", selected.len())).await;
+        let artifacts = persist(&cfg, &recon, "", &[]);
+        return RunOutput { target: cfg.target.clone(), workdir: cfg.workdir.clone().unwrap_or_default(), findings: vec![],
+            agents_ran: selected.iter().map(|a| a.name.clone()).collect(), candidates: 0, recon, artifacts, denied: None };
+    }
+
+    let chosen = select_agents(pool, &recon, &focus, &ranked, &tx).await;
+    let selected: Vec<Agent> = if !chosen.is_empty() {
+        let sel: Vec<Agent> = ranked.iter().filter(|a| chosen.iter().any(|c| c == &a.name)).cloned().collect();
+        if sel.is_empty() { ranked.iter().take(cap).cloned().collect() } else { sel.into_iter().take(cap).collect() }
+    } else {
+        ranked.iter().take(cap).cloned().collect()
+    };
+    let selected: Vec<Agent> = { let mut seen = std::collections::HashSet::new();
+        selected.into_iter().filter(|a| seen.insert(a.name.clone())).collect() };
+    let _ = tx.send(format!("selected {} mobile agent(s): {}", selected.len(),
+        selected.iter().map(|a| a.name.clone()).collect::<Vec<_>>().join(", "))).await;
+
+    let target = cfg.target.clone();
+    let verbose = cfg.verbose;
+    let directives = operator_directives(&cfg);
+    let recon_ctx: String = recon.chars().take(3000).collect();
+    let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(selected.iter().cloned())
+        .map(|ag| {
+            let target = target.clone();
+            let recon = recon_ctx.clone();
+            let directives = directives.clone();
+            let txc = tx.clone();
+            async move {
+                if pool.stop_exploiting() { return (ag.name.clone(), String::new(), vec![]); }
+                if verbose { let _ = txc.send(format!("  launching agent: {} ({})", ag.name, ag.title.replace(" Agent", ""))).await; }
+                let user = format!(
+                    "AUTHORIZED mobile/binary assessment of {target}. Proceed and PROVE each issue from the artifact itself.\n\n{directives}{tooling}{react}{safety}{body}\n\nReply ONLY a JSON array of confirmed findings (may be []): {{id,title,severity,cwe,endpoint,payload,evidence,impact,remediation,confidence}}.",
+                    target = target, directives = directives, tooling = MOBILE_TOOLING, react = REACT_DOCTRINE, safety = SAFETY_DOCTRINE,
+                    body = ag.user.replace("{target}", &target).replace("{recon_json}", &recon),
+                );
+                match pool.complete_routed(Task::Exploit, &ag.name, &ag.system, &user).await {
+                    Ok((m, text)) => {
+                        let f = extract_findings(&text, &ag.name);
+                        let _ = txc.send(format!("test {} via {} -> {} candidate(s)", ag.name, m.label(), f.len())).await;
+                        for c in &f { if let Ok(j) = serde_json::to_string(c) { let _ = txc.send(format!("finding_json: {j}")).await; } }
+                        (ag.name.clone(), text, f)
+                    }
+                    Err(e) => { let _ = txc.send(format!("test {} failed: {e}", ag.name)).await; (ag.name.clone(), format!("ERROR: {e}"), vec![]) }
+                }
+            }
+        })
+        .buffer_unordered(cfg.concurrency)
+        .collect::<Vec<_>>().await;
+
+    let transcript = transcript_of(&raw);
+    let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
+    let _ = tx.send(format!("{} candidate finding(s) (deduped) - validating", candidates.len())).await;
+    let findings = validate(candidates, pool, VOTE_SYS, effective_vote_n(&cfg), &tx).await;
+    let findings = refute_pass(findings, pool, effective_vote_n(&cfg), &tx).await;
+    finish(cfg, lib, pool, recon, transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Empirical, String::new(), tx).await
+}
+
 const HOST_RECON_SYS: &str = "You are an infrastructure recon specialist on an AUTHORIZED engagement against a HOST/IP. Actively scan with rustscan/nmap (and netexec/smbclient where relevant) to map open ports, services, versions and auth surfaces. Use any provided SSH/Windows credentials to enumerate from inside. Do not ask permission; proceed. Reply with a compact JSON object (host, os, ports, services, auth, ad). No prose.";
 
 const HOST_TOOLING: &str = "TOOLING (best on Kali): nmap/rustscan (ports), netexec/crackmapexec + smbclient (SMB/AD), ssh/sshpass + linpeas (Linux), evil-winrm + winPEAS + impacket (Windows), bloodhound-python/SharpHound (AD), hashcat (offline cracking). Use only supplied credentials; never brute force or run destructive/DoS actions.\n\n";

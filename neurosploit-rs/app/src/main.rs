@@ -374,6 +374,26 @@ enum Cmd {
     },
     /// Infra/host: scan an IP/host and run Linux/Windows/AD agents. SSH/Windows
     /// credentials come from --creds (creds.yaml ssh:/windows: blocks).
+    /// Mobile / binary: analyse a LOCAL artifact (a binary, APK or IPA) with the
+    /// mobile RE agents (Ghidra headless, MobSF, Frida, apktool/jadx).
+    Mobile {
+        /// Path to the artifact on disk (.apk / .ipa / a binary).
+        path: String,
+        #[arg(long = "model")]
+        models: Vec<String>,
+        #[arg(long, default_value_t = 0)]
+        max_agents: usize,
+        #[arg(long, default_value_t = 1)]
+        vote_n: usize,
+        #[arg(long)]
+        offline: bool,
+        #[arg(long)]
+        subscription: bool,
+        #[arg(long)]
+        focus: Option<String>,
+        #[arg(short, long)]
+        verbose: bool,
+    },
     Host {
         /// Target host or IP.
         target: String,
@@ -868,6 +888,18 @@ async fn main() -> anyhow::Result<()> {
             let mode = if repo.is_some() { Mode::Grey } else { Mode::Black };
             tui::run(&base, cfg, mcp, mode).await?;
         }
+        Cmd::Mobile { path, models, max_agents, vote_n, offline, subscription, focus, verbose } => {
+            let mut cfg = RunConfig::new(&path);
+            cfg.max_agents = max_agents;
+            cfg.vote_n = vote_n;
+            cfg.offline = offline;
+            cfg.subscription = subscription;
+            cfg.verbose = verbose;
+            cfg.instructions = focus;
+            if !models.is_empty() { cfg.models = models; }
+            let out = run_mode(&base, cfg, false, Mode::Mobile).await?;
+            print_findings(&out);
+        }
         Cmd::Host { target, models, creds, focus, max_agents, vote_n, chain_depth, recon, offline, subscription, verbose } => {
             let mut cfg = RunConfig::new(&target);
             cfg.max_agents = max_agents;
@@ -1072,7 +1104,7 @@ pub(crate) async fn apply_creds(cfg: &mut RunConfig, path: Option<&str>) {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-pub(crate) enum Mode { Black, White, Grey, Host, Ai, Skills }
+pub(crate) enum Mode { Black, White, Grey, Host, Ai, Skills, Mobile }
 
 pub(crate) async fn run_greybox_engagement(base: &Path, cfg: RunConfig, mcp: bool) -> anyhow::Result<RunOutput> {
     run_mode(base, cfg, mcp, Mode::Grey).await
@@ -1172,7 +1204,7 @@ pub(crate) fn spawn_engagement(base: &Path, mut cfg: RunConfig, mcp: bool, mode:
         println!("  │  repo   : {}", cfg.repo.clone().unwrap_or_default());
     }
     println!("  └─ mode   : {}{}{}",
-        match mode { Mode::White => "white-box", Mode::Grey => "greybox", Mode::Host => "host/infra", Mode::Ai => "ai/llm", Mode::Skills => "skills/n8n audit", Mode::Black => "black-box" },
+        match mode { Mode::White => "white-box", Mode::Grey => "greybox", Mode::Host => "host/infra", Mode::Ai => "ai/llm", Mode::Skills => "skills/n8n audit", Mode::Mobile => "mobile/binary", Mode::Black => "black-box" },
         if cfg.subscription { " · subscription" } else { " · api" },
         if mcp { " · mcp" } else { "" });
 
@@ -1211,6 +1243,7 @@ pub(crate) fn spawn_engagement(base: &Path, mut cfg: RunConfig, mcp: bool, mode:
             Mode::Host => harness::run_host(cfg, &lib, &pool, tx).await,
             Mode::Ai => harness::pipeline::run_ai(cfg, &lib, &pool, tx).await,
             Mode::Skills => harness::pipeline::run_skills_audit(cfg, &lib, &pool, tx).await,
+            Mode::Mobile => harness::run_mobile(cfg, &lib, &pool, tx).await,
             Mode::Black => harness::run(cfg, &lib, &pool, tx).await,
         }
     });

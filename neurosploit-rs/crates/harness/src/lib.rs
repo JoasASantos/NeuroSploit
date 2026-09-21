@@ -58,7 +58,7 @@ pub use models::{
     cli_binary_for, ensure_playwright_mcp, installed_cli_backends, mcp_supported, provider_for,
     providers, write_mcp_config, ChatClient, ModelRef, Provider,
 };
-pub use pipeline::{run_greybox, run_host, run_whitebox, RunOutput};
+pub use pipeline::{run_greybox, run_host, run_mobile, run_whitebox, RunOutput};
 pub use pipeline::run;
 pub use knowledge_graph::{EdgeKind, KnowledgeGraph, NodeKind};
 pub use memory::{Memory, Query as MemoryQuery, Tier as MemoryTier};

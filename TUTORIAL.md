@@ -487,6 +487,23 @@ engagement needs (a model API key or `--subscription`).
 
 ---
 
+## 8a. Mobile / binary testing
+
+```bash
+neurosploit mobile <app.apk | app.ipa | binary> --subscription --model anthropic:claude-opus-4-8 -v
+```
+
+Analyses a LOCAL artifact with the `mobile` agent set — 12 reverse-engineering
+skills covering static triage, APK/IPA analysis, RASP/anti-tamper mapping,
+root/jailbreak, TLS pinning, anti-debug, obfuscation deobfuscation, integrity
+checks, secret extraction, insecure storage and traffic analysis. Every tool
+runs HEADLESS (Ghidra `analyzeHeadless`, MobSF REST/Docker, Frida, apktool,
+jadx, radare2) and is provisioned on demand. Best run with `--sandbox` (Kali
+container) so the heavy toolchain installs off your host. Findings are proven
+from the artifact itself, non-destructively.
+
+---
+
 ## 8b. Web console
 
 A browser UI for the same harness — one `node` process serves the SPA and drives the compiled

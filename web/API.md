@@ -22,7 +22,7 @@ run this only on a trusted machine/network, same trust model as the CLI itself.
 Server/version info.
 
 ```json
-{ "version": "4.1.0", "binary": "/opt/neurosploit-rs/neurosploit-rs/target/release/neurosploit", "root": "/opt/neurosploit-rs" }
+{ "version": "4.2.0", "binary": "/opt/neurosploit-rs/neurosploit-rs/target/release/neurosploit", "root": "/opt/neurosploit-rs" }
 ```
 
 ---
