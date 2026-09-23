@@ -2162,6 +2162,12 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
     }
 
     let _ = tx.send(format!("{} validated finding(s)", findings.len())).await;
+    // Grey-zone dedup via System One (TypeSafe or local Laya). The fixed 0.4
+    // Jaccard threshold cannot settle near-duplicates; when a decision backend
+    // is configured, a calibrated Noul judges each same-endpoint/CWE pair that
+    // scored in the 0.25..0.4 grey zone and merges the ones it calls the same
+    // bug. Deterministic behaviour is unchanged when no backend is set.
+    findings = merge_grey_zone_dupes(findings, &tx).await;
     // Attribution: stamp provenance into each finding (report + json + copies).
     stamp_attribution(&mut findings);
     // Map findings to OWASP / MITRE / kill-chain stage for the attack graph.
@@ -3091,6 +3097,47 @@ fn conf(v: Option<&serde_json::Value>) -> f64 {
 /// overlap), and the survivor keeps the HIGHEST severity with the fullest
 /// evidence — agreement between independent agents raises confidence, it does
 /// not lower severity.
+/// A calibrated second pass over the grey zone the fixed-threshold deduper
+/// leaves behind: same endpoint + CWE, title overlap in 0.25..0.40 (below the
+/// merge cutoff but not clearly distinct). Only runs when a System One backend
+/// (TypeSafe or Laya) is configured; otherwise the input is returned untouched.
+async fn merge_grey_zone_dupes(findings: Vec<Finding>, tx: &Sender<String>) -> Vec<Finding> {
+    if std::env::var("NEUROSPLOIT_TYPESAFE").unwrap_or_default().trim().to_lowercase() == "off" {
+        return findings;
+    }
+    let Some(ts) = crate::typesafe::TypeSafe::from_env() else { return findings };
+    if findings.len() < 2 {
+        return findings;
+    }
+    let mut kept: Vec<Finding> = Vec::new();
+    let mut merged_count = 0usize;
+    'outer: for f in findings {
+        for k in kept.iter_mut() {
+            if cwe_num(&k.cwe) != cwe_num(&f.cwe) || endpoint_key(&k.endpoint) != endpoint_key(&f.endpoint) {
+                continue;
+            }
+            let ov = title_overlap(&k.title, &f.title);
+            // < 0.25: clearly different, leave apart. >= 0.40: dedup already
+            // merged it. Only the grey band is worth a calibrated call.
+            if (0.25..0.40).contains(&ov) {
+                if let Ok(p) = ts.same_finding(&k.title, &k.evidence, &f.title, &f.evidence).await {
+                    if p >= 0.6 {
+                        if k.evidence.len() < f.evidence.len() { k.evidence = f.evidence.clone(); }
+                        if k.evidence_data.is_none() { k.evidence_data = f.evidence_data.clone(); }
+                        merged_count += 1;
+                        continue 'outer;
+                    }
+                }
+            }
+        }
+        kept.push(f);
+    }
+    if merged_count > 0 {
+        let _ = tx.send(format!("notify: 🧮 {} merged {merged_count} grey-zone duplicate(s)", ts.backend_label())).await;
+    }
+    kept
+}
+
 fn dedup_findings(mut v: Vec<Finding>) -> Vec<Finding> {
     v.sort_by(|a, b| {
         sev_rank(&b.severity)
@@ -3503,10 +3550,22 @@ async fn deep_recon(cfg: &RunConfig, pool: &ModelPool, probe_facts: &str, tx: &S
     // prompt, and flag any prompt-injection the target planted in it.
     let fenced = crate::taint::sanitize(probe_facts, "http-probe");
     if fenced.is_suspicious() {
-        let _ = tx.send(format!(
-            "notify: 🛑 prompt-injection signal(s) in the target's response neutralised: {}",
-            fenced.signals.iter().map(|x| x.kind.as_str()).collect::<Vec<_>>().join(", ")
-        )).await;
+        // The keyword matcher flags anything mentioning "ignore instructions",
+        // which a legit page can do innocently. When TypeSafe is on, ask a
+        // calibrated Noul whether the content actually tries to steer the agent
+        // before shouting about it. Absent TypeSafe, keep the keyword verdict.
+        let confirmed = match crate::typesafe::TypeSafe::from_env() {
+            Some(ts) if std::env::var("NEUROSPLOIT_TYPESAFE").unwrap_or_default().trim().to_lowercase() != "off" => {
+                ts.is_prompt_injection(&fenced.cleaned, "http-probe").await.map(|p| p >= 0.5).unwrap_or(true)
+            }
+            _ => true,
+        };
+        if confirmed {
+            let _ = tx.send(format!(
+                "notify: 🛑 prompt-injection signal(s) in the target's response neutralised: {}",
+                fenced.signals.iter().map(|x| x.kind.as_str()).collect::<Vec<_>>().join(", ")
+            )).await;
+        }
     }
     let mut accum = crate::taint::fence(probe_facts, "http-probe");
     let _ = &fenced;

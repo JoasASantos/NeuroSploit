@@ -151,7 +151,23 @@ impl PocValidator {
         // This is the deterministic WAF classifier running on a real exchange.
         let verdict_edge = crate::waf::classify_exchange(&fresh);
         if !verdict_edge.origin.supports_a_finding() {
-            return self.unverifiable(f, &format!("re-run was answered by the edge, not the application: {}", verdict_edge.reason));
+            // The deterministic classifier says an edge/WAF answered, which
+            // would drop this PoC as unverifiable. Header signatures are
+            // ambiguous, so when a System One backend (TypeSafe or Laya) is
+            // configured, give it the deciding vote before discarding: only if
+            // it ALSO judges the response as not-the-application do we bail.
+            let backend_agrees = match crate::typesafe::TypeSafe::from_env() {
+                Some(ts) if std::env::var("NEUROSPLOIT_TYPESAFE").unwrap_or_default().trim().to_lowercase() != "off" => {
+                    let headers = fresh.headers.iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join("\n");
+                    ts.response_origin(fresh.status, &headers, &fresh.body).await
+                        .map(|(_label, p_app)| p_app < 0.5) // agrees it is edge only if p(application) is low
+                        .unwrap_or(true)
+                }
+                _ => true,
+            };
+            if backend_agrees {
+                return self.unverifiable(f, &format!("re-run was answered by the edge, not the application: {}", verdict_edge.reason));
+            }
         }
 
         // Rebuild the evidence with the fresh responses, keep the finding's
