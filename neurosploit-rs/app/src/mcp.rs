@@ -100,7 +100,8 @@ fn tool_list() -> Value {
         { "name": "neurosploit_report", "description": "Read a finished run's Markdown report.", "inputSchema": { "type": "object", "properties": { "run": { "type": "string" } }, "required": ["run"] } },
         { "name": "neurosploit_rebuild", "description": "Rebuild a run's report artifacts from its findings (no model calls).", "inputSchema": { "type": "object", "properties": { "run": { "type": "string" } }, "required": ["run"] } },
         { "name": "neurosploit_internal", "description": "Internal-network / Active Directory attack-graph analysis: paths to crown jewels and the choke point to fix first.", "inputSchema": { "type": "object", "properties": { "graph": { "type": "string", "description": "Path to a graph JSON" }, "scaffold": { "type": "string", "description": "Domain to scaffold, e.g. corp.local" }, "from": { "type": "string", "description": "Foothold node id" } } } },
-        { "name": "neurosploit_compliance", "description": "Map a finished run's findings onto PCI-DSS, HIPAA or SOC 2 controls.", "inputSchema": { "type": "object", "properties": { "run": { "type": "string" }, "framework": { "type": "string", "enum": ["pci-dss","hipaa","soc2"] } }, "required": ["run"] } }
+        { "name": "neurosploit_compliance", "description": "Map a finished run's findings onto PCI-DSS, HIPAA or SOC 2 controls.", "inputSchema": { "type": "object", "properties": { "run": { "type": "string" }, "framework": { "type": "string", "enum": ["pci-dss","hipaa","soc2"] } }, "required": ["run"] } },
+        { "name": "neurosploit_container", "description": "Scan an OCI container image (repo:tag / tar / Dockerfile) for vulnerable packages, secrets, misconfig and emit an SBOM.", "inputSchema": { "type": "object", "properties": { "image": { "type": "string" }, "model": { "type": "string" }, "subscription": { "type": "boolean" } }, "required": ["image"] } }
     ])
 }
 
@@ -142,6 +143,13 @@ fn handle_call(id: Option<Value>, req: &Value, exe: &std::path::Path) -> Value {
             if let Some(g) = s("graph") { argv.push("--graph".into()); argv.push(g); }
             if let Some(sc) = s("scaffold") { argv.push("--scaffold".into()); argv.push(sc); }
             if let Some(fr) = s("from") { argv.push("--from".into()); argv.push(fr); }
+        }
+        "neurosploit_container" => {
+            let Some(image) = s("image") else { return tool_err(id, "image is required") };
+            argv.push("container".into()); argv.push(image);
+            if let Some(m) = s("model") { argv.push("--model".into()); argv.push(m); }
+            if b("subscription") { argv.push("--subscription".into()); }
+            argv.push("-v".into());
         }
         "neurosploit_compliance" => {
             let Some(run) = s("run") else { return tool_err(id, "run is required") };

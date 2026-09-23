@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
   <img src="https://img.shields.io/badge/MD%20Agents-458-red?style=flat-square">
   <img src="https://img.shields.io/badge/Models-18%20providers-success?style=flat-square">
-  <img src="https://img.shields.io/badge/Modes-Black%20%7C%20White%20%7C%20Grey%20%7C%20Host%20%7C%20AI%20%7C%20Mobile-9cf?style=flat-square">
+  <img src="https://img.shields.io/badge/Modes-Black%20%7C%20White%20%7C%20Grey%20%7C%20Host%20%7C%20AI%20%7C%20Mobile%20%7C%20Container-9cf?style=flat-square">
   <img src="https://img.shields.io/badge/Auth-API%20key%20%7C%20Subscription-orange?style=flat-square">
 </p>
 
@@ -46,6 +46,7 @@ Control TUI**.
 | **AI / LLM red-team** | `neurosploit aitest <ai-url>` | jailbreaks & prompt injection + OWASP LLM Top 10 / MCP against a live AI agent |
 | **AI Skills / n8n** | `neurosploit skills <file\|folder>` | white-box audit of Skill/plugin & n8n workflow definitions |
 | **Mobile / Binary** | `neurosploit mobile <app.apk\|app.ipa\|binary>` | reverse-engineer a local artifact: RASP, root/JB, pinning, anti-debug, obfuscation, secrets (Ghidra headless / MobSF / Frida) |
+| **Container** | `neurosploit container <image:tag>` | scan an OCI image for vulnerable packages, exposed secrets, misconfig + emit an SBOM (SPDX/CycloneDX) via trivy/grype/syft |
 | **Mission Control** | `neurosploit tui <url>` | live TUI panels + composer during the run |
 | **Interactive** | `neurosploit` | persistent REPL session (resumes per project) |
 
@@ -710,6 +711,35 @@ detection + bypass**, **TLS pinning detection + bypass**, anti-debug bypass,
 hardcoded-secret extraction, insecure local storage, and mobile traffic
 analysis. Findings are proven from the artifact (decompilation or Frida trace),
 non-destructively.
+
+---
+
+## 📦 Container image scanning
+
+```bash
+neurosploit container myorg/app:1.4 --subscription --model anthropic:claude-opus-4-8 -v
+neurosploit container ./image.tar
+```
+
+Scans an OCI image (registry ref, local tar, or Dockerfile) with trivy / grype /
+syft headless: **vulnerable OS + language packages** (CVE, fixed-in, KEV),
+**exposed secrets** in any layer, **Dockerfile/runtime misconfig** (root user,
+unpinned base, curl-pipe-sh, secrets in ENV), and an **SBOM in both SPDX and
+CycloneDX** written to the run's `sbom/` folder. Read-only — never pushes,
+deletes or modifies a registry.
+
+## 🧾 Coverage & traffic
+
+Every run writes `coverage.md` — which agents ran (the tested surface), how many
+findings each produced, and which high-value classes were **not** covered — so a
+reader sees the engagement's reach, not just its findings. Login flows capture
+verification evidence (the request/response + a Playwright screenshot) before
+authenticated testing. With `--intercept own`, archived HTTP traffic exports to
+a `.http` file:
+
+```bash
+neurosploit traffic <run>     # flows.jsonl -> traffic.http
+```
 
 ---
 

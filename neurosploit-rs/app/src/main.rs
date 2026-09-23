@@ -197,6 +197,12 @@ enum Cmd {
         /// Run id (`ns-…`) or a path to the run directory.
         run: String,
     },
+    /// Export a run's archived HTTP traffic (from flows.jsonl) as a .http file
+    /// for external inspection tools.
+    Traffic {
+        /// Run id or path.
+        run: String,
+    },
     /// Verify a finished run's audit trail — the hash chain and, with --anchor,
     /// the signed anchors that catch truncation and silent rebuilds.
     Audit {
@@ -379,6 +385,27 @@ enum Cmd {
     Mobile {
         /// Path to the artifact on disk (.apk / .ipa / a binary).
         path: String,
+        #[arg(long = "model")]
+        models: Vec<String>,
+        #[arg(long, default_value_t = 0)]
+        max_agents: usize,
+        #[arg(long, default_value_t = 1)]
+        vote_n: usize,
+        #[arg(long)]
+        offline: bool,
+        #[arg(long)]
+        subscription: bool,
+        #[arg(long)]
+        focus: Option<String>,
+        #[arg(short, long)]
+        verbose: bool,
+    },
+    /// Container: scan an OCI image (repo:tag / tar / Dockerfile) for vulnerable
+    /// packages, exposed secrets and misconfigurations, and emit an SBOM
+    /// (SPDX + CycloneDX). Uses trivy / grype / syft headless.
+    Container {
+        /// Image reference, local tar, or Dockerfile path.
+        image: String,
         #[arg(long = "model")]
         models: Vec<String>,
         #[arg(long, default_value_t = 0)]
@@ -780,6 +807,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Cmd::Audit { run, anchor } => handle_audit(&base, &run, anchor)?,
+        Cmd::Traffic { run } => handle_traffic(&base, &run)?,
         Cmd::Assurance { run, verify } => handle_assurance(&base, &run, verify)?,
         Cmd::Compliance { run, framework, include_leads } => handle_compliance(&base, &run, &framework, include_leads)?,
         Cmd::Poc { run, repeats, apply } => handle_poc(&base, &run, repeats, apply).await?,
@@ -898,6 +926,18 @@ async fn main() -> anyhow::Result<()> {
             cfg.instructions = focus;
             if !models.is_empty() { cfg.models = models; }
             let out = run_mode(&base, cfg, false, Mode::Mobile).await?;
+            print_findings(&out);
+        }
+        Cmd::Container { image, models, max_agents, vote_n, offline, subscription, focus, verbose } => {
+            let mut cfg = RunConfig::new(&image);
+            cfg.max_agents = max_agents;
+            cfg.vote_n = vote_n;
+            cfg.offline = offline;
+            cfg.subscription = subscription;
+            cfg.verbose = verbose;
+            cfg.instructions = focus;
+            if !models.is_empty() { cfg.models = models; }
+            let out = run_mode(&base, cfg, false, Mode::Container).await?;
             print_findings(&out);
         }
         Cmd::Host { target, models, creds, focus, max_agents, vote_n, chain_depth, recon, offline, subscription, verbose } => {
@@ -1104,7 +1144,7 @@ pub(crate) async fn apply_creds(cfg: &mut RunConfig, path: Option<&str>) {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-pub(crate) enum Mode { Black, White, Grey, Host, Ai, Skills, Mobile }
+pub(crate) enum Mode { Black, White, Grey, Host, Ai, Skills, Mobile, Container }
 
 pub(crate) async fn run_greybox_engagement(base: &Path, cfg: RunConfig, mcp: bool) -> anyhow::Result<RunOutput> {
     run_mode(base, cfg, mcp, Mode::Grey).await
@@ -1204,7 +1244,7 @@ pub(crate) fn spawn_engagement(base: &Path, mut cfg: RunConfig, mcp: bool, mode:
         println!("  │  repo   : {}", cfg.repo.clone().unwrap_or_default());
     }
     println!("  └─ mode   : {}{}{}",
-        match mode { Mode::White => "white-box", Mode::Grey => "greybox", Mode::Host => "host/infra", Mode::Ai => "ai/llm", Mode::Skills => "skills/n8n audit", Mode::Mobile => "mobile/binary", Mode::Black => "black-box" },
+        match mode { Mode::White => "white-box", Mode::Grey => "greybox", Mode::Host => "host/infra", Mode::Ai => "ai/llm", Mode::Skills => "skills/n8n audit", Mode::Mobile => "mobile/binary", Mode::Container => "container-scan", Mode::Black => "black-box" },
         if cfg.subscription { " · subscription" } else { " · api" },
         if mcp { " · mcp" } else { "" });
 
@@ -1244,6 +1284,7 @@ pub(crate) fn spawn_engagement(base: &Path, mut cfg: RunConfig, mcp: bool, mode:
             Mode::Ai => harness::pipeline::run_ai(cfg, &lib, &pool, tx).await,
             Mode::Skills => harness::pipeline::run_skills_audit(cfg, &lib, &pool, tx).await,
             Mode::Mobile => harness::run_mobile(cfg, &lib, &pool, tx).await,
+            Mode::Container => harness::run_container(cfg, &lib, &pool, tx).await,
             Mode::Black => harness::run(cfg, &lib, &pool, tx).await,
         }
     });
@@ -1592,6 +1633,27 @@ fn handle_assurance(base: &std::path::Path, run: &str, verify: bool) -> anyhow::
         print!("\n{}", bundle.summary());
         println!("  \x1b[2mbundle hash {} · saved → {}\x1b[0m", &bundle.bundle_hash[..16.min(bundle.bundle_hash.len())], out.display());
     }
+    Ok(())
+}
+
+fn handle_traffic(base: &std::path::Path, run: &str) -> anyhow::Result<()> {
+    let dir = resolve_run(base, run)?;
+    let flows = std::fs::read_to_string(dir.join("flows.jsonl"))
+        .map_err(|e| anyhow::anyhow!("no flows.jsonl in {} (was the run started with --intercept own?): {e}", dir.display()))?;
+    let mut out = String::from("# NeuroSploit HTTP traffic archive\n# One exchange per block; bodies are not captured for tunnelled HTTPS.\n\n");
+    let mut n = 0usize;
+    for line in flows.lines().filter(|l| !l.trim().is_empty()) {
+        let v: serde_json::Value = match serde_json::from_str(line) { Ok(x) => x, Err(_) => continue };
+        let method = v.get("method").and_then(|x| x.as_str()).unwrap_or("GET");
+        let url = v.get("url").and_then(|x| x.as_str()).unwrap_or("");
+        let status = v.get("status").and_then(|x| x.as_u64()).unwrap_or(0);
+        let ct = v.get("content_type").and_then(|x| x.as_str()).unwrap_or("");
+        out.push_str(&format!("### {method} {url}\n=> HTTP {status} {ct}\n\n"));
+        n += 1;
+    }
+    let dest = dir.join("traffic.http");
+    std::fs::write(&dest, out)?;
+    println!("  exported {n} exchange(s) -> {}", dest.display());
     Ok(())
 }
 

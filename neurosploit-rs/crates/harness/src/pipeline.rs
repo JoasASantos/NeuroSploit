@@ -461,6 +461,8 @@ fn engagement_ops(cfg: &RunConfig) -> String {
            or \"unauthenticated\" (proven with no session), and `account` to which user/role you used. In grey-box, be \
            explicit about which findings needed a login. In black-box, record in `how`/evidence exactly what you did \
            to create the user.\n\
+         - LOGIN VERIFICATION EVIDENCE: when you authenticate (register or use given creds), CAPTURE proof the login            actually worked BEFORE deep testing — save the login request/response pair to the evidence, a Playwright            screenshot of the post-login page to $NEUROSPLOIT_POCS/../evidence/login-<role>.png, and record in the            finding/vault whether login SUCCEEDED or FAILED and why. A pentest run should be able to show it was logged            in (or explain why it could not) before claiming authenticated findings.
+         - HTTP TRAFFIC: the harness archives every request/response the replay layer makes; when you prove a finding,            keep the exact request AND response in its `evidence` so the report can show the raw exchange behind it.
          - {temp}\n\
          {oob}{sms}{waf}\n"
     )
@@ -2556,6 +2558,9 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
         let _ = tx.send(n).await;
     }
 
+    // Coverage report (Strix-style): what was tested, how, and what was NOT —
+    // so a reader can see the engagement's reach, not just its findings.
+    write_coverage(&cfg, &selected, &findings);
     let artifacts = persist(&cfg, &recon, &transcript, &findings);
     if !artifacts.is_empty() {
         let _ = tx.send(format!("notify: evidence saved → {}", cfg.workdir.clone().unwrap_or_default())).await;
@@ -2692,6 +2697,53 @@ fn provenance_key() -> Option<Vec<u8>> {
 }
 
 /// Write recon/exploit/findings/report as json+md for downstream reuse.
+/// Write `coverage.md`: which agents ran (the tested surface), how many
+/// findings each produced, and which high-value classes were NOT covered by the
+/// selected agents. This is the "what did the pentest actually test" view.
+fn write_coverage(cfg: &RunConfig, selected: &[Agent], findings: &[Finding]) {
+    let Some(dir) = cfg.workdir.as_deref() else { return };
+    let mut per_agent: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for f in findings { *per_agent.entry(f.agent.as_str()).or_insert(0) += 1; }
+
+    let mut s = format!("# Coverage — {}\n\n", cfg.target);
+    s.push_str(&format!("{} agent(s) ran against the target. This is what was tested and what was not.\n\n", selected.len()));
+    s.push_str("## Tested\n\n| Agent | Class | Findings |\n|---|---|---|\n");
+    for a in selected {
+        let n = per_agent.get(a.name.as_str()).copied().unwrap_or(0);
+        s.push_str(&format!("| `{}` | {} | {} |\n", a.name, if a.cwe.is_empty() { a.title.as_str() } else { a.cwe.as_str() }, n));
+    }
+
+    // High-value classes a black-box web engagement should reach; flag any the
+    // selected agent names did not obviously cover, as an honest "not tested".
+    const EXPECTED: &[(&str, &[&str])] = &[
+        ("SQL injection", &["sqli"]),
+        ("Cross-site scripting", &["xss"]),
+        ("Access control / IDOR / BOLA", &["idor", "bola", "bfla", "access"]),
+        ("Authentication / session", &["auth", "jwt", "session", "login"]),
+        ("SSRF", &["ssrf"]),
+        ("Open redirect", &["redirect"]),
+        ("File upload / path traversal", &["upload", "lfi", "traversal", "path"]),
+        ("CSRF", &["csrf"]),
+        ("Injection (cmd/template/XXE)", &["command", "ssti", "template", "xxe", "injection"]),
+        ("Rate limiting", &["rate", "brute"]),
+        ("Security misconfig / headers", &["header", "cors", "misconfig", "clickjack"]),
+        ("Secrets / disclosure", &["secret", "disclosure", "exposure", "info"]),
+    ];
+    let names: String = selected.iter().map(|a| a.name.to_lowercase()).collect::<Vec<_>>().join(" ");
+    let mut not_tested = Vec::new();
+    for (label, kws) in EXPECTED {
+        if !kws.iter().any(|k| names.contains(k)) { not_tested.push(*label); }
+    }
+    s.push_str("\n## Not tested (no agent selected for these classes)\n\n");
+    if not_tested.is_empty() {
+        s.push_str("All high-value web classes had at least one agent selected.\n");
+    } else {
+        for c in &not_tested { s.push_str(&format!("- {c}\n")); }
+        s.push_str("\n> These were out of the selected agent set for this run (recon-driven or `--only`). Re-run without a narrow focus, or add the agents explicitly, to cover them.\n");
+    }
+    let _ = std::fs::write(std::path::Path::new(dir).join("coverage.md"), s);
+}
+
 fn persist(cfg: &RunConfig, recon: &str, transcript: &str, findings: &[Finding]) -> Vec<String> {
     let Some(dir) = &cfg.workdir else { return vec![] };
     let dir = PathBuf::from(dir);
@@ -3287,6 +3339,89 @@ fn collect_repo_context(root: &Path, max_files: usize, max_bytes: usize) -> Stri
         }
     }
     out
+}
+
+const CONTAINER_RECON_SYS: &str = "You are a container security recon specialist on an AUTHORIZED assessment of an OCI container image (a registry ref like repo/name:tag, a local tar, or a Dockerfile). Identify the image, its base image and OS, the layer count, the package ecosystems present, the entrypoint/exposed ports, and whether it runs as root. Pull/inspect read-only (trivy/syft/crane/docker). Do not push, delete or modify anything. Reply with a compact JSON object (image, base, os, layers, ecosystems, runs_as_root, ports). No prose.";
+
+const CONTAINER_TOOLING: &str = "TOOLING (all read-only, provision on demand, time-box installs): `trivy image` (vuln/secret/misconfig scanners, JSON output), `grype` (vulns), `syft` (SBOM: SPDX + CycloneDX), `crane`/`skopeo` (inspect/export without a daemon), `docker save`/`docker history`, `trufflehog`/`gitleaks` (secrets in extracted layers), `hadolint` (Dockerfile). Write SBOMs into $NEUROSPLOIT_POCS/../sbom or the run's sbom/ folder. Never push/delete/modify a registry; redact secrets to a masked sample.\n\n";
+
+/// Container image engagement: scan an OCI image (or Dockerfile) for vulnerable
+/// packages, exposed secrets, misconfigurations, and produce an SBOM. Mirrors
+/// the host pipeline; the target is an image ref and the agent set is `container`.
+pub async fn run_container(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<String>) -> RunOutput {
+    pool.set_progress(tx.clone());
+    // The SBOM lands next to the run's pocs.
+    if let Some(w) = cfg.workdir.as_deref() { let _ = std::fs::create_dir_all(std::path::Path::new(w).join("sbom")); }
+    let _ = tx.send(format!("CONTAINER - image: {} - {} container agents - models: {}", cfg.target, lib.container.len(),
+        pool.candidates.iter().map(|m| m.label()).collect::<Vec<_>>().join(", "))).await;
+
+    let recon = if cfg.offline {
+        "{}".to_string()
+    } else {
+        let user = format!("{}{}Image: {}", operator_directives(&cfg), CONTAINER_TOOLING, cfg.target);
+        match pool.complete_routed(Task::Recon, "recon", CONTAINER_RECON_SYS, &user).await {
+            Ok((m, t)) => { let _ = tx.send(format!("recon complete via {}", m.label())).await; t }
+            Err(e) => { let _ = tx.send(format!("recon failed ({e})")).await; "{}".to_string() }
+        }
+    };
+
+    let mut rl = cfg.rl_path.as_ref().map(|p| RlState::load(Path::new(p))).unwrap_or_default();
+    let mut ranked: Vec<Agent> = lib.container.clone();
+    ranked.sort_by(|a, b| rl.weight(&b.name).partial_cmp(&rl.weight(&a.name)).unwrap_or(std::cmp::Ordering::Equal));
+    let cap = if cfg.max_agents > 0 { cfg.max_agents.min(ranked.len()) } else { ranked.len() };
+    let focus = cfg.instructions.clone().unwrap_or_default();
+
+    if cfg.offline {
+        let selected: Vec<Agent> = ranked.into_iter().take(cap).collect();
+        let _ = tx.send(format!("offline: selected {} container agent(s); no live scan", selected.len())).await;
+        let artifacts = persist(&cfg, &recon, "", &[]);
+        return RunOutput { target: cfg.target.clone(), workdir: cfg.workdir.clone().unwrap_or_default(), findings: vec![],
+            agents_ran: selected.iter().map(|a| a.name.clone()).collect(), candidates: 0, recon, artifacts, denied: None };
+    }
+
+    // Container agents are complementary (vuln/secret/misconfig/sbom) — run them
+    // all rather than a recon-based subset.
+    let selected: Vec<Agent> = ranked.into_iter().take(cap).collect();
+    let _ = tx.send(format!("running {} container agent(s): {}", selected.len(),
+        selected.iter().map(|a| a.name.clone()).collect::<Vec<_>>().join(", "))).await;
+
+    let target = cfg.target.clone();
+    let verbose = cfg.verbose;
+    let directives = operator_directives(&cfg);
+    let recon_ctx: String = recon.chars().take(3000).collect();
+    let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(selected.iter().cloned())
+        .map(|ag| {
+            let target = target.clone();
+            let recon = recon_ctx.clone();
+            let directives = directives.clone();
+            let txc = tx.clone();
+            async move {
+                if pool.stop_exploiting() { return (ag.name.clone(), String::new(), vec![]); }
+                if verbose { let _ = txc.send(format!("  launching agent: {} ({})", ag.name, ag.title.replace(" Agent", ""))).await; }
+                let user = format!(
+                    "AUTHORIZED container scan of {target}. Proceed and PROVE each issue with the scanner's raw output.\n\n{directives}{tooling}{react}{safety}{body}\n\nReply ONLY a JSON array of confirmed findings (may be []): {{id,title,severity,cwe,endpoint,payload,evidence,impact,remediation,confidence}}.",
+                    target = target, directives = directives, tooling = CONTAINER_TOOLING, react = REACT_DOCTRINE, safety = SAFETY_DOCTRINE,
+                    body = ag.user.replace("{target}", &target).replace("{recon_json}", &recon),
+                );
+                match pool.complete_routed(Task::Exploit, &ag.name, &ag.system, &user).await {
+                    Ok((m, text)) => {
+                        let f = extract_findings(&text, &ag.name);
+                        let _ = txc.send(format!("scan {} via {} -> {} finding(s)", ag.name, m.label(), f.len())).await;
+                        for c in &f { if let Ok(j) = serde_json::to_string(c) { let _ = txc.send(format!("finding_json: {j}")).await; } }
+                        (ag.name.clone(), text, f)
+                    }
+                    Err(e) => { let _ = txc.send(format!("scan {} failed: {e}", ag.name)).await; (ag.name.clone(), format!("ERROR: {e}"), vec![]) }
+                }
+            }
+        })
+        .buffer_unordered(cfg.concurrency)
+        .collect::<Vec<_>>().await;
+
+    let transcript = transcript_of(&raw);
+    let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
+    let _ = tx.send(format!("{} finding(s) (deduped) - validating", candidates.len())).await;
+    let findings = validate(candidates, pool, VOTE_SYS, effective_vote_n(&cfg), &tx).await;
+    finish(cfg, lib, pool, recon, transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Empirical, String::new(), tx).await
 }
 
 const MOBILE_RECON_SYS: &str = "You are a mobile/binary reverse-engineering recon specialist on an AUTHORIZED assessment of a LOCAL artifact (a binary, APK or IPA on disk). Identify format/arch, package metadata, entry points, protection layers (RASP/anti-tamper, root/JB and anti-debug detection, TLS pinning, obfuscation/packing), the attack surface (exported components, URL schemes, entitlements, linked frameworks) and hardcoded secrets/endpoints. Run everything HEADLESS (MobSF REST/Docker, Ghidra analyzeHeadless, apktool, jadx, otool/nm, r2). Do not ask permission; proceed. Reply with a compact JSON object (format, arch, package, protections, surface, secrets). No prose.";

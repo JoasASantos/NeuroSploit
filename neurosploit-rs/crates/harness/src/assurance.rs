@@ -85,6 +85,7 @@ const KNOWN: &[(&str, &str)] = &[
     ("out-of-scope-findings.json", "findings quarantined for being outside scope (P2)"),
     ("flows.jsonl", "intercepted request/response flows"),
     ("meta.json", "target metadata"),
+    ("coverage.md", "what was tested and what was not"),
 ];
 
 fn hash_file(path: &Path) -> Option<(String, u64)> {

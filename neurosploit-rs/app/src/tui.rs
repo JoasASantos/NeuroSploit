@@ -148,7 +148,7 @@ pub async fn run(base: &Path, mut cfg: RunConfig, mcp: bool, mode: Mode) -> anyh
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(512);
     let models = cfg.models.join(", ");
-    let mode_s = match mode { Mode::White => "white-box", Mode::Grey => "greybox", Mode::Host => "host/infra", Mode::Ai => "ai/llm", Mode::Skills => "skills/n8n", Mode::Mobile => "mobile/binary", Mode::Black => "black-box" };
+    let mode_s = match mode { Mode::White => "white-box", Mode::Grey => "greybox", Mode::Host => "host/infra", Mode::Ai => "ai/llm", Mode::Skills => "skills/n8n", Mode::Mobile => "mobile/binary", Mode::Container => "container-scan", Mode::Black => "black-box" };
     let target_s = cfg.target.clone();
 
     // ---- terminal setup FIRST: on a non-TTY this errors before we spawn any
@@ -166,6 +166,7 @@ pub async fn run(base: &Path, mut cfg: RunConfig, mcp: bool, mode: Mode) -> anyh
             Mode::Ai => harness::pipeline::run_ai(cfg, &lib, &pool, tx).await,
             Mode::Skills => harness::pipeline::run_skills_audit(cfg, &lib, &pool, tx).await,
             Mode::Mobile => harness::run_mobile(cfg, &lib, &pool, tx).await,
+            Mode::Container => harness::run_container(cfg, &lib, &pool, tx).await,
             Mode::Black => harness::run(cfg, &lib, &pool, tx).await,
         }
     });

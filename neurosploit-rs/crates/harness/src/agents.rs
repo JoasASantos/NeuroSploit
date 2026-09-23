@@ -28,12 +28,13 @@ pub struct Library {
     /// AI/LLM/agent/MCP/skills security agents (OWASP LLM Top 10, MCP risks…).
     pub ai: Vec<Agent>,
     pub mobile: Vec<Agent>,
+    pub container: Vec<Agent>,
 }
 
 impl Library {
     pub fn total(&self) -> usize {
         self.vulns.len() + self.meta.len() + self.recon.len() + self.code.len()
-            + self.infra.len() + self.chains.len() + self.ai.len() + self.mobile.len()
+            + self.infra.len() + self.chains.len() + self.ai.len() + self.mobile.len() + self.container.len()
     }
 }
 
@@ -49,6 +50,7 @@ pub fn load(base: &Path) -> Library {
         chains: load_dir(&root.join("chains"), "chain"),
         ai: load_dir(&root.join("ai"), "ai"),
         mobile: load_dir(&root.join("mobile"), "mobile"),
+        container: load_dir(&root.join("container"), "container"),
     }
 }
 
