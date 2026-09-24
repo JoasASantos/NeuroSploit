@@ -810,6 +810,7 @@ pub fn write_all(target: &str, findings: &[Finding], dir: &Path) -> std::io::Res
     md.push_str(&pocs_section(dir));
     std::fs::write(dir.join("report.md"), md)?;
     std::fs::write(dir.join("report.json"), json_report(target, findings, &run_id, &meta))?;
+    std::fs::write(dir.join("report.sarif"), crate::sarif::to_string(target, findings))?;
     let pocs: Vec<String> = std::fs::read_dir(dir.join("pocs"))
         .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect())
         .unwrap_or_default();

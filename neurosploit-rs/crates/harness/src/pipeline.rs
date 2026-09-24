@@ -607,6 +607,7 @@ const CHAIN_DOCTRINE: &str = "CHAIN THE FOOTHOLD (pivot to deeper, provable impa
   · A param that lands in a redirect/`Location` header → ALSO test CRLF/header injection on the SAME param (`%0d%0aX-Injected: pwned`, `%0d%0aSet-Cookie:`): an open redirect and response splitting share the sink, so never stop at the redirect.\n\
 - Second-order & preconditions: a payload you STORE (profile/bio/name/review/filename) may only fire on a DIFFERENT page, often a privileged one (e.g. an admin search). Plant the payload, then TRIGGER it from every identity you hold; if the trigger page needs a role you lack, FIRST look for a privesc/IDOR/mass-assign to reach it, and if none exists, report the second-order as a CHAINED lead (payload stored + trigger located, blocked only by authorization) rather than dropping it.\n\
 - Reuse loot relentlessly: every credential/JWT/cookie/API key/host you obtain is input to the next step — carry it forward across modules and try it everywhere it might be accepted.\n\
+- Mine object references (this is the BOLA/IDOR engine): from EVERY response harvest each object identifier you see — numeric ids, UUIDs, order/invoice/document/ticket numbers, account/customer ids, filenames, emails, and any signed/opaque token — into a reference pool. Then systematically SUBSTITUTE another principal's identifier into every request that accepts one (path segment, query param, JSON field, header, cookie) and diff the response against your own: another user's data returned under your session IS the proof. Do this ACROSS identities — register/hold ≥2 accounts and cross them — and across endpoints, because an id leaked on one route (a list/search/export) is often the key to an object on another (a detail/update/delete route). Enumerate sequential ids sparingly (a small benign sample, never a mass scrape) to show the pattern, then stop at proof.\n\
 - Understand the BUSINESS & LOGIC: reason about what the app is FOR (payments, orders, tenancy, KYC, entitlements) and chain toward business impact — payment/price/coupon abuse, cross-tenant data access, entitlement/limit bypass, workflow/state-machine skips (skip approval/verification steps), race conditions on balance/stock. These compound: each finding updates your model of the app for the next probe.\n\
 - Stop at proof: demonstrate the impact with the SMALLEST safe step and report the CHAIN end-to-end; never destroy, overwrite, encrypt, mass-exfiltrate, or DoS to 'prove' it.\n\n";
 
@@ -2558,7 +2559,7 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
         let _ = tx.send(n).await;
     }
 
-    // Coverage report (Strix-style): what was tested, how, and what was NOT —
+    // Coverage report: what was tested, how, and what was NOT —
     // so a reader can see the engagement's reach, not just its findings.
     write_coverage(&cfg, &selected, &findings);
     let artifacts = persist(&cfg, &recon, &transcript, &findings);

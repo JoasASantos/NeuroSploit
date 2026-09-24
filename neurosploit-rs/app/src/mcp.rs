@@ -99,6 +99,7 @@ fn tool_list() -> Value {
         { "name": "neurosploit_findings", "description": "Read a finished run's findings as JSON.", "inputSchema": { "type": "object", "properties": { "run": { "type": "string", "description": "Run id or path" } }, "required": ["run"] } },
         { "name": "neurosploit_report", "description": "Read a finished run's Markdown report.", "inputSchema": { "type": "object", "properties": { "run": { "type": "string" } }, "required": ["run"] } },
         { "name": "neurosploit_rebuild", "description": "Rebuild a run's report artifacts from its findings (no model calls).", "inputSchema": { "type": "object", "properties": { "run": { "type": "string" } }, "required": ["run"] } },
+        { "name": "neurosploit_sarif", "description": "Emit SARIF 2.1.0 for a finished run (report.sarif) so CI code-scanning can ingest the findings.", "inputSchema": { "type": "object", "properties": { "run": { "type": "string" } }, "required": ["run"] } },
         { "name": "neurosploit_internal", "description": "Internal-network / Active Directory attack-graph analysis: paths to crown jewels and the choke point to fix first.", "inputSchema": { "type": "object", "properties": { "graph": { "type": "string", "description": "Path to a graph JSON" }, "scaffold": { "type": "string", "description": "Domain to scaffold, e.g. corp.local" }, "from": { "type": "string", "description": "Foothold node id" } } } },
         { "name": "neurosploit_compliance", "description": "Map a finished run's findings onto PCI-DSS, HIPAA or SOC 2 controls.", "inputSchema": { "type": "object", "properties": { "run": { "type": "string" }, "framework": { "type": "string", "enum": ["pci-dss","hipaa","soc2"] } }, "required": ["run"] } },
         { "name": "neurosploit_container", "description": "Scan an OCI container image (repo:tag / tar / Dockerfile) for vulnerable packages, secrets, misconfig and emit an SBOM.", "inputSchema": { "type": "object", "properties": { "image": { "type": "string" }, "model": { "type": "string" }, "subscription": { "type": "boolean" } }, "required": ["image"] } }
@@ -138,6 +139,7 @@ fn handle_call(id: Option<Value>, req: &Value, exe: &std::path::Path) -> Value {
             return read_run_file(id, &run, "report.md");
         }
         "neurosploit_rebuild" => { let Some(run) = s("run") else { return tool_err(id, "run is required") }; argv.push("rebuild".into()); argv.push(run); }
+        "neurosploit_sarif" => { let Some(run) = s("run") else { return tool_err(id, "run is required") }; argv.push("sarif".into()); argv.push(run); }
         "neurosploit_internal" => {
             argv.push("internal".into());
             if let Some(g) = s("graph") { argv.push("--graph".into()); argv.push(g); }

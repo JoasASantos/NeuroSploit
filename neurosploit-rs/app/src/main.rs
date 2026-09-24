@@ -203,6 +203,15 @@ enum Cmd {
         /// Run id or path.
         run: String,
     },
+    /// Emit SARIF 2.1.0 for a finished run so CI code-scanning (GitHub, Azure
+    /// DevOps) can ingest the findings as annotated, severity-coloured alerts.
+    Sarif {
+        /// Run id (`ns-…`) or a path to the run directory.
+        run: String,
+        /// Write to this path instead of the run's `report.sarif`.
+        #[arg(long = "out")]
+        out: Option<String>,
+    },
     /// Verify a finished run's audit trail — the hash chain and, with --anchor,
     /// the signed anchors that catch truncation and silent rebuilds.
     Audit {
@@ -808,6 +817,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Cmd::Audit { run, anchor } => handle_audit(&base, &run, anchor)?,
         Cmd::Traffic { run } => handle_traffic(&base, &run)?,
+        Cmd::Sarif { run, out } => handle_sarif(&base, &run, out.as_deref())?,
         Cmd::Assurance { run, verify } => handle_assurance(&base, &run, verify)?,
         Cmd::Compliance { run, framework, include_leads } => handle_compliance(&base, &run, &framework, include_leads)?,
         Cmd::Poc { run, repeats, apply } => handle_poc(&base, &run, repeats, apply).await?,
@@ -1654,6 +1664,21 @@ fn handle_traffic(base: &std::path::Path, run: &str) -> anyhow::Result<()> {
     let dest = dir.join("traffic.http");
     std::fs::write(&dest, out)?;
     println!("  exported {n} exchange(s) -> {}", dest.display());
+    Ok(())
+}
+
+fn handle_sarif(base: &std::path::Path, run: &str, out: Option<&str>) -> anyhow::Result<()> {
+    let dir = resolve_run(base, run)?;
+    let findings = load_findings(&dir)?;
+    let target = std::fs::read_to_string(dir.join("meta.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("target").and_then(|x| x.as_str()).map(String::from))
+        .unwrap_or_else(|| run.to_string());
+    let doc = harness::sarif::to_string(&target, &findings);
+    let dest = out.map(std::path::PathBuf::from).unwrap_or_else(|| dir.join("report.sarif"));
+    std::fs::write(&dest, doc)?;
+    println!("  {} finding(s) -> SARIF 2.1.0 at {}", findings.len(), dest.display());
     Ok(())
 }
 

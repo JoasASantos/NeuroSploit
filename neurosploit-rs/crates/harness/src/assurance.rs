@@ -86,6 +86,7 @@ const KNOWN: &[(&str, &str)] = &[
     ("flows.jsonl", "intercepted request/response flows"),
     ("meta.json", "target metadata"),
     ("coverage.md", "what was tested and what was not"),
+    ("report.sarif", "SARIF 2.1.0 results for CI code-scanning ingestion"),
 ];
 
 fn hash_file(path: &Path) -> Option<(String, u64)> {

@@ -43,6 +43,7 @@ pub mod replay;
 pub mod report;
 pub mod rl;
 pub mod sandbox;
+pub mod sarif;
 pub mod scope;
 pub mod taint;
 pub mod transport;

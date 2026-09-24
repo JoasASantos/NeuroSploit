@@ -1,4 +1,4 @@
-<h1 align="center">🧠 NeuroSploit v4.2.0</h1>
+<h1 align="center">🧠 NeuroSploit v4.2.1</h1>
 
 <p align="center">
   <a href="https://github.com/JoasASantos/NeuroSploit/stargazers"><img src="https://img.shields.io/github/stars/JoasASantos/NeuroSploit?style=for-the-badge&logo=github&color=8b5cf6" alt="Stars"></a>
@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-4.2.0-blue?style=flat-square">
+  <img src="https://img.shields.io/badge/Version-4.2.1-blue?style=flat-square">
   <img src="https://img.shields.io/badge/Harness-Rust%20%7C%20tokio-e6b673?style=flat-square">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
   <img src="https://img.shields.io/badge/MD%20Agents-458-red?style=flat-square">
@@ -51,6 +51,15 @@ Control TUI**.
 | **Interactive** | `neurosploit` | persistent REPL session (resumes per project) |
 
 ### Highlights
+
+> **New in v4.2.1** — **SARIF 2.1.0 export**: every run now writes `report.sarif`
+> next to the Markdown/JSON/HTML/PDF, and `neurosploit sarif <run>` (re)emits it
+> on demand, so findings drop straight into GitHub / Azure DevOps code-scanning
+> as severity-coloured, CWE-linked alerts (also exposed over MCP). Plus stronger
+> **cross-object reference mining** in the chaining loop — the engine harvests
+> every object identifier it sees (ids, UUIDs, tokens, emails) into a reference
+> pool and substitutes them across identities and endpoints, the core of
+> reliable BOLA / IDOR / mass-assignment discovery.
 
 > **New in v4.2.0** — **binary / APK / IPA testing**: a new `mobile` mode analyses
 > a local artifact with 12 reverse-engineering skills (static binary triage,
@@ -741,6 +750,13 @@ a `.http` file:
 neurosploit traffic <run>     # flows.jsonl -> traffic.http
 ```
 
+Every run also writes `report.sarif` (SARIF 2.1.0); re-emit it any time for CI
+code-scanning:
+
+```bash
+neurosploit sarif <run>       # findings -> report.sarif (GitHub/Azure code-scanning)
+```
+
 ---
 
 ## 🔌 Run it as an MCP server
@@ -761,8 +777,8 @@ and authorization are identical to the CLI. See TUTORIAL section 8.
 
 ## 📊 How we compare
 
-A rough, honest capability benchmark against Strix, Shannon, Penligent and the
-other open-source agents — including where NeuroSploit is **behind** (no
+A rough, honest capability benchmark against Shannon, Penligent and other
+open-source agents — including where NeuroSploit is **behind** (no
 container isolation, no real intercepting proxy, no published benchmark run) —
 lives in **[BENCHMARK.md](BENCHMARK.md)**.
 
@@ -958,6 +974,7 @@ Every run writes a self-contained folder `runs/ns-<ts>-<target>/`:
 | `exploitation.md` | raw per-agent transcript |
 | `findings.json` / `findings.md` | validated findings (reuse by other tools/AIs) |
 | `report.html`, `report.typ`, `report.pdf` | final report (PDF via the Typst engine) |
+| `report.sarif` | SARIF 2.1.0 results for CI code-scanning ingestion |
 
 A reinforcement-learning reward store (`data/rl_state_rs.json`) biases agent
 selection on future runs.
