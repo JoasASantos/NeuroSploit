@@ -653,6 +653,7 @@ class Job extends EventEmitter {
       startedAt: this.startedAt,
       interrupted: !!this.interrupted,
       resumable: !!this.resumable,
+      agentStatus: this.agentStatus || {},
     };
   }
 }
@@ -701,6 +702,37 @@ function ingestLine(job, rawLine) {
 
   const rid = line.match(/run id\s*:\s*(\S+)/);
   if (rid) { job.runId = rid[1]; saveEngagementName(job.runId, job.name); }
+
+  // --- live per-agent status, for the "what's being tested" panel ---
+  if (!job.agentStatus) job.agentStatus = {};
+  // Roster: "selected N ... agent(s): a, b, c"
+  const roster = line.match(/selected\s+\d+[^:]*agent\(s\):\s*(.+)$/i);
+  if (roster) {
+    for (const nm of roster[1].split(/[,\s]+/).map((s) => s.trim()).filter(Boolean)) {
+      if (!job.agentStatus[nm]) job.agentStatus[nm] = { status: 'pending', found: 0 };
+    }
+  }
+  // Start: "▶ launching agent: <name> (<title>)"
+  const launch = line.match(/launching agent:\s*([^\s(]+)/);
+  if (launch) {
+    const nm = launch[1];
+    job.agentStatus[nm] = { ...(job.agentStatus[nm] || {}), status: 'running', found: job.agentStatus[nm]?.found || 0, title: (line.match(/\(([^)]+)\)\s*$/) || [])[1] || '' };
+    job.push({ type: 'agent', name: nm, status: 'running' });
+  }
+  // Done: "exploit|analyze|test <name> via <model> → N candidate(s)"
+  const done = line.match(/^\s*(?:exploit|analyze|test)\s+(\S+)\s+via\s+.+?(?:→|->)\s*(\d+)\s+candidate/i);
+  if (done) {
+    const nm = done[1]; const n = Number(done[2]) || 0;
+    job.agentStatus[nm] = { ...(job.agentStatus[nm] || {}), status: 'done', found: n };
+    job.push({ type: 'agent', name: nm, status: 'done', found: n });
+  }
+  // Failed: "<verb> <name> failed: ..."
+  const failed = line.match(/^\s*(?:exploit|analyze|test|chain)\s+(\S+)\s+failed/i);
+  if (failed) {
+    const nm = failed[1];
+    job.agentStatus[nm] = { ...(job.agentStatus[nm] || {}), status: 'failed' };
+    job.push({ type: 'agent', name: nm, status: 'failed' });
+  }
 }
 
 function buildArgs(body) {

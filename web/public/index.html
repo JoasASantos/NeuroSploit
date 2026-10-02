@@ -334,6 +334,13 @@
         <div class="progress-bar" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
         <div class="progress-label" id="progressLabel">0 / 0 agents</div>
       </div>
+      <div class="agent-panel" id="agentPanel" hidden>
+        <div class="agent-panel-head">
+          <span>What's being tested</span>
+          <span class="agent-legend"><i class="ap running"></i>testing <i class="ap done"></i>done <i class="ap found"></i>found <i class="ap failed"></i>error</span>
+        </div>
+        <div class="agent-grid" id="agentGrid"></div>
+      </div>
       <nav class="run-tabs">
         <button class="run-tab active" data-tab="findings">Findings <span id="liveFindingsCount">0</span></button>
         <button class="run-tab" data-tab="attackpath">Generative Attack Path Chaining</button>

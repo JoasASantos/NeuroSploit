@@ -600,8 +600,11 @@ function attachLiveJob(id, target, name, pinnedAgents) {
   state.currentJob = {
     id, es: null, findings: [], target, name, phase: 'starting', agents: 0, agentsDone: 0,
     reportUrl: null, runId: null, pinnedAgents: pinnedAgents || [], pocs: [], pocPoll: null,
+    agentStatus: {},
   };
   localStorage.setItem(ACTIVE_JOB_KEY, id);
+  if ($('#agentGrid')) $('#agentGrid').innerHTML = '';
+  if ($('#agentPanel')) $('#agentPanel').hidden = true;
 
   show($('#wizardView'), false);
   show($('#detailView'), false);
@@ -631,6 +634,7 @@ function attachLiveJob(id, target, name, pinnedAgents) {
   state.currentJob.es = es;
   es.addEventListener('log', (e) => appendLog(JSON.parse(e.data).line));
   es.addEventListener('finding', (e) => addFinding(JSON.parse(e.data).finding));
+  es.addEventListener('agent', (e) => { const a = JSON.parse(e.data); if (state.currentJob) { (state.currentJob.agentStatus ||= {})[a.name] = { status: a.status, found: a.found || 0 }; renderAgentPanel(state.currentJob.agentStatus); } });
   es.addEventListener('snapshot', (e) => applySnapshot(JSON.parse(e.data)));
   es.addEventListener('done', (e) => {
     applySnapshot(JSON.parse(e.data));
@@ -813,7 +817,30 @@ function addFinding(f) {
   renderAttackPath($('#liveAttackPath'), state.currentJob.findings, state.currentJob.target);
 }
 
+// Live "what's being tested" grid: one chip per agent, coloured by status.
+function renderAgentPanel(statusMap) {
+  const grid = $('#agentGrid');
+  const panel = $('#agentPanel');
+  if (!grid || !panel) return;
+  const entries = Object.entries(statusMap || {});
+  if (!entries.length) { panel.hidden = true; return; }
+  panel.hidden = false;
+  // Order: running first, then found, then pending, then done, then failed.
+  const rank = (s, found) => s === 'running' ? 0 : (s === 'done' && found > 0) ? 1 : s === 'pending' ? 2 : s === 'done' ? 3 : 4;
+  entries.sort((a, b) => rank(a[1].status, a[1].found) - rank(b[1].status, b[1].found) || a[0].localeCompare(b[0]));
+  const cls = (s, found) => s === 'running' ? 'running' : s === 'failed' ? 'failed' : (s === 'done' && found > 0) ? 'found' : s === 'done' ? 'done' : 'pending';
+  grid.innerHTML = entries.map(([name, st]) =>
+    `<span class="agent-chip ap-${cls(st.status, st.found)}" title="${esc(name)} — ${esc(st.status)}${st.found ? ` · ${st.found} finding(s)` : ''}">${st.status === 'running' ? '<i class="spin"></i>' : ''}${esc(name)}${st.found ? `<b>${st.found}</b>` : ''}</span>`).join('');
+  const done = entries.filter(([, s]) => s.status === 'done' || s.status === 'failed').length;
+  const run = entries.filter(([, s]) => s.status === 'running').length;
+  $('#agentPanel .agent-panel-head > span').textContent = `What's being tested — ${run} running · ${done}/${entries.length} done`;
+}
+
 function applySnapshot(snap) {
+  if (snap.agentStatus) {
+    if (state.currentJob) state.currentJob.agentStatus = snap.agentStatus;
+    renderAgentPanel(snap.agentStatus);
+  }
   $('#livePhase').textContent = snap.phase;
   state.currentJob.runId = snap.runId;
   state.currentJob.interactive = !!snap.interactive;

@@ -806,3 +806,20 @@ body.resizing-ns { user-select: none; cursor: ns-resize; }
 .resume-bar .resume-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
 .resume-bar .resume-x { background: transparent; border: none; color: var(--text-dim); cursor: pointer; font-size: var(--fs-sm); padding: 2px 6px; border-radius: var(--radius-xs); }
 .resume-bar .resume-x:hover { background: var(--surface-3); color: var(--text); }
+
+/* Live "what's being tested" agent panel. */
+.agent-panel { margin: 0 var(--sp-5) var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); overflow: hidden; }
+.agent-panel-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-2) var(--sp-3); font-size: var(--fs-xs); font-weight: 600; color: var(--text-dim); border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.agent-legend { display: flex; align-items: center; gap: var(--sp-2); font-weight: 400; color: var(--text-faint); }
+.agent-legend .ap { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-right: 3px; vertical-align: middle; }
+.ap.running { background: var(--accent); } .ap.done { background: var(--text-faint); } .ap.found { background: var(--sev-high-fg); } .ap.failed { background: var(--sev-critical-fg); }
+.agent-grid { display: flex; flex-wrap: wrap; gap: 5px; padding: var(--sp-3); max-height: 180px; overflow-y: auto; }
+.agent-chip { display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: var(--fs-2xs); padding: 2px 7px; border-radius: var(--radius-pill); border: 1px solid var(--border); background: var(--surface-2); color: var(--text-dim); white-space: nowrap; }
+.agent-chip b { background: var(--sev-high-bg); color: var(--sev-high-fg); border-radius: var(--radius-pill); padding: 0 5px; font-size: 9px; }
+.agent-chip.ap-running { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.agent-chip.ap-found { border-color: var(--sev-high-fg); color: var(--sev-high-fg); }
+.agent-chip.ap-done { opacity: .6; }
+.agent-chip.ap-failed { border-color: var(--sev-critical-fg); color: var(--sev-critical-fg); text-decoration: line-through; }
+.agent-chip .spin { width: 7px; height: 7px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; display: inline-block; animation: aspin .7s linear infinite; }
+@keyframes aspin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .agent-chip .spin { animation: none; } }
