@@ -2244,6 +2244,16 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
         if imgs > 0 {
             let _ = tx.send(format!("notify: 📸 {imgs} proof screenshot(s) collected → evidence/")).await;
         }
+        // Synthesize a PoC + evidence file per finding from the structured
+        // evidence the harness already holds. On the API-key path the model
+        // only returns findings JSON and never runs tools to write PoC files,
+        // so pocs/ and evidence/ stayed empty (issue #44); this fills them from
+        // evidence_data / payload / endpoint. It never overwrites a richer
+        // artifact an agent already wrote.
+        let synth = synthesize_pocs_and_evidence(&mut findings, Path::new(dir));
+        if synth > 0 {
+            let _ = tx.send(format!("notify: 🧪 {synth} PoC/evidence file(s) synthesized from recorded evidence → pocs/ · evidence/")).await;
+        }
     }
 
     // RL update (robust reward shaping): an agent's reward per run =
@@ -3106,6 +3116,147 @@ fn collect_evidence(findings: &mut [Finding], workdir: &Path) -> usize {
         f.screenshots = stable;
     }
     total
+}
+
+/// Render one recorded HTTP exchange as a readable request/response block.
+fn render_exchange(label: &str, ex: &crate::validation::Exchange) -> String {
+    let mut s = format!("### {label}\n{} {}\n", ex.method, ex.url);
+    for (k, v) in &ex.request_headers {
+        s.push_str(&format!("> {k}: {v}\n"));
+    }
+    if !ex.identity.is_empty() {
+        s.push_str(&format!("> (identity: {})\n", ex.identity));
+    }
+    s.push_str(&format!("\n<= HTTP {} ({} ms){}\n", ex.status, ex.elapsed_ms,
+        if ex.content_type.is_empty() { String::new() } else { format!(" · {}", ex.content_type) }));
+    for (k, v) in &ex.headers {
+        s.push_str(&format!("< {k}: {v}\n"));
+    }
+    let body: String = ex.body.chars().take(1200).collect();
+    if !body.trim().is_empty() {
+        s.push_str(&format!("\n{body}\n"));
+    }
+    s.push('\n');
+    s
+}
+
+/// Build a curl command that reproduces an exchange (best-effort, benign).
+fn curl_for(ex: &crate::validation::Exchange) -> String {
+    let mut c = format!("curl -i -s -X {} '{}'", ex.method, ex.url);
+    for (k, v) in &ex.request_headers {
+        c.push_str(&format!(" \\\n  -H '{k}: {v}'"));
+    }
+    c
+}
+
+/// Synthesize a PoC + evidence file per finding from the structured evidence the
+/// harness already holds — so `pocs/` and `evidence/` are populated even on the
+/// API-key path, where the model returns findings JSON but never runs a tool to
+/// write files (issue #44). Never overwrites a file an agent already wrote.
+/// Returns the number of files created.
+fn synthesize_pocs_and_evidence(findings: &mut [Finding], workdir: &Path) -> usize {
+    let pocs = workdir.join("pocs");
+    let evidence = workdir.join("evidence");
+    if std::fs::create_dir_all(&pocs).is_err() || std::fs::create_dir_all(&evidence).is_err() {
+        return 0;
+    }
+    let mut created = 0usize;
+    let mut used: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for f in findings.iter_mut() {
+        let base = slugify(if f.title.is_empty() { &f.id } else { &f.title });
+        // De-dupe slugs across findings so two never clobber each other.
+        let slug = match used.get_mut(&base) {
+            Some(n) => { *n += 1; format!("{base}-{n}") }
+            None => { used.insert(base.clone(), 1); base }
+        };
+
+        // --- evidence/<slug>.md : the request/response proof, if structured. ---
+        let mut ev_body = String::new();
+        if let Some(ed) = &f.evidence_data {
+            if let Some(b) = &ed.baseline { ev_body.push_str(&render_exchange("Baseline (no payload)", b)); }
+            if let Some(a) = &ed.attack { ev_body.push_str(&render_exchange("Attack (with payload)", a)); }
+            if let Some(ia) = &ed.identity_a { ev_body.push_str(&render_exchange("As owner (identity A)", ia)); }
+            if let Some(ib) = &ed.identity_b { ev_body.push_str(&render_exchange("As other user (identity B)", ib)); }
+            for (i, r) in ed.repeats.iter().take(3).enumerate() {
+                ev_body.push_str(&render_exchange(&format!("Repeat #{}", i + 1), r));
+            }
+            if !ed.marker.is_empty() {
+                ev_body.push_str(&format!("Marker: `{}` — observed: {}\n", ed.marker, ed.marker_observed));
+            }
+            if ed.browser_executed { ev_body.push_str("Browser executed the payload (not a string match).\n"); }
+            if ed.callback_received { ev_body.push_str("Out-of-band callback carrying the marker was received.\n"); }
+            for n in &ed.notes { ev_body.push_str(&format!("- {n}\n")); }
+        }
+        if ev_body.trim().is_empty() {
+            // No structured evidence — fall back to the prose receipt we have.
+            if !f.evidence.trim().is_empty() {
+                ev_body.push_str(&format!("{}\n", f.evidence.trim()));
+            }
+        }
+        if !ev_body.trim().is_empty() {
+            let ev_path = evidence.join(format!("{slug}.md"));
+            if !ev_path.exists() {
+                let header = format!("# Evidence — {}\n\n- Severity: {}\n- CWE: {}\n- Endpoint: {}\n- Location: {}\n\n",
+                    f.title, f.severity, f.cwe, f.endpoint, if f.location.is_empty() { f.endpoint.clone() } else { f.location.clone() });
+                if std::fs::write(&ev_path, format!("{header}{ev_body}")).is_ok() {
+                    created += 1;
+                }
+            }
+        }
+
+        // --- pocs/<slug>.md : a runnable repro from the recorded request. ---
+        // Only when the agent did not already cite/write a PoC for this finding.
+        let already = f.payload.contains("pocs/") || f.evidence.contains("pocs/");
+        let poc_path = pocs.join(format!("{slug}.md"));
+        if !already && !poc_path.exists() {
+            let mut body = format!(
+                "# PoC — {}\n# Severity: {} · CWE: {}\n# Endpoint: {}\n# Synthesized by NeuroSploit from the recorded evidence (no live tool run on this path).\n# Reproduce with the request(s) below; confirm against the observed proof.\n\n",
+                f.title, f.severity, f.cwe, f.endpoint);
+            let mut have_cmd = false;
+            if let Some(ed) = &f.evidence_data {
+                if let Some(a) = &ed.attack {
+                    body.push_str("## Attack request\n```sh\n");
+                    body.push_str(&curl_for(a));
+                    body.push_str("\n```\n\n");
+                    have_cmd = true;
+                }
+                if let (Some(ia), Some(ib)) = (&ed.identity_a, &ed.identity_b) {
+                    body.push_str("## Cross-identity (BOLA/IDOR) — same resource, two identities\n```sh\n");
+                    body.push_str(&format!("# as owner:\n{}\n\n# as another user (should be denied):\n{}\n```\n\n", curl_for(ia), curl_for(ib)));
+                    have_cmd = true;
+                }
+                if !ed.marker.is_empty() {
+                    body.push_str(&format!("## Proof\nUnique marker `{}` — expected where it proves the class; observed: {}.\n\n", ed.marker, ed.marker_observed));
+                }
+            }
+            if !have_cmd {
+                // No structured exchange — assemble from endpoint + payload.
+                if !f.endpoint.is_empty() {
+                    body.push_str("## Request\n```sh\n");
+                    body.push_str(&format!("curl -i -s '{}'", f.endpoint));
+                    body.push_str("\n```\n\n");
+                }
+                if !f.payload.trim().is_empty() {
+                    body.push_str(&format!("## Payload\n```\n{}\n```\n\n", f.payload.trim()));
+                }
+            }
+            if !f.remediation.trim().is_empty() {
+                body.push_str(&format!("## Remediation\n{}\n", f.remediation.trim()));
+            }
+            // Only write a PoC if we actually have something actionable in it.
+            if have_cmd || !f.endpoint.is_empty() || !f.payload.trim().is_empty() {
+                if std::fs::write(&poc_path, body).is_ok() {
+                    created += 1;
+                    // Cite it so the report/UI links the PoC.
+                    if !f.evidence.contains("pocs/") {
+                        let cite = format!("PoC: pocs/{slug}.md");
+                        f.evidence = if f.evidence.trim().is_empty() { cite } else { format!("{}\n{cite}", f.evidence) };
+                    }
+                }
+            }
+        }
+    }
+    created
 }
 
 /// Find the actual file an agent referenced, trying the sensible locations a
@@ -3994,6 +4145,44 @@ mod evidence_tests {
             screenshots: vec!["nope.png".into()], ..Default::default() }];
         assert_eq!(collect_evidence(&mut miss, &wd), 0);
         assert!(miss[0].screenshots.is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn synthesize_pocs_fills_empty_dirs_on_api_path() {
+        use crate::validation::{Evidence, Exchange};
+        let base = std::env::temp_dir().join(format!("nrs-synth-{}", std::process::id()));
+        let wd = base.join("run");
+        std::fs::create_dir_all(&wd).unwrap();
+        let attack = Exchange {
+            method: "GET".into(),
+            url: "https://app.example.com/api/orders/42".into(),
+            status: 200,
+            body: "{\"owner\":\"victim\",\"total\":99}".into(),
+            content_type: "application/json".into(),
+            elapsed_ms: 12,
+            identity: "attacker".into(),
+            ..Default::default()
+        };
+        let mut fs = vec![Finding {
+            id: "bola-order".into(),
+            title: "BOLA on /api/orders/{id}".into(),
+            severity: "Critical".into(),
+            cwe: "CWE-639".into(),
+            endpoint: "https://app.example.com/api/orders/42".into(),
+            evidence_data: Some(Evidence { attack: Some(attack), marker: "NSPLT_z9".into(), ..Default::default() }),
+            ..Default::default()
+        }];
+        let n = synthesize_pocs_and_evidence(&mut fs, &wd);
+        assert!(n >= 2, "a PoC and an evidence file should be written");
+        assert!(wd.join("pocs/bola-on-api-orders-id.md").is_file());
+        assert!(wd.join("evidence/bola-on-api-orders-id.md").is_file());
+        let poc = std::fs::read_to_string(wd.join("pocs/bola-on-api-orders-id.md")).unwrap();
+        assert!(poc.contains("curl") && poc.contains("/api/orders/42"));
+        assert!(fs[0].evidence.contains("pocs/bola-on-api-orders-id.md"), "the PoC path is cited back");
+
+        // Idempotent: a second run writes nothing new.
+        assert_eq!(synthesize_pocs_and_evidence(&mut fs, &wd), 0);
         let _ = std::fs::remove_dir_all(&base);
     }
 }
