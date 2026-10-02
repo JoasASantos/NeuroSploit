@@ -52,6 +52,11 @@ fn map_cwe(cwe: &str) -> (&'static str, &'static str, &'static str) {
         434 => ("A04:2021-Insecure-Design", "T1505.003", "execution"),
         1321 | 915 => ("A08:2021-Software-Data-Integrity", "T1059", "execution"),
         400 | 770 | 1333 | 799 => ("A04:2021-Insecure-Design", "T1499", "impact"),
+        // AD: capture-replay auth (NTLM relay/LLMNR/coercion), cert abuse (AD CS), default creds, privilege mgmt.
+        294 => ("A07:2021-Auth-Failures", "T1557", "credential-access"),
+        295 => ("A07:2021-Auth-Failures", "T1649", "credential-access"),
+        1392 => ("A07:2021-Auth-Failures", "T1078", "initial-access"),
+        269 => ("A01:2021-Broken-Access-Control", "T1068", "privesc"),
         _ => ("A04:2021-Insecure-Design", "T1190", "initial-access"),
     }
 }
@@ -331,6 +336,9 @@ pub fn cvss_graded(f: &Finding) -> Option<crate::cvss::Graded> {
         1021 => ("N", "L", "N", Scope::Unchanged),
         113 | 93 | 644 => ("L", "L", "N", Scope::Unchanged),
         525 | 524 => ("L", "N", "N", Scope::Unchanged),
+        294 | 295 => ("H", "H", "N", Scope::Changed),
+        1392 => ("H", "H", "N", Scope::Unchanged),
+        269 => ("H", "H", "H", Scope::Changed),
         _ => ("L", "N", "N", Scope::Unchanged),
     };
     let authenticated = f.auth_context.eq_ignore_ascii_case("authenticated") || !f.account.is_empty();
