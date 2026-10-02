@@ -532,6 +532,7 @@ async function startExploitation() {
     votes: Number($('#fieldVotes').value) || 3,
     chainDepth: Number($('#fieldChain').value),
     recon: Number($('#fieldRecon').value),
+    quick: $('#fieldQuick') ? $('#fieldQuick').checked : false,
     subscription: state.authMode === 'subscription',
     mcp: $('#fieldMcp').checked,
     agents: [...state.selected],

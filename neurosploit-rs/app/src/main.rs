@@ -109,6 +109,11 @@ enum Cmd {
         /// Recon intensity 1-4 (1 quick .. 4 exhaustive; installs tools).
         #[arg(long, default_value_t = 3)]
         recon: usize,
+        /// Economy preset for a short, low-cost test: one voter, one chain
+        /// round, light recon, ≤6 agents, eco budget. Applied last, so it wins
+        /// over the per-knob flags above.
+        #[arg(long)]
+        quick: bool,
         #[arg(long)]
         offline: bool,
         /// Use local agentic CLI subscription (Claude/Codex/Gemini/Grok/OpenCode/Hermes login).
@@ -310,6 +315,9 @@ enum Cmd {
         /// Recon intensity 1-4 (1 quick .. 4 exhaustive; installs tools).
         #[arg(long, default_value_t = 3)]
         recon: usize,
+        /// Economy preset for a short, low-cost review (see `run --quick`).
+        #[arg(long)]
+        quick: bool,
         #[arg(long)]
         offline: bool,
         #[arg(long)]
@@ -348,6 +356,9 @@ enum Cmd {
         /// Recon intensity 1-4 (1 quick .. 4 exhaustive; installs tools).
         #[arg(long, default_value_t = 3)]
         recon: usize,
+        /// Economy preset for a short, low-cost test (see `run --quick`).
+        #[arg(long)]
+        quick: bool,
         #[arg(long)]
         offline: bool,
         #[arg(long)]
@@ -827,7 +838,7 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Internal { graph, scaffold, from, expand, mermaid, save } => {
             handle_internal(graph.as_deref(), scaffold.as_deref(), &from, expand, mermaid, save.as_deref())?
         }
-        Cmd::Run { url, models, max_agents, vote_n, chain_depth, recon, offline, subscription, mcp, creds, focus, objective, out_of_scope, in_scope, scope_file, environment, policy, budget, token_limit, deep_test_limit, coverage_first, depth_first, sample_per_route, revalidate_poc, compliance, jira, only, verbose } => {
+        Cmd::Run { url, models, max_agents, vote_n, chain_depth, recon, quick, offline, subscription, mcp, creds, focus, objective, out_of_scope, in_scope, scope_file, environment, policy, budget, token_limit, deep_test_limit, coverage_first, depth_first, sample_per_route, revalidate_poc, compliance, jira, only, verbose } => {
             let url = if url.starts_with("http") { url } else { format!("https://{url}") };
             let mut cfg = RunConfig::new(&url);
             cfg.max_agents = max_agents;
@@ -853,6 +864,7 @@ async fn main() -> anyhow::Result<()> {
             }
             apply_authorization(&mut cfg, &in_scope, cli.capability_token.clone(), &environment, &policy)?;
             apply_budget(&mut cfg, budget.as_deref(), token_limit, deep_test_limit, coverage_first, depth_first, sample_per_route)?;
+            if quick { apply_quick(&mut cfg); }
             apply_network(&mut cfg, &cli)?;
             cfg.intercept = cli.intercept.clone();
             cfg.sandbox = cli.sandbox.clone();
@@ -868,7 +880,7 @@ async fn main() -> anyhow::Result<()> {
             let ig = harness::integrations::Integrations::load(&repl::proj_dir());
             post_integrations(&ig, &url, &out, jira, false, None).await;
         }
-        Cmd::Whitebox { path, models, max_agents, vote_n, chain_depth, recon, offline, subscription, jira, only, verbose } => {
+        Cmd::Whitebox { path, models, max_agents, vote_n, chain_depth, recon, quick, offline, subscription, jira, only, verbose } => {
             let path = resolve_source(&base, &path)?; // local path OR github URL/owner/repo
             let mut cfg = RunConfig::new(&path);
             cfg.max_agents = max_agents;
@@ -879,6 +891,7 @@ async fn main() -> anyhow::Result<()> {
             cfg.subscription = subscription;
             cfg.verbose = verbose;
             cfg.pinned = parse_only(&only);
+            if quick { apply_quick(&mut cfg); }
             if !models.is_empty() {
                 cfg.models = models;
             }
@@ -887,7 +900,7 @@ async fn main() -> anyhow::Result<()> {
             let ig = harness::integrations::Integrations::load(&repl::proj_dir());
             post_integrations(&ig, &path, &out, jira, false, None).await;
         }
-        Cmd::Greybox { repo, url, models, creds, focus, max_agents, vote_n, chain_depth, recon, offline, subscription, mcp, only, verbose } => {
+        Cmd::Greybox { repo, url, models, creds, focus, max_agents, vote_n, chain_depth, recon, quick, offline, subscription, mcp, only, verbose } => {
             let repo = resolve_source(&base, &repo)?; // local path OR github URL/owner/repo
             let url = if url.starts_with("http") { url } else { format!("https://{url}") };
             let mut cfg = RunConfig::new(&url);
@@ -901,6 +914,7 @@ async fn main() -> anyhow::Result<()> {
             cfg.verbose = verbose;
             cfg.instructions = focus;
             cfg.pinned = parse_only(&only);
+            if quick { apply_quick(&mut cfg); }
             if !models.is_empty() {
                 cfg.models = models;
             }
@@ -1963,6 +1977,23 @@ fn apply_budget(
     println!("  \x1b[2mbudget: {}\x1b[0m", b.summary());
     cfg.budget = b;
     Ok(())
+}
+
+/// `--quick`: a single economy preset for a short, low-cost test. Applied LAST,
+/// so it deliberately wins over the per-knob flags — one switch the operator
+/// reaches for when they just want a fast, cheap pass instead of a full
+/// engagement: one voter, one chaining round, light recon, a hard cap on
+/// breadth, under the `eco` budget (deep reasoning only on the strongest
+/// signals). The single biggest token saver here is dropping voting from 2-3
+/// models to one.
+fn apply_quick(cfg: &mut RunConfig) {
+    use harness::budget::{Budget, Mode};
+    cfg.vote_n = 1;
+    cfg.chain_depth = 1;
+    cfg.recon_intensity = 1;
+    cfg.max_agents = 6;
+    cfg.budget = Budget::with_mode(Mode::Eco);
+    println!("  \x1b[2mquick: economy preset — 1 voter, 1 chain round, light recon, ≤6 agents, eco budget\x1b[0m");
 }
 
 /// Egress route, out-of-band channel and inbound SMS.

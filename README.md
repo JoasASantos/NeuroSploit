@@ -846,6 +846,7 @@ git clone https://github.com/digininja/DVWA /tmp/DVWA
 | `--model provider:model` | Repeatable. First = primary; the rest fail over **and** form the voting jury. |
 | `--subscription` | Use the local CLI login (Claude/Codex/Gemini/Grok) instead of an API key. |
 | `--mcp` | Enable Playwright MCP (auto-provisioned via `npx`; backends without MCP use built-in tools). |
+| `--quick` | **Economy preset for a short, low-cost test** — one voter, one chain round, light recon, ≤6 agents, `eco` budget. The single switch for a fast, cheap pass; dropping voting to one model is the biggest token saver. (REPL: `/quick`; web: the ⚡ Quick-mode checkbox.) |
 | `--vote-n N` | How many models must agree a finding is real (default 3 / 2 for whitebox). |
 | `--max-agents N` | Cap agents run (`0` = all matching the recon). |
 | `--offline` | Exercise the full pipeline without calling any model. |

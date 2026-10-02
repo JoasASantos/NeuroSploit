@@ -152,7 +152,7 @@ pub(crate) const ACCEPTED: &[&str] = &[
     "/history", "/idle", "/inscope", "/instructions", "/integration", "/integrations", "/key", "/log",
     "/logs", "/mcp", "/memory", "/model", "/models", "/objective", "/objectives", "/observe",
     "/observe-only", "/offline",
-    "/onboard", "/only", "/oos", "/outofscope", "/policy", "/providers", "/proxy", "/q", "/quit", "/recon",
+    "/onboard", "/only", "/oos", "/outofscope", "/policy", "/providers", "/proxy", "/quick", "/economy", "/eco", "/q", "/quit", "/recon",
     "/pause", "/repo", "/report", "/results", "/resume", "/retest", "/revalidate", "/run", "/runs",
     "/scope", "/scope-out", "/show", "/status", "/stop", "/sub", "/subscription", "/target",
     "/temp-email", "/tempmail", "/theme", "/timeout", "/ua", "/url", "/useragent", "/validate",
@@ -163,7 +163,7 @@ pub(crate) const ACCEPTED: &[&str] = &[
 const COMMANDS: &[&str] = &[
     "/help", "/onboard", "/show", "/config", "/providers", "/model", "/key", "/sub", "/target",
     "/repo", "/auth", "/creds", "/focus", "/objective", "/scope-out", "/attach", "/context", "/mcp", "/offline",
-    "/votes", "/chain", "/recon", "/tempmail", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/only", "/theme", "/clear", "/run", "/stop", "/pause", "/continue", "/runs", "/results", "/report",
+    "/quick", "/economy", "/eco", "/votes", "/chain", "/recon", "/tempmail", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/only", "/theme", "/clear", "/run", "/stop", "/pause", "/continue", "/runs", "/results", "/report",
     "/status", "/logs", "/diff", "/retest", "/validate", "/finding", "/expand", "/integrations",
     "/memory", "/forget", "/graph", "/inscope", "/observe", "/guardrail", "/policy",
     "/capability", "/audit", "/quit",
@@ -845,6 +845,18 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
                 let lvl = |n: usize| ["", "quick", "standard", "deep", "exhaustive"].get(n).copied().unwrap_or("deep");
                 if arg.is_empty() { println!("  recon intensity: {} ({}) — set with /recon <1-4>  [1 quick · 2 standard · 3 deep · 4 exhaustive]", s.recon_intensity, lvl(s.recon_intensity)); }
                 else { s.recon_intensity = arg.parse::<usize>().unwrap_or(s.recon_intensity).clamp(1, 4); println!("  recon intensity: {} ({}) — more rounds, more enumeration, auto-installs tools", s.recon_intensity, lvl(s.recon_intensity)); }
+            }
+            "/quick" | "/economy" | "/eco" => {
+                // Economy preset for a short, low-cost test — the single switch
+                // for "fast and cheap" instead of tuning each knob. The big
+                // saver is one voter instead of two or three.
+                s.vote_n = 1;
+                s.chain_depth = 1;
+                s.recon_intensity = 1;
+                s.max_agents = 6;
+                println!("  \x1b[1;32m⚡ quick mode\x1b[0m — economy preset for a short, low-cost run:");
+                println!("    1 voter · 1 chain round · light recon · ≤6 agents");
+                println!("    \x1b[2m(raise any back up with /votes /chain /recon /agents — or /run to go)\x1b[0m");
             }
             "/tempmail" | "/temp-email" => {
                 match arg.trim() {
@@ -2224,6 +2236,7 @@ fn help() {
     h("/votes <n>",         "number of validator votes per finding");
     h("/chain <n>",         "attack-chain depth (post-exploitation pivots; 0 = off)");
     h("/recon <1-4>",       "recon intensity: 1 quick · 2 standard · 3 deep · 4 exhaustive (installs tools)");
+    h("/quick",             "economy preset: short, low-cost run (1 voter · 1 chain round · light recon · ≤6 agents)");
     h("/tempmail on|off",   "opt-in disposable inbox (mail.tm) to read a register confirmation code");
     h("/timeout <min>",     "idle guardrail: stop if no new finding in <min> (0 = off)");
     h("/proxy <url>|off",   "route agent HTTP through Burp/ZAP  (/burp = default :8080)");
