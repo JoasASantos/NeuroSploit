@@ -229,7 +229,16 @@ impl ModelPool {
     /// emit a notice, and wait until the user runs `/continue` (or cancels).
     /// Returns when the run should retry (pause cleared) or give up (cancelled).
     async fn park_exhausted(&self, err: &anyhow::Error, is_auth: bool) {
-        self.paused.store(true, Ordering::Relaxed);
+        // Only the agent that actually flips the run into the paused state
+        // emits the notice. Without this, every in-flight parallel agent that
+        // hits the same exhaustion prints its own "PAUSED — /continue" line, so
+        // a single out-of-credit event floods the console with identical
+        // notices. The losers of the transition just wait quietly below.
+        let first = self
+            .paused
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok();
+        if first {
         if let Some(tx) = self.progress() {
             let msg = format!("{err:#}");
             let short = msg.lines().next().unwrap_or(&msg);
@@ -246,6 +255,7 @@ impl ModelPool {
                 )
             };
             let _ = tx.send(notice).await;
+        }
         }
         while self.paused.load(Ordering::Relaxed) && !self.is_cancelled() {
             let notified = self.resume.notified();
