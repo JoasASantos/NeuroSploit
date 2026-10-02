@@ -1625,7 +1625,8 @@ function renderSidebar() {
   const match = (r) => !q || `${r.name} ${r.target} ${r.id}`.toLowerCase().includes(q);
   const runs = state.runs.filter(match);
   const running = runs.filter((r) => r.state === 'running');
-  const past = runs.filter((r) => r.state !== 'running');
+  const interrupted = runs.filter((r) => r.state === 'interrupted');
+  const past = runs.filter((r) => r.state !== 'running' && r.state !== 'interrupted');
 
   if (running.length) {
     const wrap = document.createElement('div');
@@ -1643,6 +1644,16 @@ function renderSidebar() {
         items.appendChild(steps);
       }
     }
+    root.appendChild(wrap);
+  }
+
+  if (interrupted.length) {
+    const wrap = document.createElement('div');
+    wrap.className = 'sb-group';
+    wrap.innerHTML = `<div class="sb-group-head"><span class="caret">▾</span><span>Interrupted</span><span class="count">${interrupted.length}</span></div><div class="sb-items"></div>`;
+    wrap.querySelector('.sb-group-head').addEventListener('click', () => wrap.classList.toggle('collapsed'));
+    const items = wrap.querySelector('.sb-items');
+    for (const r of interrupted) items.appendChild(runButton(r));
     root.appendChild(wrap);
   }
 
@@ -1682,11 +1693,48 @@ function renderSidebar() {
   }
 }
 
+// Resume an interrupted run from the sidebar: if a persisted job exists for it,
+// relaunch it live; otherwise just open its detail (partial findings on disk).
+async function resumeFromSidebar(run) {
+  let jobs = [];
+  try { jobs = await api('/api/exploit'); } catch { /* fall through to detail */ }
+  const job = jobs.find((j) => (j.interrupted && j.resumable) && (j.runId === run.id || j.id === run.id || j.id === run.jobId));
+  if (job) {
+    try {
+      await api(`/api/exploit/${job.id}/resume`, { method: 'POST' });
+      localStorage.setItem(ACTIVE_JOB_KEY, job.id);
+      attachLiveJob(job.id, run.target, run.name, job.pinnedAgents || []);
+      await refreshRuns();
+      return;
+    } catch (e) {
+      toast(`Couldn't resume: ${e.message}`, 'error', 8000);
+    }
+  }
+  // No resumable job — show what's on disk.
+  show($('#wizardView'), false); show($('#liveView'), false); show($('#dashView'), false); show($('#detailView'), true);
+  loadDetail(run.id);
+  renderSidebar();
+}
+
 function openRun(run) {
   state.currentDetailId = run.id;
   if (run.state === 'running' && state.currentJob && run.id === state.currentJob.runId) {
     show($('#wizardView'), false); show($('#detailView'), false); show($('#dashView'), false); show($('#liveView'), true);
     renderSidebar();
+    return;
+  }
+  // A running job we're not already attached to (e.g. opened in another tab, or
+  // just started): reconnect its live stream instead of showing a static detail.
+  if (run.state === 'running' && (run.jobId || run.id)) {
+    const jid = run.jobId || run.id;
+    localStorage.setItem(ACTIVE_JOB_KEY, jid);
+    attachLiveJob(jid, run.target, run.name, []);
+    renderSidebar();
+    return;
+  }
+  if (run.state === 'interrupted') {
+    // Offer to resume where it left off; falls back to the static detail view.
+    resumeFromSidebar(run);
     return;
   }
   show($('#wizardView'), false); show($('#liveView'), false); show($('#dashView'), false); show($('#detailView'), true);

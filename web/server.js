@@ -434,6 +434,13 @@ async function listRuns() {
   } catch {
     return [];
   }
+  // Which run ids are actually driven by a LIVE job right now. A run whose
+  // status.json still says "running" but has no live job is stale (the process
+  // died / the server restarted) — show it as interrupted, not running, so the
+  // sidebar's Running group reflects reality.
+  const liveRunIds = new Set(
+    [...jobs.values()].filter((j) => !j.done && j.runId).map((j) => j.runId)
+  );
   const runs = await Promise.all(ids.map(async (id) => {
     const dir = path.join(RUNS_DIR, id);
     const [meta, status, findings] = await Promise.all([
@@ -445,17 +452,40 @@ async function listRuns() {
     const ts = tsMatch ? Number(tsMatch[1]) : 0;
     const sevCount = {};
     for (const f of findings) sevCount[f.severity] = (sevCount[f.severity] || 0) + 1;
+    let state = status.state || 'unknown';
+    if (state === 'running' && !liveRunIds.has(id)) state = 'interrupted';
     return {
       id,
       ts,
       name: engagementNames.get(id) || '',
       target: status.target || meta.target || id.replace(/^ns-\d+-/, ''),
-      state: status.state || 'unknown',
+      state,
       findings: findings.length,
       severities: sevCount,
       hasReport: fs.existsSync(path.join(dir, 'report.html')) || fs.existsSync(path.join(dir, 'report.pdf')),
     };
   }));
+  // A brand-new live job hasn't written its run dir yet (the run id is only
+  // known after recon prints it). Surface those in-memory running jobs so the
+  // engagement shows in the sidebar the moment it starts, not minutes later.
+  const onDisk = new Set(ids);
+  for (const j of jobs.values()) {
+    if (j.done) continue;
+    if (j.runId && onDisk.has(j.runId)) continue; // already covered above
+    const sevCount = {};
+    for (const f of j.findings || []) sevCount[f.severity] = (sevCount[f.severity] || 0) + 1;
+    runs.push({
+      id: j.runId || j.id,
+      jobId: j.id,
+      ts: Math.floor((j.startedAt || Date.now()) / 1000),
+      name: j.name || '',
+      target: j.target || '',
+      state: 'running',
+      findings: (j.findings || []).length,
+      severities: sevCount,
+      hasReport: false,
+    });
+  }
   runs.sort((a, b) => b.ts - a.ts);
   return runs;
 }
@@ -772,13 +802,18 @@ async function startJob(body) {
 /// Flags that apply to every mode, including the REPL-backed one. The REPL
 /// takes them as argv because a `/`-command for an authorization ceiling would
 /// let the session widen its own grant mid-run.
+// The REPL is spawned as `neurosploit` with NO subcommand, so ONLY global
+// flags are valid here — passing a `run`-subcommand flag (e.g. --environment,
+// --budget, --compliance) at this position makes clap abort before the REPL
+// even starts, which silently kills the engagement. The run-only knobs are
+// delivered through the REPL script (buildReplScript) instead, or applied at
+// their defaults. Keep this list to the `global = true` args in app/src/main.rs.
 function authArgs(body) {
   const args = [];
-  for (const entry of body.inScope || []) args.push('--in-scope', entry);
-  if (body.scopePath) args.push('--scope-file', body.scopePath);
   if (body.capability) args.push('--capability-token', body.capability);
-  if (body.environment) args.push('--environment', body.environment);
-  if (body.policyProfile) args.push('--policy', body.policyProfile);
+  for (const entry of body.inScope || []) args.push('--session-in-scope', entry);
+  if (body.environment) args.push('--session-environment', body.environment);
+  if (body.policyProfile) args.push('--session-policy', body.policyProfile);
   // Egress and the OOB channel are launcher-level, like the grant: a session
   // must not be able to re-route its own traffic once it is running.
   if (body.transport && body.transport !== 'direct') args.push('--transport', body.transport);
@@ -787,16 +822,9 @@ function authArgs(body) {
   if (body.oobDns) args.push('--oob-dns', body.oobDns);
   if (body.sms) args.push('--sms', body.sms);
   if (body.typesafe) args.push('--typesafe', body.typesafe);
+  if (body.decisionBackend) args.push('--decision-backend', body.decisionBackend);
   if (body.intercept && body.intercept !== 'off') args.push('--intercept', body.intercept);
   if (body.sandbox) args.push('--sandbox', body.sandbox === 'default' ? '' : body.sandbox);
-  if (body.revalidatePoc) args.push('--revalidate-poc');
-  for (const fw of body.compliance || []) args.push('--compliance', fw);
-  if (body.budget && body.budget !== 'unlimited') args.push('--budget', body.budget);
-  if (body.tokenLimit) args.push('--token-limit', String(body.tokenLimit));
-  if (body.deepTestLimit) args.push('--deep-test-limit', String(body.deepTestLimit));
-  if (body.order === 'depth-first') args.push('--depth-first');
-  else if (body.order === 'coverage-first') args.push('--coverage-first');
-  if (body.samplePerRoute) args.push('--sample-per-route', String(body.samplePerRoute));
   return args;
 }
 
@@ -1255,13 +1283,31 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && m) {
       const job = jobs.get(m[1]);
       if (!job) return sendJson(res, 404, { error: 'job not found' });
-      if (job.repl && job.child?.stdin?.writable) {
-        // The REPL's own graceful stop: /stop then choose "1" — validate
-        // what's found so far, then report. Plain SIGINT doesn't map to
-        // anything here (no signal handler in the REPL's own input loop).
-        job.child.stdin.write('/stop\n1\n');
+      const child = job.child;
+      const alive = !!child && child.exitCode === null && !child.killed;
+      if (!alive) {
+        // Nothing left to stop (the run already exited — e.g. it failed to
+        // launch). Mark it done so the UI stops showing it as running.
+        if (!job.done) { job.done = true; job.phase = 'stopped'; job.push({ type: 'done', exitCode: job.exitCode ?? 0 }); }
+        return sendJson(res, 200, { ok: true, note: 'already stopped' });
+      }
+      if (job.repl && child.stdin && child.stdin.writable) {
+        // Graceful: /stop then "1" — validate what's found so far, then report.
+        // A second press (or the fallback below) escalates to a signal.
+        if (job._stopping) { child.kill('SIGTERM'); }
+        else {
+          job._stopping = true;
+          job.phase = 'stopping';
+          job.push({ type: 'log', line: '[web] stopping — validating findings so far, then reporting…' });
+          try { child.stdin.write('/stop\n1\n'); } catch { child.kill('SIGTERM'); }
+          // If the REPL hasn't exited in time, don't leave it hanging.
+          setTimeout(() => { if (child.exitCode === null && !child.killed) child.kill('SIGTERM'); }, 45000).unref?.();
+          setTimeout(() => { if (child.exitCode === null && !child.killed) child.kill('SIGKILL'); }, 60000).unref?.();
+        }
       } else {
-        job.child?.kill('SIGINT');
+        child.kill('SIGINT');
+        setTimeout(() => { if (child.exitCode === null && !child.killed) child.kill('SIGTERM'); }, 5000).unref?.();
+        setTimeout(() => { if (child.exitCode === null && !child.killed) child.kill('SIGKILL'); }, 10000).unref?.();
       }
       return sendJson(res, 200, { ok: true });
     }
