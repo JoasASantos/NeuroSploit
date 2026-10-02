@@ -2642,6 +2642,46 @@ async function boot() {
   await Promise.all([loadAgents(), loadProviders()]);
   await refreshRuns();
   await tryResumeActiveJob(); // survive an F5 while watching a live run
+  await offerInterruptedJobs(); // a run the server lost on restart/crash
   setInterval(refreshRuns, 6000);
 }
 boot();
+
+// A job that was live when the server stopped is reloaded from disk as
+// `interrupted`. When it is resumable (a REPL-backed run/whitebox/greybox, the
+// ones the harness checkpoints), offer a one-click resume: the server relaunches
+// the REPL, which auto-recovers the on-disk checkpoint and /continue's it.
+async function offerInterruptedJobs() {
+  let jobs;
+  try { jobs = await api('/api/exploit'); } catch { return; }
+  const resumable = (jobs || []).filter((j) => j.interrupted && j.resumable);
+  if (!resumable.length) return;
+  const bar = document.createElement('div');
+  bar.className = 'resume-bar';
+  bar.innerHTML = `
+    <span class="resume-ico">↻</span>
+    <span class="resume-text">${resumable.length} interrupted run(s) — the server restarted mid-engagement. Findings are saved; resume to continue where it left off.</span>
+    <span class="resume-actions"></span>
+    <button class="resume-x" title="Dismiss">✕</button>`;
+  const actions = bar.querySelector('.resume-actions');
+  for (const j of resumable) {
+    const b = document.createElement('button');
+    b.className = 'btn btn-sm btn-primary';
+    b.textContent = `Resume ${j.name || j.target || j.id.slice(0, 8)}`;
+    b.addEventListener('click', async () => {
+      b.disabled = true; b.textContent = 'Resuming…';
+      try {
+        await api(`/api/exploit/${j.id}/resume`, { method: 'POST' });
+        localStorage.setItem(ACTIVE_JOB_KEY, j.id);
+        attachLiveJob(j.id, j.target, j.name, j.pinnedAgents || []);
+        bar.remove();
+      } catch (e) {
+        b.disabled = false; b.textContent = 'Retry';
+        toast(`Couldn't resume: ${e.message}`, 'error', 9000);
+      }
+    });
+    actions.appendChild(b);
+  }
+  bar.querySelector('.resume-x').addEventListener('click', () => bar.remove());
+  document.body.insertBefore(bar, document.body.firstChild);
+}

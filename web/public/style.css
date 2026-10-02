@@ -798,3 +798,11 @@ body.resizing-ns { user-select: none; cursor: ns-resize; }
 /* Scoping/Guardrails UI accents */
 .pill { display:inline-block; padding:1px 7px; border-radius: var(--radius-pill); background:var(--sev-medium-bg); color:var(--sev-medium-fg); font-weight:600; letter-spacing:.02em; }
 .req { color:var(--text-dim); font-weight:400; font-size:.9em; }
+
+/* Interrupted-run resume banner (web persistence). */
+.resume-bar { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-4); background: var(--accent-soft); border-bottom: 1px solid var(--border-strong); font-size: var(--fs-sm); color: var(--text); z-index: var(--z-header); }
+.resume-bar .resume-ico { color: var(--accent); font-weight: 700; }
+.resume-bar .resume-text { flex: 1; min-width: 0; }
+.resume-bar .resume-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+.resume-bar .resume-x { background: transparent; border: none; color: var(--text-dim); cursor: pointer; font-size: var(--fs-sm); padding: 2px 6px; border-radius: var(--radius-xs); }
+.resume-bar .resume-x:hover { background: var(--surface-3); color: var(--text); }

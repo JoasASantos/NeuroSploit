@@ -51,6 +51,30 @@ function saveEngagementName(runId, name) {
     .then(() => fsp.writeFile(NAMES_FILE, JSON.stringify(Object.fromEntries(engagementNames), null, 2)))
     .catch(() => {});
 }
+// Per-job persistence: the web server's job state (phase, findings, feed, and
+// the non-secret launch params) is mirrored to disk so a server restart or
+// crash doesn't lose the run — the UI can list it again and, for an
+// interrupted run/whitebox/greybox job, RESUME it (relaunch the REPL, which
+// auto-recovers the harness's own on-disk checkpoint and carries findings
+// forward). Secrets (API keys, creds-file contents) are never written here.
+const JOBS_DIR = path.join(ROOT, '.neurosploit', 'web-jobs');
+function jobFile(id) { return path.join(JOBS_DIR, `${id}.json`); }
+function persistJob(job) {
+  if (!job) return;
+  try {
+    fs.mkdirSync(JOBS_DIR, { recursive: true });
+    const snap = job.snapshot();
+    const rec = {
+      ...snap,
+      launch: job.launch || null,          // sanitized relaunch params (no secrets)
+      feedTail: job.feed.slice(-300),      // enough to repaint the live log
+      savedAt: Date.now(),
+    };
+    fs.writeFileSync(jobFile(job.id), JSON.stringify(rec));
+  } catch { /* best-effort — persistence never breaks a run */ }
+}
+function deleteJobFile(id) { try { fs.unlinkSync(jobFile(id)); } catch { /* gone already */ } }
+
 const PUBLIC_DIR = path.join(WEB_DIR, 'public');
 
 function findBinary() {
@@ -571,6 +595,15 @@ class Job extends EventEmitter {
     this.feed.push(evt);
     if (this.feed.length > 2000) this.feed.shift();
     this.emit('event', evt);
+    // Persist on state-moving events (a finding, a phase marker, completion),
+    // throttled so a chatty log stream doesn't hammer the disk.
+    if (evt.type === 'finding' || evt.type === 'done') this._persistSoon(0);
+    else this._persistSoon(1500);
+  }
+  _persistSoon(delay) {
+    if (this._persistTimer) return;
+    this._persistTimer = setTimeout(() => { this._persistTimer = null; persistJob(this); }, delay);
+    if (this._persistTimer.unref) this._persistTimer.unref();
   }
   snapshot() {
     return {
@@ -588,6 +621,8 @@ class Job extends EventEmitter {
       exitCode: this.exitCode,
       reportUrl: this.reportUrl,
       startedAt: this.startedAt,
+      interrupted: !!this.interrupted,
+      resumable: !!this.resumable,
     };
   }
 }
@@ -765,6 +800,30 @@ function authArgs(body) {
   return args;
 }
 
+/// The non-secret subset of a launch body, kept so a job can be relaunched
+/// after a server restart. API keys live only in memory (apiKeys) and creds
+/// files on disk; neither is copied here.
+function sanitizeLaunch(body) {
+  return {
+    mode: body.mode || 'run',
+    target: body.target || '',
+    repo: body.repo || '',
+    models: body.models || [],
+    subscription: !!body.subscription,
+    mcp: !!body.mcp,
+    votes: body.votes,
+    chainDepth: body.chainDepth,
+    recon: body.recon,
+    focus: body.focus,
+    objective: body.objective,
+    outOfScope: body.outOfScope,
+    agents: body.agents || [],
+    name: body.name || '',
+    sandbox: !!body.sandbox,
+    typesafe: body.typesafe,
+  };
+}
+
 function buildReplScript(body) {
   const lines = [];
   if (body.mode === 'whitebox') lines.push(`/repo ${body.repo || body.target}`);
@@ -805,7 +864,12 @@ async function startJobViaRepl(body) {
   const job = new Job(id, BIN, auth, body.repo || body.target || '', body.name || '');
   job.pinnedAgents = body.agents || [];
   job.repl = true;
+  // Non-secret params needed to relaunch this job after a restart. No API keys,
+  // no creds-file contents — only what rebuilds the engagement shape so a
+  // resumed REPL can `/continue` the harness checkpoint.
+  job.launch = sanitizeLaunch(body);
   jobs.set(id, job);
+  persistJob(job);
 
   // The REPL session inherits the engagement's authorization from argv, so the
   // ceiling is set before the first command is scripted into it.
@@ -837,6 +901,95 @@ async function startJobViaRepl(body) {
   });
   for (const line of script) child.stdin.write(line + '\n');
   return job;
+}
+
+/// Relaunch an interrupted REPL-backed job in place: spawn a fresh REPL over a
+/// pipe, which (a) restores the project session (model/subscription) and (b)
+/// auto-recovers the harness's on-disk checkpoint and `/continue`s it, carrying
+/// the prior findings forward. We reuse the SAME job object (id, feed,
+/// findings) so the browser's live view simply resumes streaming.
+function relaunchJobViaRepl(job) {
+  const launch = job.launch || {};
+  const auth = authArgs(launch);
+  job.repl = true;
+  job.done = false;
+  job.exitCode = null;
+  job.interrupted = false;
+  job.phase = 'resuming';
+  job.push({ type: 'log', line: '[web] resuming — recovering the on-disk checkpoint and continuing…' });
+
+  const child = spawn(BIN, auth, { cwd: ROOT, env: { ...process.env, ...envOverrides(), NEUROSPLOIT_AUTO_RESUME: '1' } });
+  job.child = child;
+  let buf = '';
+  const onData = (chunk) => {
+    buf += chunk.toString('utf8');
+    let idx;
+    while ((idx = buf.indexOf('\n')) !== -1) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      if (line.length) ingestLine(job, line);
+    }
+  };
+  child.stdout.on('data', onData);
+  child.stderr.on('data', onData);
+  child.on('close', (code) => {
+    if (buf.trim()) ingestLine(job, buf);
+    if (!job.done) { job.done = true; job.push({ type: 'done', exitCode: code }); }
+    job.exitCode = code;
+  });
+  child.on('error', (err) => {
+    job.done = true;
+    job.push({ type: 'log', line: `[web] failed to resume neurosploit: ${err.message}` });
+    job.push({ type: 'done', exitCode: -1 });
+  });
+  // Re-apply the engagement shape, then continue. Over a pipe the REPL also
+  // auto-continues on its own; a second /continue while working is a harmless
+  // no-op. Sending the settings first makes the resumed run deterministic even
+  // if the saved session was stale.
+  const script = [];
+  if (launch.subscription !== undefined) script.push(`/sub ${launch.subscription ? 'on' : 'off'}`);
+  if ((launch.models || []).length) script.push(`/model ${launch.models.join(',')}`);
+  script.push('/continue');
+  for (const line of script) child.stdin.write(line + '\n');
+  persistJob(job);
+  return job;
+}
+
+/// Rebuild the in-memory job list from disk on startup. A job that was still
+/// running when the server stopped is marked interrupted (and resumable when it
+/// was a REPL-backed run/whitebox/greybox job, since only those have the
+/// harness checkpoint + /continue path).
+function loadPersistedJobs() {
+  let files = [];
+  try { files = fs.readdirSync(JOBS_DIR).filter((f) => f.endsWith('.json')); } catch { return; }
+  for (const f of files) {
+    let rec;
+    try { rec = JSON.parse(fs.readFileSync(path.join(JOBS_DIR, f), 'utf8')); } catch { continue; }
+    if (!rec || !rec.id) continue;
+    const job = new Job(rec.id, BIN, [], rec.target || '', rec.name || '');
+    job.runId = rec.runId || null;
+    job.findings = rec.findings || [];
+    job.agents = rec.agents || 0;
+    job.agentsDone = rec.agentsDone || 0;
+    job.reportUrl = rec.reportUrl || null;
+    job.startedAt = rec.startedAt || Date.now();
+    job.repl = !!rec.interactive;
+    job.launch = rec.launch || null;
+    job.feed = rec.feedTail || [];
+    job.child = null;
+    if (rec.done) {
+      job.done = true;
+      job.phase = rec.phase || 'complete';
+    } else {
+      // The server died while this was live. It can't still be running.
+      job.done = false;
+      job.interrupted = true;
+      job.phase = 'interrupted';
+      const m = (rec.launch && rec.launch.mode) || 'run';
+      job.resumable = job.repl && ['run', 'whitebox', 'greybox'].includes(m);
+    }
+    jobs.set(job.id, job);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1075,6 +1228,26 @@ const server = http.createServer(async (req, res) => {
       if (!job) return sendJson(res, 404, { error: 'job not found' });
       return sendJson(res, 200, job.snapshot());
     }
+    m = p.match(/^\/api\/exploit\/([^/]+)\/resume$/);
+    if (req.method === 'POST' && m) {
+      const job = jobs.get(m[1]);
+      if (!job) return sendJson(res, 404, { error: 'job not found' });
+      if (!job.interrupted) return sendJson(res, 409, { error: 'this job is not interrupted — nothing to resume' });
+      if (!job.resumable) return sendJson(res, 409, { error: 'this job cannot be resumed (only run/whitebox/greybox engagements checkpoint)' });
+      if (!BIN) return sendJson(res, 500, { error: 'neurosploit binary not found' });
+      // API-key jobs need their provider key back after a server restart; it
+      // lived only in memory. Subscription jobs need no key.
+      const launch = job.launch || {};
+      if (!launch.subscription) {
+        const provs = (launch.models || []).map((m2) => String(m2).split(':')[0]);
+        const missing = provs.filter((pr) => PROVIDERS.some((P) => P.key === pr) && !apiKeys.get(pr) && !process.env[(PROVIDERS.find((P) => P.key === pr) || {}).envKey]);
+        if (missing.length) {
+          return sendJson(res, 409, { error: `set the API key for ${[...new Set(missing)].join(', ')} again (it is kept only in memory), then resume` });
+        }
+      }
+      relaunchJobViaRepl(job);
+      return sendJson(res, 200, { ok: true, id: job.id, interactive: true });
+    }
     m = p.match(/^\/api\/exploit\/([^/]+)\/stop$/);
     if (req.method === 'POST' && m) {
       const job = jobs.get(m[1]);
@@ -1262,9 +1435,13 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+loadPersistedJobs();
+
 server.listen(PORT, () => {
   console.log(`NeuroSploit v4.2.1 web console → http://localhost:${PORT}`);
   console.log(`  binary : ${BIN || '(not found — build neurosploit-rs first)'}`);
   console.log(`  agents : ${AGENTS_DIR}`);
   console.log(`  runs   : ${RUNS_DIR}`);
+  const resumable = [...jobs.values()].filter((j) => j.interrupted && j.resumable).length;
+  if (resumable) console.log(`  jobs   : ${resumable} interrupted run(s) can be resumed`);
 });
