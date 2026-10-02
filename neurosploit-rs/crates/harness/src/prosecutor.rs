@@ -82,24 +82,10 @@ impl ProsecutorVerdict {
 
 /// Parse the prosecutor's reply, tolerating the fences and preamble models add.
 pub fn parse_verdict(text: &str) -> Option<ProsecutorVerdict> {
-    let mut candidates: Vec<&str> = Vec::new();
-    // A fenced block is the machine-readable answer when there is one.
-    let mut rest = text;
-    let mut blocks: Vec<&str> = Vec::new();
-    while let Some(open) = rest.find("```") {
-        let after = &rest[open + 3..];
-        let Some(close) = after.find("```") else { break };
-        let inner = after[..close].trim_start_matches("json").trim();
-        blocks.push(inner);
-        rest = &after[close + 3..];
-    }
-    candidates.extend(blocks.into_iter().rev());
-    if let (Some(a), Some(b)) = (text.find('{'), text.rfind('}')) {
-        if b > a {
-            candidates.push(&text[a..=b]);
-        }
-    }
-    candidates.into_iter().find_map(|c| serde_json::from_str::<ProsecutorVerdict>(c).ok())
+    // The shared extractor handles the fences, preamble and minor syntax drift
+    // (trailing commas, comments, single quotes) that models add to this object.
+    let v = crate::json_extract::parse_reply(text)?;
+    serde_json::from_value::<ProsecutorVerdict>(v).ok()
 }
 
 /// Fold the prosecutor's reading into the finding's claim set.

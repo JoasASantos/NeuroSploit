@@ -25,6 +25,7 @@ pub mod inbox;
 pub mod integrations;
 pub mod integrity;
 pub mod internal;
+pub mod json_extract;
 pub mod knowledge_graph;
 pub mod memory;
 pub mod policy;
