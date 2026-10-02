@@ -882,6 +882,7 @@ function sanitizeLaunch(body) {
     sandbox: !!body.sandbox,
     typesafe: body.typesafe,
     quick: !!body.quick,
+    research: !!body.research,
   };
 }
 
@@ -902,6 +903,7 @@ function buildReplScript(body) {
   if (body.objective) lines.push(`/objective ${body.objective}`);
   if (body.outOfScope) lines.push(`/scope-out ${body.outOfScope}`);
   if (body.creds) lines.push(`/creds ${body.creds}`);
+  if (body.research) lines.push(`/research on`);
   lines.push((body.agents || []).length ? `/only ${body.agents.join(',')}` : '/only clear');
   // Economy preset last, so it wins over the per-knob settings above.
   if (body.quick) lines.push('/quick');

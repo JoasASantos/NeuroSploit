@@ -623,6 +623,34 @@ const WHITEBOX_DOCTRINE: &str = "MODE: WHITE-BOX STATIC SOURCE REVIEW. You are r
 - Repro PoC (optional but valued): when a finding warrants it, WRITE a proof/repro script to $NEUROSPLOIT_POCS — e.g. the exact malicious input + the request/CLI call that would trigger the sink, or a unit-style harness exercising the vulnerable function — with a header comment (file:line it proves, how to run). Cite the PoC path in the evidence. Mark clearly that it demonstrates the code path (static-derived), not a live hit.\n\
 - Calibrate: High/Critical only when the sink is reachable and exploitable from untrusted input; guarded/unreachable code is Low or a lead.\n\n";
 
+/// Vulnerability-RESEARCH doctrine: turn a source review into a hunt for a
+/// NOVEL, CVE-reportable bug. Prepended (after the white-box doctrine) when the
+/// operator runs research mode (`--research`, `/research`, or a focus/objective
+/// that asks for a new CVE / 0-day / patch bypass). The whole point is NOVELTY:
+/// do not re-report a known CVE — use the known ones as a map to find what the
+/// fix missed, a variant, or a reintroduction.
+const WHITEBOX_RESEARCH_DOCTRINE: &str = "MISSION: VULNERABILITY RESEARCH — find a NOVEL, CVE-reportable issue in this codebase, not a known one.\n\
+- PIN THE VERSION FIRST: read the version (package.json/VERSION/__init__/composer.json/go.mod/tag) and the exact commit. Every claim is against THIS version/commit; note it in evidence.\n\
+- RESEARCH KNOWN CVEs (de-duplicate): before reporting anything, build the set of ALREADY-KNOWN issues for this project+version — read SECURITY.md, CHANGELOG/release notes, the security advisories (GHSA), CVE/NVD, the issue tracker and recent security commits (`git log --oneline`, grep messages for CVE/security/fix/vuln/XSS/RCE/injection). A finding that matches a known CVE for this version is NOT novel — drop it or recast it ONLY as a patch-bypass/variant (below). State which known CVEs you checked against.\n\
+- PATCH-DIFF / N-DAY -> 0-DAY (the highest-yield path): take a recent SECURITY fix (its commit) and study the diff. Ask: did the patch fix the ROOT CAUSE or just one path? Look for (1) incomplete fixes — another reachable sink the patch did not cover, a bypass of the new check (different encoding, type juggling, alternate parser, case/Unicode, second-order input); (2) the SAME bug pattern elsewhere in the tree (variant analysis — grep the fixed sink's shape across the repo); (3) reintroduction in a later commit. A proven bypass of an existing patch IS novel and reportable.\n\
+- SOURCE->SINK with reachability: trace untrusted input (request params, headers, body, deserialized objects, file names, env, IPC, config) to a dangerous sink (SQL/exec/eval/template/path/deserialize/SSRF/XXE/prototype/unsafe-reflection). Only call it a vuln when the path is REACHABLE from an untrusted entrypoint without an effective sanitizer; record the full path `entry -> … -> sink`.\n\
+- NOVELTY GATE (strict): report a finding ONLY if (a) it does not match a known CVE for this version, OR (b) it is a concrete bypass/variant of a patched issue. For each, state explicitly: 'novel: <why>' and 'checked-against: <CVEs/advisories/commits>'. No speculation — high-confidence, evidence-backed only.\n\
+- WRITE A PoC: produce a minimal, SAFE proof (a failing unit test, a crafted input + the exact call reaching the sink, or a request) to $NEUROSPLOIT_POCS and cite it. Where a running instance is available (greybox), CONFIRM the source-derived bug dynamically — but never run destructive payloads.\n\
+- REPORT for disclosure: each finding carries file:line, root-cause analysis, the version/commit, the novelty justification, CVSS vector, PoC path, suggested fix, and the project's disclosure channel (SECURITY.md / security@). Prefer a few solid, novel, reportable bugs over a long list of known or speculative ones.\n\n";
+
+/// True when the engagement is asking for vulnerability research / a new CVE,
+/// either via the explicit flag or from natural-language focus/objective.
+fn is_research_intent(cfg: &RunConfig) -> bool {
+    if cfg.research { return true; }
+    let hay = format!("{} {}",
+        cfg.instructions.clone().unwrap_or_default(),
+        cfg.objective.clone().unwrap_or_default()).to_lowercase();
+    ["new cve", "novel", "0-day", "0day", "zero-day", "zero day", "patch bypass",
+     "patch-bypass", "variant analysis", "n-day", "nday", "reportable", "cve research",
+     "vulnerability research", "find a cve", "nova cve", "pesquisa de vuln"]
+        .iter().any(|k| hay.contains(k))
+}
+
 /// Methodology directions for a modern JS SPA backed by a REST/GraphQL API
 /// (Angular/React/Vue front + Node/Express-style API — the shape of OWASP Juice
 /// Shop and many real apps). These are DIRECTIONS on HOW to hunt each vuln class,
@@ -1167,6 +1195,10 @@ pub async fn run_whitebox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: S
 
     let context = collect_repo_context(Path::new(&cfg.target), 200, 120_000);
     let bytes = context.len();
+    let research = is_research_intent(&cfg);
+    if research {
+        let _ = tx.send("notify: 🔬 research mode — hunting a NOVEL, CVE-reportable issue (known-CVE dedup + patch-diff variant analysis)".into()).await;
+    }
     let _ = tx.send(format!("collected {} bytes of source context", bytes)).await;
     if bytes == 0 {
         let _ = tx.send("no readable source found at the given path".into()).await;
@@ -1214,7 +1246,12 @@ pub async fn run_whitebox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: S
                 );
                 // Prepend the white-box doctrine so code agents stay in static
                 // source-review mode and never hallucinate live/black-box actions.
-                let sys = format!("{}{}", WHITEBOX_DOCTRINE, ag.system);
+                // In research mode, add the novelty/patch-diff hunting doctrine.
+                let sys = if research {
+                    format!("{}{}{}", WHITEBOX_DOCTRINE, WHITEBOX_RESEARCH_DOCTRINE, ag.system)
+                } else {
+                    format!("{}{}", WHITEBOX_DOCTRINE, ag.system)
+                };
                 match pool.complete_routed(Task::Exploit, &ag.name, &sys, &user).await {
                     Ok((m, text)) => {
                         let f = extract_findings(&text, &ag.name);
@@ -1267,6 +1304,10 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
     // ---- 2. Review the source for leads -------------------------------
     let context = collect_repo_context(Path::new(&repo), 200, 90_000);
     let _ = tx.send(format!("collected {} bytes of source for code review", context.len())).await;
+    let gb_research = is_research_intent(&cfg);
+    if gb_research {
+        let _ = tx.send("notify: 🔬 research mode — code review hunts a novel, CVE-reportable bug, then confirms it live".into()).await;
+    }
     let mut rl = cfg.rl_path.as_ref().map(|p| RlState::load(Path::new(p))).unwrap_or_default();
 
     let mut code_leads = String::new();
@@ -1284,7 +1325,10 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
                          where endpoint is file:line.",
                         ag.user.replace("{target}", "the repository").replace("{recon_json}", "{}"), ctx
                     );
-                    match pool.complete_routed(Task::Select, &ag.name, &ag.system, &user).await {
+                    // Research mode steers the code-review half of greybox too:
+                    // find a novel, reportable bug, then confirm it live.
+                    let sys = if gb_research { format!("{}{}", WHITEBOX_RESEARCH_DOCTRINE, ag.system) } else { ag.system.clone() };
+                    match pool.complete_routed(Task::Select, &ag.name, &sys, &user).await {
                         Ok((_, text)) => { let f = extract_findings(&text, &ag.name);
                             let _ = txc.send(format!("review {} → {} lead(s)", ag.name, f.len())).await; f }
                         Err(_) => vec![],

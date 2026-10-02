@@ -213,6 +213,12 @@ pub struct RunConfig {
     /// more recon rounds, more active enumeration, and auto-installing tools.
     #[serde(default = "default_recon")]
     pub recon_intensity: usize,
+    /// Vulnerability-research mode: hunt for NOVEL, CVE-reportable issues in a
+    /// source repo — research known CVEs/advisories to de-duplicate, do
+    /// patch-diff variant analysis (incomplete-fix bypasses, sibling sinks),
+    /// and gate strictly on novelty. Steers whitebox/greybox.
+    #[serde(default)]
+    pub research: bool,
     /// Opt-in: when the app requires email confirmation to register, allow the
     /// agent to use a free disposable-inbox API (mail.tm) to read the code/link.
     /// Off by default. Account creation is still capped by the safety guardrail.
@@ -315,6 +321,7 @@ impl RunConfig {
             repo: None,
             pinned: Vec::new(),
             chain_depth: 2,
+            research: false,
             proxy: None,
             user_agent: None,
             recon_intensity: 3,

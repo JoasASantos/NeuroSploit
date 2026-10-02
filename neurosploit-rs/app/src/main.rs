@@ -318,6 +318,9 @@ enum Cmd {
         /// Economy preset for a short, low-cost review (see `run --quick`).
         #[arg(long)]
         quick: bool,
+        /// Vulnerability-research mode: hunt a NOVEL, CVE-reportable bug (known-CVE dedup + patch-diff variant analysis).
+        #[arg(long)]
+        research: bool,
         #[arg(long)]
         offline: bool,
         #[arg(long)]
@@ -359,6 +362,9 @@ enum Cmd {
         /// Economy preset for a short, low-cost test (see `run --quick`).
         #[arg(long)]
         quick: bool,
+        /// Vulnerability-research mode (see `whitebox --research`).
+        #[arg(long)]
+        research: bool,
         #[arg(long)]
         offline: bool,
         #[arg(long)]
@@ -880,7 +886,7 @@ async fn main() -> anyhow::Result<()> {
             let ig = harness::integrations::Integrations::load(&repl::proj_dir());
             post_integrations(&ig, &url, &out, jira, false, None).await;
         }
-        Cmd::Whitebox { path, models, max_agents, vote_n, chain_depth, recon, quick, offline, subscription, jira, only, verbose } => {
+        Cmd::Whitebox { path, models, max_agents, vote_n, chain_depth, recon, quick, research, offline, subscription, jira, only, verbose } => {
             let path = resolve_source(&base, &path)?; // local path OR github URL/owner/repo
             let mut cfg = RunConfig::new(&path);
             cfg.max_agents = max_agents;
@@ -891,6 +897,7 @@ async fn main() -> anyhow::Result<()> {
             cfg.subscription = subscription;
             cfg.verbose = verbose;
             cfg.pinned = parse_only(&only);
+            cfg.research = research;
             if quick { apply_quick(&mut cfg); }
             if !models.is_empty() {
                 cfg.models = models;
@@ -900,7 +907,7 @@ async fn main() -> anyhow::Result<()> {
             let ig = harness::integrations::Integrations::load(&repl::proj_dir());
             post_integrations(&ig, &path, &out, jira, false, None).await;
         }
-        Cmd::Greybox { repo, url, models, creds, focus, max_agents, vote_n, chain_depth, recon, quick, offline, subscription, mcp, only, verbose } => {
+        Cmd::Greybox { repo, url, models, creds, focus, max_agents, vote_n, chain_depth, recon, quick, research, offline, subscription, mcp, only, verbose } => {
             let repo = resolve_source(&base, &repo)?; // local path OR github URL/owner/repo
             let url = if url.starts_with("http") { url } else { format!("https://{url}") };
             let mut cfg = RunConfig::new(&url);
@@ -914,6 +921,7 @@ async fn main() -> anyhow::Result<()> {
             cfg.verbose = verbose;
             cfg.instructions = focus;
             cfg.pinned = parse_only(&only);
+            cfg.research = research;
             if quick { apply_quick(&mut cfg); }
             if !models.is_empty() {
                 cfg.models = models;

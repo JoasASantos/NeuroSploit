@@ -152,7 +152,7 @@ pub(crate) const ACCEPTED: &[&str] = &[
     "/history", "/idle", "/inscope", "/instructions", "/integration", "/integrations", "/key", "/log",
     "/logs", "/mcp", "/memory", "/model", "/models", "/objective", "/objectives", "/observe",
     "/observe-only", "/offline",
-    "/onboard", "/only", "/oos", "/outofscope", "/policy", "/providers", "/proxy", "/quick", "/economy", "/eco", "/q", "/quit", "/recon",
+    "/onboard", "/only", "/oos", "/outofscope", "/policy", "/providers", "/proxy", "/research", "/quick", "/economy", "/eco", "/q", "/quit", "/recon",
     "/pause", "/repo", "/report", "/results", "/resume", "/retest", "/revalidate", "/run", "/runs",
     "/scope", "/scope-out", "/show", "/status", "/stop", "/sub", "/subscription", "/target",
     "/temp-email", "/tempmail", "/theme", "/timeout", "/ua", "/url", "/useragent", "/validate",
@@ -163,7 +163,7 @@ pub(crate) const ACCEPTED: &[&str] = &[
 const COMMANDS: &[&str] = &[
     "/help", "/onboard", "/show", "/config", "/providers", "/model", "/key", "/sub", "/target",
     "/repo", "/auth", "/creds", "/focus", "/objective", "/scope-out", "/attach", "/context", "/mcp", "/offline",
-    "/quick", "/economy", "/eco", "/votes", "/chain", "/recon", "/tempmail", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/only", "/theme", "/clear", "/run", "/stop", "/pause", "/continue", "/runs", "/results", "/report",
+    "/research", "/quick", "/economy", "/eco", "/votes", "/chain", "/recon", "/tempmail", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/only", "/theme", "/clear", "/run", "/stop", "/pause", "/continue", "/runs", "/results", "/report",
     "/status", "/logs", "/diff", "/retest", "/validate", "/finding", "/expand", "/integrations",
     "/memory", "/forget", "/graph", "/inscope", "/observe", "/guardrail", "/policy",
     "/capability", "/audit", "/quit",
@@ -268,6 +268,7 @@ struct Session {
     max_agents: usize,
     chain_depth: usize,
     recon_intensity: usize,
+    research: bool,
     /// Opt-in disposable email (mail.tm) for register flows needing a confirmation code.
     temp_email: bool,
     /// Idle guardrail: stop a run if no NEW finding lands in this many seconds
@@ -320,6 +321,7 @@ impl Default for Session {
             max_agents: 0,
             chain_depth: 2,
             recon_intensity: 3,
+            research: false,
             temp_email: false,
             idle_secs: 300, // 5-minute idle guardrail by default
             proxy: None,
@@ -845,6 +847,13 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
                 let lvl = |n: usize| ["", "quick", "standard", "deep", "exhaustive"].get(n).copied().unwrap_or("deep");
                 if arg.is_empty() { println!("  recon intensity: {} ({}) — set with /recon <1-4>  [1 quick · 2 standard · 3 deep · 4 exhaustive]", s.recon_intensity, lvl(s.recon_intensity)); }
                 else { s.recon_intensity = arg.parse::<usize>().unwrap_or(s.recon_intensity).clamp(1, 4); println!("  recon intensity: {} ({}) — more rounds, more enumeration, auto-installs tools", s.recon_intensity, lvl(s.recon_intensity)); }
+            }
+            "/research" => {
+                match arg.trim() {
+                    "on" | "true" | "1" => { s.research = true; println!("  \x1b[1;36m🔬 research mode ON\x1b[0m — whitebox/greybox will hunt a NOVEL, CVE-reportable bug (known-CVE dedup + patch-diff variant analysis)"); }
+                    "off" | "false" | "0" => { s.research = false; println!("  research mode off"); }
+                    _ => println!("  research mode: {} — /research on|off (for whitebox/greybox: find a new CVE, not a known one)", if s.research { "\x1b[36mon\x1b[0m" } else { "\x1b[2moff\x1b[0m" }),
+                }
             }
             "/quick" | "/economy" | "/eco" => {
                 // Economy preset for a short, low-cost test — the single switch
@@ -1471,6 +1480,7 @@ async fn run(base: &Path, s: &Session, history: &mut Vec<RunRecord>) {
     cfg.vote_n = s.vote_n;
     cfg.chain_depth = s.chain_depth;
     cfg.recon_intensity = s.recon_intensity;
+    cfg.research = s.research;
     cfg.temp_email = s.temp_email;
     cfg.proxy = s.proxy.clone();
     cfg.user_agent = s.user_agent.clone();
@@ -1560,6 +1570,7 @@ async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
     cfg.vote_n = s.vote_n;
     cfg.chain_depth = s.chain_depth;
     cfg.recon_intensity = s.recon_intensity;
+    cfg.research = s.research;
     cfg.temp_email = s.temp_email;
     cfg.proxy = s.proxy.clone();
     cfg.user_agent = s.user_agent.clone();
@@ -2236,6 +2247,7 @@ fn help() {
     h("/votes <n>",         "number of validator votes per finding");
     h("/chain <n>",         "attack-chain depth (post-exploitation pivots; 0 = off)");
     h("/recon <1-4>",       "recon intensity: 1 quick · 2 standard · 3 deep · 4 exhaustive (installs tools)");
+    h("/research",          "whitebox/greybox: hunt a NOVEL, CVE-reportable bug (known-CVE dedup + patch-diff variant analysis)");
     h("/quick",             "economy preset: short, low-cost run (1 voter · 1 chain round · light recon · ≤6 agents)");
     h("/tempmail on|off",   "opt-in disposable inbox (mail.tm) to read a register confirmation code");
     h("/timeout <min>",     "idle guardrail: stop if no new finding in <min> (0 = off)");

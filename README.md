@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Version-4.2.1-blue?style=flat-square">
   <img src="https://img.shields.io/badge/Harness-Rust%20%7C%20tokio-e6b673?style=flat-square">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
-  <img src="https://img.shields.io/badge/MD%20Agents-473-red?style=flat-square">
+  <img src="https://img.shields.io/badge/MD%20Agents-479-red?style=flat-square">
   <img src="https://img.shields.io/badge/Models-19%20providers-success?style=flat-square">
   <img src="https://img.shields.io/badge/Modes-Black%20%7C%20White%20%7C%20Grey%20%7C%20Host%20%7C%20AI%20%7C%20Mobile%20%7C%20Container-9cf?style=flat-square">
   <img src="https://img.shields.io/badge/Auth-API%20key%20%7C%20Subscription-orange?style=flat-square">
@@ -32,7 +32,7 @@ LLMs** — via **API key** or local **subscription** (Claude Code / Codex / Gemi
 Grok) — recons the target, **intelligently selects only the agents that match the
 discovered surface**, runs them in parallel, **chains** findings into deeper
 impact, and **validates every claim by cross-model voting + tool-receipt
-grounding** before reporting. It ships **473 markdown agents** and a **Mission
+grounding** before reporting. It ships **479 markdown agents** and a **Mission
 Control TUI**.
 
 ### Engagement modes
@@ -62,6 +62,8 @@ Control TUI**.
 > reliable BOLA / IDOR / mass-assignment discovery.
 >
 > Also a deep **Active Directory** suite: 25+ host/infra skills and 7 multi-stage AD chains covering the full kill chain — initial access, enumeration (BloodHound), Kerberoasting/AS-REP, NTLM relay + coercion (PetitPotam/PrinterBug), delegation abuse (unconstrained/constrained/RBCD + S4U), AD CS (ESC1-ESC13), MSSQL linked-server pivoting, DCSync, cross-forest trust abuse (SID history/trust keys), and persistence (detect-and-report). Lockout- and state-aware, benign-proof-only.
+>
+> And a **vulnerability-research mode** (`whitebox --research` / `greybox --research`, REPL `/research`, or natural language): hand it a source repo and it hunts a NOVEL, CVE-reportable bug — pins the version/commit, researches known CVEs/advisories (SECURITY.md, CHANGELOG, GHSA, NVD, git history) to de-duplicate, does patch-diff variant analysis (incomplete-fix bypasses, sibling sinks, reintroductions), and gates strictly on novelty. 6 research skills.
 
 > **New in v4.2.0** — **binary / APK / IPA testing**: a new `mobile` mode analyses
 > a local artifact with 12 reverse-engineering skills (static binary triage,
@@ -87,7 +89,7 @@ Control TUI**.
 > (`--compliance pci-dss,hipaa,soc2`); an **internal-network / AD attack graph**;
 > a **reasoning-budget governor** (`--budget`); and **TypeSafe System One**
 > (`--typesafe on|off|auto`) as a calibrated confirmation + adjudication layer.
-> 27 deterministic per-CWE validators, 473 agents.
+> 27 deterministic per-CWE validators, 479 agents.
 
 - 🧠 **POMDP belief + anti-hallucination gate** — findings aren't booleans; a
   property-graph belief carries probabilities, and `may_assert` refuses to claim
@@ -240,7 +242,7 @@ Zero npm dependencies (Node built-ins only).
   out-of-scope) → Leads (the 435-agent board below) → Model & Run (provider/model picker,
   API-key vs. subscription toggle, votes/chain-depth/recon) → Review. Every engagement is named
   up front, so runs are identifiable in history instead of by raw target string.
-- **Lead board** — all 473 agents auto-categorized (Business Logic, Broken Access Control,
+- **Lead board** — all 479 agents auto-categorized (Business Logic, Broken Access Control,
   Injection, LLM Application, Auth & Session, SSRF & Network, Cloud & Infra, …). Toggle a single
   lead, a whole category (indeterminate when partially selected), or use **Select all / Clear
   all** — respects the active search filter. Leave everything off to let the harness's own
@@ -982,7 +984,7 @@ Every run writes a self-contained folder `runs/ns-<ts>-<target>/`:
 A reinforcement-learning reward store (`data/rl_state_rs.json`) biases agent
 selection on future runs.
 
-## Agent library — `agents_md/` (473)
+## Agent library — `agents_md/` (479)
 
 | Category | Count | Purpose |
 |----------|-------|---------|
