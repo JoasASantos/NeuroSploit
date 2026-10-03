@@ -697,9 +697,50 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
                     let ts: Vec<String> = arg.split(',').map(|x| x.trim()).filter(|x| !x.is_empty())
                         .map(|x| crate::rectify::rectify_url(x).unwrap_or_else(|| x.to_string()))
                         .collect();
-                    s.target = Some(ts.join(","));
-                    if ts.len() > 1 { println!("  targets ({}): {}", ts.len(), ts.join(", ")); println!("  \x1b[2m/run tests them sequentially, one report each\x1b[0m"); }
-                    else { println!("  target: {}", ts.first().cloned().unwrap_or_default()); }
+                    // A wildcard target (`*.zoom.us`) means "the whole domain":
+                    // authorize the apex AND every subdomain, and seed recon with
+                    // the apex (a literal `*.zoom.us` has no DNS record to probe),
+                    // so subdomain enumeration happens inside the wildcard scope.
+                    let mut wildcard_domain: Option<String> = None;
+                    let seeds: Vec<String> = ts.iter().map(|t| {
+                        let h = harness::scope::host_of(t);
+                        if let Some(apex) = h.strip_prefix("*.") {
+                            wildcard_domain = Some(apex.to_string());
+                            format!("https://{apex}")
+                        } else { t.clone() }
+                    }).collect();
+                    s.target = Some(seeds.join(","));
+                    // Re-derive the authorized scope from the NEW target unless a
+                    // verified capability sets the ceiling. Without this, a scope
+                    // left over from a previous session (persisted in the project
+                    // session) keeps denying every new target — the operator sets
+                    // /target zoom.us but the grant still says *.example.com. With
+                    // no capability, the target the operator picks IS the grant
+                    // (same model as `neurosploit run <url>`); explicit excludes
+                    // and guardrails are preserved.
+                    if s.capability.is_none() {
+                        let keep_exclude = s.policy.exclude.clone();
+                        let keep_soft = s.policy.soft.clone();
+                        let mut np = harness::scope::ScopePolicy::for_target(&seeds[0]);
+                        for extra in seeds.iter().skip(1) { np.allow(&harness::scope::host_of(extra)); }
+                        // Each wildcard entry widens the grant to all its subdomains.
+                        for t in &ts {
+                            let h = harness::scope::host_of(t);
+                            if h.starts_with("*.") { np.allow(&h); }
+                        }
+                        np.exclude = keep_exclude;
+                        np.soft = keep_soft;
+                        s.policy = np;
+                    }
+                    if ts.len() > 1 { println!("  targets ({}): {}", ts.len(), seeds.join(", ")); println!("  \x1b[2m/run tests them sequentially, one report each\x1b[0m"); }
+                    else { println!("  target: {}", seeds.first().cloned().unwrap_or_default()); }
+                    if let Some(d) = &wildcard_domain {
+                        println!("  \x1b[2mscope: *.{d} — apex + all subdomains authorized; recon will enumerate subdomains\x1b[0m");
+                        // Nudge recon toward active subdomain discovery for a domain-wide engagement.
+                        if s.recon_intensity < 3 { s.recon_intensity = 3; }
+                    } else if s.capability.is_none() {
+                        println!("  \x1b[2mscope: authorized against this target (add more with /inscope, exclude with /scope-out)\x1b[0m");
+                    }
                 }
             }
             "/timeout" | "/idle" => {

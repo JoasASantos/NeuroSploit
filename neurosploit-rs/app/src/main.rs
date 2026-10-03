@@ -1,4 +1,4 @@
-//! NeuroSploit v4.1.0 — interactive harness + CLI (`run` / `whitebox` / `agents` / `models`).
+//! NeuroSploit — interactive harness + CLI (`run` / `whitebox` / `agents` / `models`).
 
 mod rectify;
 mod repl;
@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 #[command(
     name = "neurosploit",
     version,
-    about = "NeuroSploit v4.1.0 — multi-model autonomous pentest harness",
-    long_about = "NeuroSploit v4.1.0 — a Rust multi-model harness that drives a pool of LLMs \
+    about = "NeuroSploit v4.2.1 — multi-model autonomous pentest harness",
+    long_about = "NeuroSploit v4.2.1 — a Rust multi-model harness that drives a pool of LLMs \
 (API key or local subscription: Claude/Codex/Gemini/Grok/OpenCode/Hermes) to autonomously test a target. \
 After recon it INTELLIGENTLY selects only the agents matching the discovered surface, runs \
 them in parallel, then validates every finding by cross-model voting before reporting.\n\n\
@@ -846,6 +846,18 @@ async fn main() -> anyhow::Result<()> {
         }
         Cmd::Run { url, models, max_agents, vote_n, chain_depth, recon, quick, offline, subscription, mcp, creds, focus, objective, out_of_scope, in_scope, scope_file, environment, policy, budget, token_limit, deep_test_limit, coverage_first, depth_first, sample_per_route, revalidate_poc, compliance, jira, only, verbose } => {
             let url = if url.starts_with("http") { url } else { format!("https://{url}") };
+            // A wildcard target (`*.zoom.us`) is domain-wide: seed recon with the
+            // apex (a literal `*.zoom.us` has no DNS record to probe) and widen
+            // the grant to every subdomain so enumeration stays in scope.
+            let mut in_scope = in_scope;
+            let url = {
+                let h = harness::scope::host_of(&url);
+                if let Some(apex) = h.strip_prefix("*.") {
+                    in_scope.push(format!("*.{apex}"));
+                    if recon < 3 { /* leave as set; recon arg is explicit here */ }
+                    format!("https://{apex}")
+                } else { url }
+            };
             let mut cfg = RunConfig::new(&url);
             cfg.max_agents = max_agents;
             cfg.vote_n = vote_n;
@@ -1266,7 +1278,7 @@ pub(crate) fn spawn_engagement(base: &Path, mut cfg: RunConfig, mcp: bool, mode:
     println!("  │  ua     : {ua}");
     write_status(&workdir, "running", &format!("\"target\":{:?}", cfg.target));
 
-    println!("  ┌─ NeuroSploit v4.1.0  ·  by Joas A Santos & Red Team Leaders");
+    println!("  ┌─ NeuroSploit v{}  ·  by Joas A Santos & Red Team Leaders", env!("CARGO_PKG_VERSION"));
     println!("  │  run id : {run_id}");
     println!("  │  target : {}", cfg.target);
     println!("  │  models : {}", cfg.models.join(", "));
