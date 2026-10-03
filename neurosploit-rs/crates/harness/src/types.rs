@@ -219,6 +219,13 @@ pub struct RunConfig {
     /// and gate strictly on novelty. Steers whitebox/greybox.
     #[serde(default)]
     pub research: bool,
+    /// Operator-declared authorization reference (e.g. a bug-bounty program URL
+    /// like https://hackerone.com/zoom-private). Recorded in the audit trail
+    /// and added to the rules-of-engagement context so the engagement is framed
+    /// as the authorized test it is. Does NOT widen scope — the grant still
+    /// comes from the target/scope-file/capability.
+    #[serde(default)]
+    pub authorization: Option<String>,
     /// Opt-in: when the app requires email confirmation to register, allow the
     /// agent to use a free disposable-inbox API (mail.tm) to read the code/link.
     /// Off by default. Account creation is still capped by the safety guardrail.
@@ -322,6 +329,7 @@ impl RunConfig {
             pinned: Vec::new(),
             chain_depth: 2,
             research: false,
+            authorization: None,
             proxy: None,
             user_agent: None,
             recon_intensity: 3,

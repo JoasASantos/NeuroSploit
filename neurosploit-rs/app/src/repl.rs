@@ -150,9 +150,9 @@ pub(crate) const ACCEPTED: &[&str] = &[
     "/context", "/continue", "/creds", "/diff", "/exclude", "/exit", "/expand", "/feed",
     "/finding", "/findings", "/focus", "/forget", "/full", "/go", "/goal", "/graph", "/guardrail", "/guardrails", "/help",
     "/history", "/idle", "/inscope", "/instructions", "/integration", "/integrations", "/key", "/log",
-    "/logs", "/mcp", "/memory", "/model", "/models", "/objective", "/objectives", "/observe",
+    "/authorization", "/authz", "/program", "/logs", "/mcp", "/memory", "/model", "/models", "/objective", "/objectives", "/observe",
     "/observe-only", "/offline",
-    "/onboard", "/only", "/oos", "/outofscope", "/policy", "/providers", "/proxy", "/research", "/quick", "/economy", "/eco", "/q", "/quit", "/recon",
+    "/onboard", "/only", "/oos", "/outofscope", "/policy", "/providers", "/proxy", "/class", "/classes", "/focus-class", "/research", "/quick", "/economy", "/eco", "/q", "/quit", "/recon",
     "/pause", "/repo", "/report", "/results", "/resume", "/retest", "/revalidate", "/run", "/runs",
     "/scope", "/scope-out", "/show", "/status", "/stop", "/sub", "/subscription", "/target",
     "/temp-email", "/tempmail", "/theme", "/timeout", "/ua", "/url", "/useragent", "/validate",
@@ -162,8 +162,8 @@ pub(crate) const ACCEPTED: &[&str] = &[
 /// All slash-commands, for Tab completion.
 const COMMANDS: &[&str] = &[
     "/help", "/onboard", "/show", "/config", "/providers", "/model", "/key", "/sub", "/target",
-    "/repo", "/auth", "/creds", "/focus", "/objective", "/scope-out", "/attach", "/context", "/mcp", "/offline",
-    "/research", "/quick", "/economy", "/eco", "/votes", "/chain", "/recon", "/tempmail", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/only", "/theme", "/clear", "/run", "/stop", "/pause", "/continue", "/runs", "/results", "/report",
+    "/authorization", "/class",     "/repo", "/auth", "/creds", "/focus", "/objective", "/scope-out", "/attach", "/context", "/mcp", "/offline",
+    "/class", "/research", "/quick", "/economy", "/eco", "/votes", "/chain", "/recon", "/tempmail", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/only", "/theme", "/clear", "/run", "/stop", "/pause", "/continue", "/runs", "/results", "/report",
     "/status", "/logs", "/diff", "/retest", "/validate", "/finding", "/expand", "/integrations",
     "/memory", "/forget", "/graph", "/inscope", "/observe", "/guardrail", "/policy",
     "/capability", "/audit", "/quit",
@@ -288,6 +288,7 @@ struct Session {
     instructions: Option<String>,
     /// Engagement objective / rules-of-engagement context (why + what matters).
     objective: Option<String>,
+    authorization: Option<String>,
     /// Explicit out-of-scope exclusions the agents must not touch.
     out_of_scope: Option<String>,
     /// Authorization boundary + guardrails, enforced by the harness.
@@ -334,6 +335,7 @@ impl Default for Session {
             creds: None,
             instructions: None,
             objective: None,
+            authorization: None,
             out_of_scope: None,
             policy: Default::default(),
             capability: None,
@@ -830,6 +832,16 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
                 s.objective = Some(arg.to_string());
                 println!("  objective set — steers what agents prioritise and what counts as impact");
             }
+            "/authorization" | "/authz" | "/program" => {
+                if arg == "clear" { s.authorization = None; println!("  authorization reference cleared"); continue; }
+                if arg.is_empty() {
+                    println!("  authorization: {}", s.authorization.clone().unwrap_or_else(|| "(none) — declare the program/authorization with /authorization <url-or-text>, e.g. https://hackerone.com/<program>".into()));
+                    println!("  \x1b[2mframes the run as the authorized test it is and is recorded; it does NOT widen scope — the grant still comes from /target, /scope-file or a capability.\x1b[0m");
+                    continue;
+                }
+                s.authorization = Some(arg.to_string());
+                println!("  \x1b[32m🔏 authorization recorded\x1b[0m — {} (stay within the program's scope & rules of engagement; scope boundary still enforced)", arg);
+            }
             "/scope-out" | "/outofscope" | "/oos" | "/exclude" => {
                 if arg == "clear" { s.out_of_scope = None; println!("  out-of-scope cleared"); continue; }
                 if arg.is_empty() {
@@ -888,6 +900,41 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
                 let lvl = |n: usize| ["", "quick", "standard", "deep", "exhaustive"].get(n).copied().unwrap_or("deep");
                 if arg.is_empty() { println!("  recon intensity: {} ({}) — set with /recon <1-4>  [1 quick · 2 standard · 3 deep · 4 exhaustive]", s.recon_intensity, lvl(s.recon_intensity)); }
                 else { s.recon_intensity = arg.parse::<usize>().unwrap_or(s.recon_intensity).clamp(1, 4); println!("  recon intensity: {} ({}) — more rounds, more enumeration, auto-installs tools", s.recon_intensity, lvl(s.recon_intensity)); }
+            }
+            "/class" | "/classes" | "/focus-class" => {
+                // Focus the run on specific vuln CLASSES (idor, sqli, xss, ssrf, …):
+                // expand each class to the matching agents from the library and pin
+                // them, so /run tests exactly those classes and skips recon-based
+                // selection. Friendlier than /only for "just hunt IDOR + SQLi".
+                if arg.trim().is_empty() {
+                    println!("  focus a run on vuln classes — /class idor,sqli,xss,ssrf  (pins the matching agents)");
+                    println!("  known: idor bola sqli xss ssrf csrf ssti xxe rce lfi rfi idor redirect ssrf deserialization");
+                    println!("         auth jwt graphql race upload cors prototype-pollution nosqli command-injection");
+                    println!("  current pinned: {}", if s.pinned.is_empty() { "(none)".into() } else { s.pinned.join(", ") });
+                } else if arg.trim() == "clear" {
+                    s.pinned.clear();
+                    println!("  classes cleared — back to recon-driven selection");
+                } else {
+                    let lib = agents::load(base);
+                    let classes: Vec<String> = arg.split([',', ';', ' ']).map(str::trim).filter(|x| !x.is_empty()).map(|c| c.to_lowercase()).collect();
+                    let mut pinned: Vec<String> = Vec::new();
+                    let mut unknown: Vec<String> = Vec::new();
+                    for c in &classes {
+                        let matched = agents_for_class(&lib, c);
+                        if matched.is_empty() { unknown.push(c.clone()); }
+                        for n in matched { if !pinned.contains(&n) { pinned.push(n); } }
+                    }
+                    if pinned.is_empty() {
+                        println!("  \x1b[33mno agents matched: {}\x1b[0m — try /agents list for names, or /only <agent>", classes.join(", "));
+                    } else {
+                        s.pinned = pinned;
+                        println!("  \x1b[1;36m🎯 focus set\x1b[0m — {} class(es): {} → {} agent(s): {}",
+                            classes.len() - unknown.len(), classes.iter().filter(|c| !unknown.contains(c)).cloned().collect::<Vec<_>>().join(", "),
+                            s.pinned.len(), s.pinned.join(", "));
+                        if !unknown.is_empty() { println!("  \x1b[33m⚠ no match for:\x1b[0m {} (ignored)", unknown.join(", ")); }
+                        println!("  \x1b[2m/run tests exactly these · /class clear to unpin\x1b[0m");
+                    }
+                }
             }
             "/research" => {
                 match arg.trim() {
@@ -1537,6 +1584,7 @@ async fn run(base: &Path, s: &Session, history: &mut Vec<RunRecord>) {
         }
     };
     cfg.objective = s.objective.clone();
+    cfg.authorization = s.authorization.clone();
     cfg.out_of_scope = s.out_of_scope.clone();
     cfg.scope = s.policy.clone();
     cfg.capability = s.capability.clone();
@@ -1621,6 +1669,7 @@ async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
     cfg.instructions = if s.attachments.is_empty() { s.instructions.clone() }
         else { Some(format!("{}\n\nATTACHED CONTEXT:\n{}", s.instructions.clone().unwrap_or_default(), s.attachments.join("\n\n"))) };
     cfg.objective = s.objective.clone();
+    cfg.authorization = s.authorization.clone();
     cfg.out_of_scope = s.out_of_scope.clone();
     cfg.scope = s.policy.clone();
     cfg.capability = s.capability.clone();
@@ -1840,6 +1889,55 @@ fn memory_cmd(s: &Session, arg: &str) {
 /// Project-local store: `<cwd>/.neurosploit/` so each project keeps its own
 /// session, run history and command history (resume on reopen). No DB needed —
 /// it's structured state, not semantic search.
+/// Expand a vuln-class keyword (idor, sqli, xss, ssrf, …) to the agent names in
+/// the library that implement it. Matches on the agent's name, title and CWE by
+/// a set of substrings per class, so `/class sqli` pins every SQLi agent
+/// (blind/error/time/union/login-bypass) without the operator naming each.
+fn agents_for_class(lib: &agents::Library, class: &str) -> Vec<String> {
+    // class -> substrings to look for in name/title/cwe (lowercased).
+    let needles: Vec<&str> = match class {
+        "idor" | "bola" => vec!["idor", "bola", "bfla", "access_control", "excessive_data"],
+        "sqli" | "sql" | "sql-injection" => vec!["sqli", "sql_inj", "orm_injection", "nosql"],
+        "nosqli" | "nosql" => vec!["nosql"],
+        "xss" => vec!["xss", "cross_site_script", "dom_clobber", "mutation_xss", "postmessage"],
+        "ssrf" => vec!["ssrf"],
+        "csrf" => vec!["csrf"],
+        "ssti" | "template-injection" => vec!["ssti", "template_injection"],
+        "xxe" => vec!["xxe"],
+        "rce" | "command-injection" | "cmdi" => vec!["command_injection", "rce", "code_injection", "expression_language", "deserialization", "log4shell"],
+        "lfi" | "path-traversal" | "traversal" => vec!["lfi", "path_traversal", "file_read", "arbitrary_file"],
+        "rfi" => vec!["rfi"],
+        "redirect" | "open-redirect" => vec!["redirect"],
+        "deserialization" | "deser" => vec!["deserialization", "pickle", "yaml_deser"],
+        "auth" | "authentication" => vec!["auth_bypass", "login_sqli", "jwt", "mfa", "oauth", "oidc", "session", "saml", "password_reset", "2fa", "two_factor", "webauthn"],
+        "jwt" => vec!["jwt"],
+        "graphql" => vec!["graphql"],
+        "race" | "race-condition" => vec!["race"],
+        "upload" | "file-upload" => vec!["file_upload", "upload"],
+        "cors" => vec!["cors"],
+        "prototype-pollution" | "prototype" | "pp" => vec!["prototype_pollution"],
+        "crlf" => vec!["crlf", "response_splitting", "header_injection"],
+        "ldap" => vec!["ldap_injection"],
+        "xpath" => vec!["xpath"],
+        "smuggling" | "request-smuggling" => vec!["smuggling", "desync", "h2c", "hop_by_hop"],
+        "cache" | "cache-poisoning" => vec!["cache"],
+        "secrets" | "exposure" => vec!["exposure", "secret", "disclosure", "env_file", "backup_file", "git_"],
+        "business-logic" | "logic" => vec!["business_logic", "price_manipulation", "coupon", "workflow_step", "idempotency"],
+        other => vec![other], // fall back to a raw substring match
+    };
+    let mut out: Vec<String> = Vec::new();
+    // Exploitation agents live in vulns/ (web classes), with ai/ and infra/ for
+    // the LLM and host/AD classes — the ones a black/grey-box run can pin.
+    let pool = lib.vulns.iter().chain(lib.ai.iter()).chain(lib.infra.iter());
+    for a in pool {
+        let hay = format!("{} {} {}", a.name, a.title, a.cwe).to_lowercase();
+        if needles.iter().any(|n| hay.contains(n)) && !out.contains(&a.name) {
+            out.push(a.name.clone());
+        }
+    }
+    out
+}
+
 pub(crate) fn proj_dir() -> std::path::PathBuf {
     let d = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")).join(".neurosploit");
     std::fs::create_dir_all(&d).ok();
@@ -2288,6 +2386,8 @@ fn help() {
     h("/votes <n>",         "number of validator votes per finding");
     h("/chain <n>",         "attack-chain depth (post-exploitation pivots; 0 = off)");
     h("/recon <1-4>",       "recon intensity: 1 quick · 2 standard · 3 deep · 4 exhaustive (installs tools)");
+    h("/class <a,b>",       "focus a run on vuln classes (idor,sqli,xss,ssrf,…) — pins the matching agents");
+    h("/authorization <url>", "declare the program/authorization (e.g. a bug-bounty URL) — recorded; does NOT widen scope");
     h("/research",          "whitebox/greybox: hunt a NOVEL, CVE-reportable bug (known-CVE dedup + patch-diff variant analysis)");
     h("/quick",             "economy preset: short, low-cost run (1 voter · 1 chain round · light recon · ≤6 agents)");
     h("/tempmail on|off",   "opt-in disposable inbox (mail.tm) to read a register confirmation code");

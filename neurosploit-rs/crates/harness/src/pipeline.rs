@@ -101,6 +101,15 @@ Base everything on real observed responses — never assume. Reply with a COMPAC
 /// recon/exploit prompts so the engagement is steered as the user asked.
 fn operator_directives(cfg: &RunConfig) -> String {
     let mut s = String::new();
+    if let Some(a) = cfg.authorization.as_deref().filter(|x| !x.trim().is_empty()) {
+        // The operator's declared authorization for this engagement (e.g. a
+        // bug-bounty program). Stated as context, within the enforced scope —
+        // it frames the test as the authorized one it is. Stay within the
+        // program's own rules of engagement (no out-of-scope techniques, no
+        // disruption of production); if a technique would violate typical RoE,
+        // report it as a lead instead of running it.
+        s.push_str(&format!("AUTHORIZATION — this is an authorized security test under: {a}. Act within that program's scope and rules of engagement; the enforced scope boundary still applies, and anything that would break a program's standard RoE (DoS, mass account creation, data destruction, out-of-scope hosts) must be reported as a lead rather than executed.\n"));
+    }
     if let Some(obj) = cfg.objective.as_deref().filter(|x| !x.trim().is_empty()) {
         s.push_str(&format!("ENGAGEMENT OBJECTIVE — the goal and context of this test; let it shape what you prioritise and what counts as impact: {obj}\n"));
     }
@@ -1143,8 +1152,18 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
                         // malformed — which teaches the operator to ignore a
                         // warning that sometimes means a real parse failure.
                         if f.is_empty() && !text.trim().is_empty() && !reported_nothing(&text) {
-                            let tail: String = text.chars().rev().take(120).collect::<String>().chars().rev().collect();
-                            let _ = txc.send(format!("⚠ agent {} returned text but 0 parseable findings (model may have produced malformed JSON). Tail: {:?}", ag.name, tail)).await;
+                            if looks_like_refusal(&text) {
+                                // The model declined the technique — not a parse
+                                // failure. Say so plainly so the operator knows
+                                // WHY this agent found nothing (target read as
+                                // production, or technique out of RoE) and can
+                                // re-scope / adjust rather than chase a non-bug.
+                                let reason: String = text.trim().chars().take(180).collect();
+                                let _ = txc.send(format!("notify: 🚫 agent {} DECLINED this technique (model safety/RoE pushback, not a finding and not a parse error) — \"{}…\"", ag.name, reason)).await;
+                            } else {
+                                let tail: String = text.chars().rev().take(120).collect::<String>().chars().rev().collect();
+                                let _ = txc.send(format!("⚠ agent {} returned text but 0 parseable findings (model may have produced malformed JSON). Tail: {:?}", ag.name, tail)).await;
+                            }
                         }
                         // Live findings feed: surface each candidate the moment it appears.
                         for c in &f {
@@ -2968,6 +2987,33 @@ fn reported_nothing(text: &str) -> bool {
     }
 }
 
+/// A model reply that is a REFUSAL / safety pushback rather than a result or a
+/// parse failure — the model declined to run the technique (often because it
+/// read the target as production, or the technique as out-of-scope). Surfacing
+/// this as its own state stops it being hidden under "0 parseable findings",
+/// and tells the operator the real reason an agent produced nothing.
+fn looks_like_refusal(text: &str) -> bool {
+    let t = text.trim();
+    if t.is_empty() || t.starts_with('[') || t.starts_with('{') { return false; }
+    let low = t.to_lowercase();
+    // Phrases that signal the model is declining / redirecting, not reporting.
+    const SIGNS: &[&str] = &[
+        "i can't", "i cannot", "i won't", "i will not", "i'm not able",
+        "i am not able", "i'm unable", "cannot help with", "can't help with",
+        "not comfortable", "i must decline", "i have to decline", "won't be able to",
+        "against a production", "at a production service", "disrupt real users",
+        "that doesn't make it safe", "isn't something i can", "is not something i can",
+        "without explicit authorization", "without proper authorization",
+        "spin up a local", "run this exact playbook against it instead",
+        "i'd recommend testing against", "recommend a local", "use a test environment",
+        "this would be", "não posso", "não vou", "não é algo que", "ambiente de teste",
+    ];
+    let hits = SIGNS.iter().filter(|s| low.contains(**s)).count();
+    // Prose (no JSON) that trips a refusal phrase and is short-ish reads as a
+    // decline. Require a clear phrase; two independent ones removes edge cases.
+    hits >= 1 && !reported_nothing(text)
+}
+
 /// Last `n` characters of `s`, on a char boundary (diagnostics only).
 fn tail(s: &str, n: usize) -> String {
     let total = s.chars().count();
@@ -3030,11 +3076,15 @@ fn extract_findings(text: &str, agent: &str) -> Vec<Finding> {
         None => {
             let t = text.trim();
             if !t.is_empty() && t != "[]" {
-                eprintln!(
-                    "[extract_findings] agent {agent}: no parseable JSON in model reply (len={}); raw tail: {:?}",
-                    text.len(),
-                    tail(text, 200)
-                );
+                if looks_like_refusal(text) {
+                    eprintln!("[extract_findings] agent {agent}: model DECLINED the technique (safety/RoE pushback, not a parse failure): {:?}", tail(text, 200));
+                } else {
+                    eprintln!(
+                        "[extract_findings] agent {agent}: no parseable JSON in model reply (len={}); raw tail: {:?}",
+                        text.len(),
+                        tail(text, 200)
+                    );
+                }
             }
             return vec![];
         }
@@ -4348,6 +4398,18 @@ mod extraction_tests {
         assert!(reported_nothing("{\"findings\":[]}"));
         assert!(reported_nothing("```json\n{\"vulnerabilities\": []}\n```"));
         assert!(extract_findings("{\"findings\":[]}", "a").is_empty());
+    }
+
+    #[test]
+    fn a_model_decline_is_detected_as_refusal_not_a_parse_error() {
+        // The exact shape seen on a live run: a prose reply declining the technique.
+        let decline = "I can't run mass account creation / credential-stuffing loads at a production service — that is state-changing and can disrupt real users. Want me to spin up a local Juice Shop and run this exact playbook against it instead?";
+        assert!(looks_like_refusal(decline));
+        // A real findings array is NOT a refusal.
+        assert!(!looks_like_refusal("[{\"title\":\"SQLi\",\"severity\":\"High\"}]"));
+        // An honest empty result is NOT a refusal.
+        assert!(!looks_like_refusal("[]"));
+        assert!(!looks_like_refusal("No vulnerabilities were found in the tested endpoints."));
     }
 
     /// The bare-array happy path for agent selection.
