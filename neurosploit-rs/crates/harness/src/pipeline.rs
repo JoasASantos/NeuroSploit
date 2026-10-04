@@ -345,16 +345,32 @@ pub fn default_user_agent() -> String {
         env!("CARGO_PKG_VERSION"))
 }
 
+/// A realistic current-browser User-Agent. Use this when the identifying UA
+/// changes what the target returns — a WAF/CDN (Cloudflare, Akamai, …) commonly
+/// rate-limits, challenges, or serves different content to a self-declared
+/// scanner UA, which causes FALSE NEGATIVES. Attribution is still carried by the
+/// `X-NeuroSploit-Scan` header, so the scan stays identifiable to defenders even
+/// with a browser UA.
+pub fn realistic_user_agent() -> &'static str {
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+}
+
 /// Identify NeuroSploit traffic at the request layer (User-Agent + a marker
 /// header). Overridable via `NEUROSPLOIT_UA`.
 fn ua_line() -> String {
     let ua = std::env::var("NEUROSPLOIT_UA").ok().filter(|v| !v.trim().is_empty())
         .unwrap_or_else(default_user_agent);
+    let browser = realistic_user_agent();
     format!(
-        "IDENTIFY (attribution — do NOT strip): tag every HTTP request as NeuroSploit so the scan is \
-         attributable — add `-A \"{ua}\"` (User-Agent) AND `-H \"X-NeuroSploit-Scan: {}\"` to curl. Only omit \
-         when a specific test requires a different/absent User-Agent.\n         ",
-        env!("CARGO_PKG_VERSION"))
+        "IDENTIFY & UA STRATEGY (attribution lives in the HEADER, not just the UA): add \
+         `-H \"X-NeuroSploit-Scan: {ver}\"` to EVERY request — that is what keeps the scan attributable. \
+         For the User-Agent, start with `-A \"{ua}\"`. BUT: if the target sits behind a WAF/CDN \
+         (Cloudflare, Akamai, …) and the scanner UA gets blocked, challenged, rate-limited, or returns \
+         DIFFERENT content than a browser would, SWITCH to a realistic browser UA `-A \"{browser}\"` — a \
+         self-declaring scanner UA causes FALSE NEGATIVES, and the X-NeuroSploit-Scan header keeps you \
+         attributable regardless. Compare a probe with each UA early; if they differ, use the browser UA \
+         for the rest of the run. Keep the UA CONSISTENT within a session unless a test needs otherwise.\n         ",
+        ver = env!("CARGO_PKG_VERSION"))
 }
 
 /// Attribution stamped into every finding's impact so the provenance travels
@@ -597,6 +613,18 @@ const DECISION_DOCTRINE: &str = "DECIDE WHERE TO ATTACK (analyse, then act):\n\
 - Self-register when no creds are given: if the app allows sign-up, ANALYZE the register form (probe `form_details` has action/method/fields) and CREATE one clearly-marked benign test account (`nrsplt_<rand>@example.test`) — with curl (GET for CSRF+cookies, then POST the fields) or the Playwright browser for JS-rendered/multi-step forms — then log in and REUSE that session for authenticated testing. Register a second account only when a test needs two users. Non-destructive: one account, no mass-registration/spam; at signup also try mass-assignment (`role=admin`/`isAdmin`) and report it if accepted.\n\
 - Build PoCs when needed: for issues that need an artifact to prove (clickjacking → an HTML page that frames the target; CSRF → an auto-submitting HTML form; a multi-step or timing exploit → a script), WRITE the PoC to the run's PoC dir, run/validate it, and cite the file in the evidence.\n\
 - Test control BYPASSES: when something returns 401/403/redirect or is 'blocked', try to bypass it (verb tampering, path/case/encoding normalization, X-Original-URL / X-Rewrite-URL / X-Forwarded-* headers, missing-vs-invalid token, direct object/API access) and confirm the bypass with the two requests.\n\n";
+
+/// FREE EXPLORATION doctrine: the agent is NOT limited to its named vuln class.
+/// This is what stops a run collapsing into "only SQLi": every exploit agent is
+/// told to hunt the whole application with its own judgment and report ANY class
+/// it can prove — especially the high-value auth/identity surface that a
+/// class-boxed run skips. Injected into every exploit prompt.
+const EXPLORE_DOCTRINE: &str = "HUNT THE WHOLE APP — DON'T STAY BOXED IN ONE VULN CLASS:\n\
+- Your agent name is a STARTING point, not a cage. Use your own judgment: map what this application actually DOES and attack the highest-value thing you can see, then report EVERY issue you can prove — of ANY class (not just the one you were launched for). A real tester follows the app, not a checklist.\n\
+- AUTHENTICATION & IDENTITY is usually where the high/critical bugs live — make it a FIRST-CLASS target, not an afterthought: enumerate the login, signup, password-reset, email/phone-verification, MFA/2FA, SSO and session flows. Probe OAuth/OIDC/SAML end-to-end: the authorize/redirect_uri/state/nonce/PKCE parameters (open redirect, redirect_uri bypass, missing/replayable state → CSRF, PKCE downgrade, `code`/`token` leakage via Referer or an open redirect), token handling (JWT alg/kid/jku/jwk confusion, weak secret, no exp check, audience confusion), and refresh/logout. Test password reset for host-header poisoning and token predictability; test MFA for response-flag bypass and step-skipping.\n\
+- BUSINESS LOGIC & multi-step flows: reason about what the app is FOR (accounts, purchases, entitlements, content) and chase logic abuse — price/quantity/coupon tampering, workflow/state-machine skips (skip payment/verification), IDOR/BOLA across tenants, mass-assignment of privileged fields, race conditions on balance/stock. These rarely match a single skill and are exactly what an LLM should DIRECT itself toward.\n\
+- CLIENT-SIDE and BACK-END both: DOM/stored/reflected XSS, postMessage, prototype pollution, CORS, clickjacking on the front; injection, SSRF, deserialization, access control, SSTI, file handling on the back. Pull API routes from JS bundles/source-maps and attack the API directly, not just the rendered page.\n\
+- When your assigned class yields nothing, PIVOT: say so briefly in your reasoning and spend the budget on the strongest direction the recon/responses actually point to. Zero findings in your class is fine; zero exploration is not.\n\n";
 
 /// CHAIN doctrine: turn ANY foothold into the next step. A primitive→next-step
 /// playbook (not an exhaustive script) so the agent always has a concrete pivot
@@ -1114,7 +1142,7 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
                 let user = format!(
                     "AUTHORIZED engagement — you have explicit permission to test {target}. \
                      Do not ask for confirmation — proceed and PROVE each issue.\n\n\
-                     {directives}{react}{depth}{decision}{spa}{safety}{ops}{doctrine}{shots}{body}\n\nWhen done, reply with ONLY a JSON array of confirmed findings (may be empty []). \
+                     {directives}{react}{depth}{decision}{explore}{spa}{safety}{ops}{doctrine}{shots}{body}\n\nWhen done, reply with ONLY a JSON array of confirmed findings (may be empty []). \
                      Each item: {{id,title,severity,cwe,endpoint,location,payload,evidence,repro_steps,impact,remediation,confidence,auth_context,account,secret,screenshots}}. \
                      Write for a developer who has never seen this app and has to fix it today:\n\
                      - `location`: EXACTLY where it is — the parameter, form field, header, JSON key, or flow step (e.g. \"POST /api/orders, JSON field `role`\"). An endpoint alone sends them hunting.\n\
@@ -1136,7 +1164,7 @@ pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<Str
                     target = target,
                     directives = directives,
                     react = REACT_DOCTRINE,
-                    depth = DEPTH_DOCTRINE, decision = DECISION_DOCTRINE, spa = spa, safety = SAFETY_DOCTRINE,
+                    depth = DEPTH_DOCTRINE, decision = DECISION_DOCTRINE, spa = spa, safety = SAFETY_DOCTRINE, explore = EXPLORE_DOCTRINE,
                     ops = ops,
                     doctrine = tool_doctrine(mcp_on),
                     shots = shots,
@@ -1632,7 +1660,7 @@ fn extract_chain(text: &str, agent: &str) -> (Vec<Finding>, Vec<String>) {
 
 // --------------------------------------------------------------------------- shared
 
-const SELECT_SYS: &str = "You are a penetration-test orchestrator. Given recon of a target and a catalog of specialist agents, choose ONLY the agents whose preconditions clearly match the target's attack surface. Be selective. Reply with a JSON array of agent names (strings) drawn exactly from the catalog. No prose.";
+const SELECT_SYS: &str = "You are a penetration-test orchestrator. Given recon of a target and a catalog of specialist agents, choose the agents whose preconditions match the target's attack surface. Be selective, but COVER THE SURFACE — do NOT collapse the run into one vuln family. Rules: (1) pick a DIVERSE set spanning the classes the recon supports, not 4 variants of the same bug; (2) whenever recon shows ANY authentication/login/signup/account/session surface, an OAuth/OIDC/SSO/SAML flow, or JWTs/tokens, you MUST include the relevant auth/identity agents (login/auth-bypass, oauth/oidc misconfig, jwt, session, password-reset, mfa) — that surface holds the high-impact bugs and is the one most often missed; (3) include business-logic / access-control / IDOR-BOLA agents whenever there is an authenticated or multi-step flow; (4) cover BOTH client-side and back-end classes when both surfaces exist. Reply with a JSON array of agent names (strings) drawn exactly from the catalog. No prose.";
 
 /// Ask the model which agents to run for this recon. Returns chosen agent names
 /// (empty on failure → caller falls back to RL-ranked agents).

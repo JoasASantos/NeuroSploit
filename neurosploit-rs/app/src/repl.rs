@@ -769,9 +769,19 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
             }
             "/ua" | "/useragent" => {
                 match arg {
-                    "" => println!("  user-agent: {}  \x1b[2m(identifies NeuroSploit traffic)\x1b[0m",
-                        s.user_agent.clone().unwrap_or_else(harness::pipeline::default_user_agent)),
-                    "default" | "reset" => { s.user_agent = None; println!("  user-agent reset to default (NeuroSploit)"); }
+                    "" => {
+                        println!("  user-agent: {}  \x1b[2m(attribution is also carried by the X-NeuroSploit-Scan header)\x1b[0m",
+                            s.user_agent.clone().unwrap_or_else(harness::pipeline::default_user_agent));
+                        println!("  \x1b[2m/ua browser  → a real Chrome UA (recommended behind a WAF/CDN — a scanner UA can be blocked/challenged and cause false negatives)\x1b[0m");
+                        println!("  \x1b[2m/ua identify → the NeuroSploit UA (max transparency; some programs require it) · /ua <custom> · /ua reset\x1b[0m");
+                    }
+                    "default" | "reset" | "identify" => { s.user_agent = None; println!("  user-agent: NeuroSploit identifying UA (most transparent — defenders see the scan in the UA)"); }
+                    "browser" | "chrome" | "realistic" | "stealth" => {
+                        let ua = harness::pipeline::realistic_user_agent().to_string();
+                        s.user_agent = Some(ua.clone());
+                        println!("  \x1b[32muser-agent: realistic browser\x1b[0m — {ua}");
+                        println!("  \x1b[2mbetter test quality behind a WAF/CDN; the scan stays attributable via the X-NeuroSploit-Scan header\x1b[0m");
+                    }
                     u => { s.user_agent = Some(u.to_string()); println!("  user-agent: {u}"); }
                 }
             }
