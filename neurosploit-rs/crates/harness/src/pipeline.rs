@@ -614,6 +614,16 @@ const DECISION_DOCTRINE: &str = "DECIDE WHERE TO ATTACK (analyse, then act):\n\
 - Build PoCs when needed: for issues that need an artifact to prove (clickjacking → an HTML page that frames the target; CSRF → an auto-submitting HTML form; a multi-step or timing exploit → a script), WRITE the PoC to the run's PoC dir, run/validate it, and cite the file in the evidence.\n\
 - Test control BYPASSES: when something returns 401/403/redirect or is 'blocked', try to bypass it (verb tampering, path/case/encoding normalization, X-Original-URL / X-Rewrite-URL / X-Forwarded-* headers, missing-vs-invalid token, direct object/API access) and confirm the bypass with the two requests.\n\n";
 
+/// Broad default objective for a black-box WEB engagement (used when the
+/// operator set none). Grounds the run in the recognised web standards and asks
+/// for full-breadth coverage so it traverses every applicable class, then goes
+/// deep where signal is strong — without drifting off web (mobile/binary are
+/// separate modes).
+const DEFAULT_WEB_OBJECTIVE: &str = "Comprehensive black-box WEB application penetration test. \
+Methodology: OWASP Top 10 (2021), OWASP ASVS verification requirements, the OWASP Web Security Testing Guide, and CWE for classification. \
+COVER THE WHOLE SURFACE — traverse every web vulnerability class that the recon makes applicable (injection: SQL/NoSQL/command/SSTI/LDAP/XPath; XSS reflected/stored/DOM; access control: IDOR/BOLA/BFLA/privilege escalation/forced browsing; authentication & session: login, signup, password reset, MFA, OAuth/OIDC/SAML, JWT; SSRF; XXE; insecure deserialization; CSRF; open redirect; CORS; file upload/download & path traversal; business-logic & multi-step flow abuse; mass assignment; request smuggling; info disclosure & security misconfiguration; cryptographic failures; known-CVE components) — do not stop at the first class that yields something. \
+Then go DEEP where the signal is strong: prove impact with a real receipt, chain footholds into higher impact, and prioritise the authenticated surface and less-hardened subdomains. This is a WEB engagement only — do not attempt mobile/binary analysis.";
+
 /// FREE EXPLORATION doctrine: the agent is NOT limited to its named vuln class.
 /// This is what stops a run collapsing into "only SQLi": every exploit agent is
 /// told to hunt the whole application with its own judgment and report ANY class
@@ -777,8 +787,18 @@ fn write_meta(cfg: &RunConfig, p: &crate::probe::Probe, asset: &str) {
 }
 
 /// Black-box web engagement: recon → parallel exploit → N-model vote → report.
-pub async fn run(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<String>) -> RunOutput {
+pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<String>) -> RunOutput {
     pool.set_progress(tx.clone());
+
+    // A broad DEFAULT objective for a black-box web engagement when the operator
+    // set none — so a plain `/run` already does a comprehensive web assessment
+    // grounded in OWASP Top 10 / ASVS / CWE and traverses every applicable web
+    // vuln class, instead of stopping at the first thing it finds. Web-only by
+    // construction: this `run` path loads only the web vuln agents (mobile/APK
+    // and container are separate modes), so it never drifts into mobile/binary.
+    if cfg.objective.as_deref().map(|o| o.trim().is_empty()).unwrap_or(true) {
+        cfg.objective = Some(DEFAULT_WEB_OBJECTIVE.to_string());
+    }
 
     // Authorization first. A supplied token that does not verify ends the run
     // here: proceeding would mean acting on a grant nobody can prove was

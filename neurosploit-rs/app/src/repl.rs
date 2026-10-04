@@ -927,7 +927,18 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
                             // classes — so one YAML defines the whole engagement.
                             if let Ok(text) = std::fs::read_to_string(path) {
                                 let meta = read_engagement_meta(&text);
-                                if let Some(t) = meta.target { if s.policy.in_hard_scope(&t) { s.target = Some(t.clone()); println!("  \x1b[2m· target: {t}\x1b[0m"); } else { println!("  \x1b[33m⚠ file's target {t} is outside its own scope — ignored\x1b[0m"); } }
+                                if let Some(t) = meta.target {
+                                    if s.policy.in_hard_scope(&t) {
+                                        // A wildcard target (`*.nasa.gov`) is not a
+                                        // host to probe — seed with the apex, since
+                                        // the scope already authorizes the subdomains.
+                                        let host = harness::scope::host_of(&t);
+                                        let seed = if let Some(apex) = host.strip_prefix("*.") { format!("https://{apex}") }
+                                                   else if t.contains("://") { t.clone() } else { format!("https://{host}") };
+                                        s.target = Some(seed.clone());
+                                        println!("  \x1b[2m· target: {seed}\x1b[0m");
+                                    } else { println!("  \x1b[33m⚠ file's target {t} is outside its own scope — ignored\x1b[0m"); }
+                                }
                                 if !meta.models.is_empty() { s.models = meta.models.clone(); println!("  \x1b[2m· models: {}\x1b[0m", meta.models.join(", ")); }
                                 if let Some(f) = meta.focus { s.instructions = Some(f.clone()); println!("  \x1b[2m· focus: {f}\x1b[0m"); }
                                 if let Some(o) = meta.objective { s.objective = Some(o.clone()); println!("  \x1b[2m· objective: {o}\x1b[0m"); }

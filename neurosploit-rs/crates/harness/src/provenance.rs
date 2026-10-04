@@ -48,7 +48,7 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-static PROCESS: std::sync::OnceLock<Provenance> = std::sync::OnceLock::new();
+static PROCESS: std::sync::RwLock<Option<Provenance>> = std::sync::RwLock::new(None);
 
 /// Identity of one build of the engine, plus the run currently using it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,15 +121,18 @@ impl Provenance {
     /// made by that process agrees on which engagement it belongs to. Reading
     /// it before it is bound is fine — it mints an ad-hoc identity rather than
     /// failing, because an unattributed artifact is worse than a vague one.
-    pub fn process() -> &'static Provenance {
-        PROCESS.get_or_init(|| Provenance::for_run(""))
+    pub fn process() -> Provenance {
+        PROCESS.read().ok().and_then(|g| g.clone()).unwrap_or_else(|| Provenance::for_run(""))
     }
 
-    /// Bind this process to a run. First call wins: a run's identity must not
-    /// change underneath the markers already minted against it.
-    pub fn bind_run(run_id: &str) -> &'static Provenance {
-        let _ = PROCESS.set(Provenance::for_run(run_id));
-        Provenance::process()
+    /// Bind this process to a run. In the REPL many engagements run in one
+    /// process, so this REPLACES the binding each run — otherwise every run
+    /// after the first would mint markers (and the provenance line) with the
+    /// FIRST run's id. Markers minted within a run use that run's provenance.
+    pub fn bind_run(run_id: &str) -> Provenance {
+        let p = Provenance::for_run(run_id);
+        if let Ok(mut g) = PROCESS.write() { *g = Some(p.clone()); }
+        p
     }
 
     /// Short identity string: what goes in a footer or a log line.
@@ -393,14 +396,18 @@ mod tests {
     }
 
     #[test]
-    fn process_provenance_is_stable_once_bound() {
-        let a = Provenance::process().run.clone();
-        let b = Provenance::process().run.clone();
-        assert_eq!(a, b, "markers minted in one process must agree on the run");
-        // Binding after the fact must not move the ground under markers that
-        // already went out.
-        let c = Provenance::bind_run("ns-9-other").run.clone();
-        assert_eq!(a, c, "first identity wins");
+    fn bind_run_rebinds_per_run_so_the_repl_gets_each_runs_id() {
+        // The REPL runs many engagements in one process; each run must bind its
+        // OWN id, or every run after the first mints markers/the provenance line
+        // with the FIRST run's id (the stale-provenance bug).
+        let a = Provenance::bind_run("ns-1-alpha").run.clone();
+        assert_eq!(a, "ns-1-alpha");
+        assert_eq!(Provenance::process().run, "ns-1-alpha", "process() reflects the bound run");
+        let b = Provenance::bind_run("ns-2-bravo").run.clone();
+        assert_eq!(b, "ns-2-bravo");
+        assert_eq!(Provenance::process().run, "ns-2-bravo", "a later run rebinds");
+        // The build fingerprint stays stable across rebinds.
+        assert_eq!(Provenance::process().build, Provenance::build_fingerprint());
     }
 
     #[test]

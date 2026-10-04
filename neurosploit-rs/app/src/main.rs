@@ -1925,8 +1925,9 @@ fn handle_provenance(cmd: ProvCmd) -> anyhow::Result<()> {
             }
             // A marker carrying this build's fingerprint came from this binary;
             // one that does not still came from NeuroSploit, just elsewhere.
-            let mine = marks.iter().filter(|m| m.contains(&Provenance::process().build[..6])).count();
-            println!("  \x1b[2m{mine} of them minted by this build ({}), the rest by another\x1b[0m", Provenance::process().build);
+            let bld = Provenance::process().build;
+            let mine = marks.iter().filter(|m| m.contains(&bld[..6.min(bld.len())])).count();
+            println!("  \x1b[2m{mine} of them minted by this build ({bld}), the rest by another\x1b[0m");
         }
         ProvCmd::Verify { dir } => {
             let dir = std::path::Path::new(&dir);

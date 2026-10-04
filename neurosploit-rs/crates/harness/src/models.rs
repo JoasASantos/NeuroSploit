@@ -68,8 +68,11 @@ pub fn providers() -> Vec<Provider> {
         // or (with --subscription) driven through the `hermes` CLI
         // (NousResearch/hermes-agent) on the user's OAuth Portal login
         // (`hermes setup --portal`) — 300+ routed frontier models, no key.
+        // The Hermes portal routes 300+ models, so the model name passes through
+        // (`hermes chat -m <model> --provider nous`): `nous:qwen3.8-max` and other
+        // routed models work even though only the Hermes-family defaults are listed.
         Provider { key: "nous", label: "Nous Research (Hermes)", base_url: "https://inference-api.nousresearch.com/v1", env_key: "NOUS_API_KEY", kind: "cli",
-            models: vec!["Hermes-4-405B", "Hermes-4-70B", "DeepHermes-3-Mistral-24B-Preview"] },
+            models: vec!["Hermes-4-405B", "Hermes-4-70B", "DeepHermes-3-Mistral-24B-Preview", "qwen3.8-max", "qwen3.8-omni-flash"] },
         // Azure OpenAI (OpenAI-compatible). Set AZURE_OPENAI_ENDPOINT (e.g.
         // https://<resource>.openai.azure.com), optionally AZURE_OPENAI_API_VERSION
         // (default 2024-10-21), and use `azure:<your-deployment-name>` as the model.
