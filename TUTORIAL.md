@@ -535,6 +535,20 @@ focus on auth, OAuth/OIDC, IDOR/BOLA and business logic on the less-hardened sub
 /run
 ```
 
+**A broad focus to cover the whole surface** (paste as `/focus …`, or just type
+it — any language). Use this when you want maximum breadth rather than a narrow
+hunt; it complements the default OWASP/ASVS/CWE objective:
+
+```
+/focus Cover the full web attack surface and prove impact: map every route/endpoint/parameter from the app and its JS bundles, then test each applicable class — injection (SQL/NoSQL/command/SSTI/LDAP/XPath), XSS (reflected/stored/DOM), access control (IDOR/BOLA/BFLA/privesc/forced browsing), authentication & session (login, signup, password reset, MFA, OAuth/OIDC/SAML, JWT alg/kid/jku), SSRF, XXE, insecure deserialization, CSRF, open redirect, CORS, file upload/download & path traversal, business-logic & multi-step flow abuse, mass assignment, request smuggling, info disclosure & security misconfiguration, cryptographic failures, and known-CVE components. Prioritise the authenticated surface and less-hardened subdomains, chain footholds into higher impact, and confirm every finding with a reproducible request/response receipt.
+```
+
+> **objective vs focus.** The *objective* (set by default, OWASP/ASVS/CWE) is the
+> framing — *why* the test runs and what counts as impact. The *focus* steers
+> *where* effort goes. Neither boxes the run into one class — the agents still
+> report any class they can prove; these just prioritise. To deliberately narrow
+> to specific classes, use `/class idor,ssrf,auth`.
+
 Other high-value knobs:
 
 | Command | When to use |
