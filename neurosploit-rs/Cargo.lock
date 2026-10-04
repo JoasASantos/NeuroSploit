@@ -940,7 +940,7 @@ dependencies = [
 
 [[package]]
 name = "neurosploit"
-version = "4.2.2"
+version = "4.2.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -957,7 +957,7 @@ dependencies = [
 
 [[package]]
 name = "neurosploit-harness"
-version = "4.2.2"
+version = "4.2.3"
 dependencies = [
  "anyhow",
  "base64",

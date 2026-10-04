@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * NeuroSploit v4.2.2 — web console backend.
+ * NeuroSploit v4.2.3 — web console backend.
  *
  * Zero-dependency Node HTTP server that:
  *  - serves the static SPA in ./public
@@ -1487,7 +1487,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && p === '/api/meta') {
-      return sendJson(res, 200, { version: "4.2.2", binary: BIN, root: ROOT });
+      return sendJson(res, 200, { version: "4.2.3", binary: BIN, root: ROOT });
     }
 
     // ---- providers / API keys (in-memory only, never persisted) ----
@@ -1521,7 +1521,7 @@ const server = http.createServer(async (req, res) => {
 loadPersistedJobs();
 
 server.listen(PORT, () => {
-  console.log(`NeuroSploit v4.2.2 web console → http://localhost:${PORT}`);
+  console.log(`NeuroSploit v4.2.3 web console → http://localhost:${PORT}`);
   console.log(`  binary : ${BIN || '(not found — build neurosploit-rs first)'}`);
   console.log(`  agents : ${AGENTS_DIR}`);
   console.log(`  runs   : ${RUNS_DIR}`);
