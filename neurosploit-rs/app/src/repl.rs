@@ -1851,6 +1851,7 @@ async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
         let crate::Spawned { task, mut rx, workdir, .. } = sp;
         let mut last_saved = 0usize;
         let mut last_activity = Instant::now(); // last sign of PROGRESS (any activity)
+        let mut last_tool_print = Instant::now() - std::time::Duration::from_secs(1); // throttle gate for ⌘/🌐/📄 lines
         let mut idle_fired = false;
         let mut tool_events = 0usize; // exec/net/read/browser activity seen
         let mut exploiting = false;   // guardrail only arms once exploitation starts
@@ -1873,7 +1874,26 @@ async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
                     // open (it would corrupt the picker); the line is still in the
                     // feed for /logs once the picker closes.
                     if !quiet_task.load(Ordering::Relaxed) {
-                        if let Some(out) = crate::render_compact(&line) { let _ = printer.print(out); }
+                        // Throttle the high-volume tool-activity lines (exec/net/read —
+                        // the ⌘/🌐/📄 flood). Each printed line makes rustyline REDRAW
+                        // the input line, so dozens/sec of recon/curl echoes make the
+                        // arrow keys and backspace feel stuck while you type. Rate-limit
+                        // just these (they stay in the feed for /logs); findings, phase,
+                        // votes and notices always print immediately.
+                        let is_tool = {
+                            let t = line.split_once(": ").map(|(k, _)| k).unwrap_or("");
+                            let t = t.rsplit(' ').next().unwrap_or(t); // strip @label prefix
+                            matches!(t, "exec" | "danger" | "net" | "read")
+                        };
+                        let show = if is_tool {
+                            if last_tool_print.elapsed() >= std::time::Duration::from_millis(200) {
+                                last_tool_print = Instant::now();
+                                true
+                            } else { false }
+                        } else { true };
+                        if show {
+                            if let Some(out) = crate::render_compact(&line) { let _ = printer.print(out); }
+                        }
                     }
                     // Checkpoint on each new finding.
                     let snap = {
