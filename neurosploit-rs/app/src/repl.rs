@@ -2507,9 +2507,22 @@ fn show(s: &Session) {
     println!("  │  user-agent: {}", s.user_agent.clone().unwrap_or_else(|| "NeuroSploit (default)".into()));
     println!("  │  focus    : {}", s.instructions.clone().unwrap_or_else(|| "(none — tests everything)".into()));
     println!("  │  objective: {}", s.objective.clone().unwrap_or_else(|| "(none — /objective <goal/context>)".into()));
+    // The actual authorized hard scope (the allowlist enforced in code), not just
+    // the policy profile above — this is what /authorize, /scope-file and /inscope set.
+    let scope_desc = if s.policy.hard.is_empty() {
+        s.target.clone().map(|t| format!("(derived from target: {})", harness::scope::host_of(&t)))
+            .unwrap_or_else(|| "(none set — /authorize <hosts> or /target)".into())
+    } else {
+        let hosts: Vec<String> = s.policy.hard.iter().map(|p| p.as_text()).collect();
+        format!("{}{}", hosts.join(", "), if s.scope_pinned { "  (pinned)" } else { "" })
+    };
+    println!("  │  authorized: {}", scope_desc);
+    println!("  │  guardrails: {}", s.policy.summary());
     println!("  │  out-scope: {}", s.out_of_scope.clone().unwrap_or_else(|| "(none — /scope-out <exclusions>)".into()));
-    println!("  │  opts     : mcp={} offline={} votes={} recon={} chain-depth={} max-agents={} idle-stop={} temp-email={}",
-        onoff(s.mcp), onoff(s.offline), s.vote_n, s.recon_intensity, s.chain_depth, s.max_agents,
+    if let Some(a) = &s.authorization { println!("  │  authz ref: {a}"); }
+    if !s.pinned.is_empty() { println!("  │  pinned   : {} agent(s) — {} \x1b[2m(/only clear or /class clear to unpin)\x1b[0m", s.pinned.len(), s.pinned.join(", ")); }
+    println!("  │  opts     : mcp={} offline={} votes={} recon={} chain-depth={} max-agents={} research={} idle-stop={} temp-email={}",
+        onoff(s.mcp), onoff(s.offline), s.vote_n, s.recon_intensity, s.chain_depth, s.max_agents, onoff(s.research),
         if s.idle_secs == 0 { "off".to_string() } else { format!("{}m", s.idle_secs / 60) }, onoff(s.temp_email));
     // Integrations at a glance (see /integrations for detail).
     {
