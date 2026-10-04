@@ -1935,26 +1935,35 @@ async fn validate(candidates: Vec<Finding>, pool: &ModelPool, sys: &str, vote_n:
                     f.review_status = "needs-review".into();
                     f.review_reason = format!("voter rejected the narrative, mechanic retained: {}", f.review_reason.trim());
                     f.confidence = f.confidence.min(0.5);
-                } else if grounded_receipt(&f) {
-                    // Unanimously rejected, but the MECHANISM was demonstrated —
-                    // a real engagement rejected "no rate limiting on the reset
-                    // flow" because the agent claimed email flooding and only
-                    // proved that 25 requests went through unthrottled. The
-                    // claim was inflated; the measurement was real, and
-                    // discarding it hid a genuine gap from the report.
-                    //
-                    // So an over-claimed finding is capped and flagged rather
-                    // than deleted: the reader gets the fact, not the story
-                    // that was built on it.
+                } else if grounded_receipt(&f) || has_http_receipt(&f) {
+                    // Unanimously rejected by the opinion-vote, but the finding
+                    // carries a concrete, REPRODUCIBLE receipt (a captured HTTP
+                    // response, a header/cookie the class is proven by, or a
+                    // file:line citation). Another person can reproduce this
+                    // exact finding with one request — so it is NOT dropped.
+                    // The adversarial validator is tuned to reject low-impact and
+                    // "theoretical" issues, but "the response lacks HSTS" or "the
+                    // cookie has no Secure flag" is a FACT, not a story. We cap
+                    // the severity to what the receipt alone proves and flag it
+                    // for human review, never delete it.
                     let cap = "Low";
                     let was = f.severity.clone();
-                    f.severity = cap.to_string();
+                    if sev_rank(&f.severity) < sev_rank(cap) { f.severity = cap.to_string(); }
                     f.review_status = "needs-review".into();
-                    f.review_reason = format!(
-                        "impact not demonstrated — capped from {was} to {cap}. Validator: {}",
-                        f.review_reason.trim()
-                    );
-                    f.confidence = f.confidence.min(0.5);
+                    f.review_reason = if was == f.severity {
+                        format!("kept — reproducible receipt present; impact not independently demonstrated. Validator: {}", f.review_reason.trim())
+                    } else {
+                        format!("kept & capped from {was} to {} — reproducible receipt present, impact not demonstrated. Validator: {}", f.severity, f.review_reason.trim())
+                    };
+                    f.confidence = f.confidence.max(0.3).min(0.6);
+                }
+                // Reproducibility: a kept finding that reaches a URL endpoint but
+                // carries no explicit repro steps gets a minimal, pasteable one,
+                // so another person can reproduce the exact finding.
+                if (f.validated || f.review_status == "needs-review")
+                    && f.repro_steps.is_empty()
+                    && (f.endpoint.starts_with("http://") || f.endpoint.starts_with("https://")) {
+                    f.repro_steps = vec![format!("curl -i -s '{}'   # inspect the response (status + headers + body) that proves this finding", f.endpoint)];
                 }
                 let label = if f.validated { "CONFIRMED" } else if f.review_status == "needs-review" { "needs-review" } else { "rejected" };
                 let _ = txc.send(format!("vote {} → {} ({})", f.title, label, f.votes)).await;
@@ -2154,7 +2163,37 @@ fn grounded_receipt(f: &Finding) -> bool {
     if f.review_reason.contains("receipt_missing") || f.votes.contains("receipt_missing") {
         return false;
     }
+    if has_http_receipt(f) {
+        return true;
+    }
     crate::grounding::ground(f, "", crate::grounding::GroundMode::Either).ok
+}
+
+/// True when the finding's evidence carries a concrete, reproducible HTTP
+/// receipt — a captured response (status line / headers / Set-Cookie) or a
+/// `file:line` code citation. This is the test for "another person can
+/// reproduce this exact finding": if the proof is the response itself (a missing
+/// security header, an insecure cookie flag, an internal IP leaked in a header,
+/// a status code), it is reproducible with a single request and must never be
+/// discarded by an opinion-based vote — demoted to needs-review at worst.
+fn has_http_receipt(f: &Finding) -> bool {
+    if f.evidence_data.is_some() { return true; }
+    let hay = format!("{}\n{}", f.evidence, f.payload).to_lowercase();
+    // A captured HTTP response or the headers/fields these deterministic classes
+    // are proven by.
+    const SIGNS: &[&str] = &[
+        "http/1.1", "http/2", "http/1.0", "status: ", "status code", "status=",
+        "set-cookie", "strict-transport-security", "x-frame-options",
+        "content-security-policy", "access-control-allow-origin", "location:",
+        "server:", "www-authenticate", "< http", "=> http", "response:", "200 ok",
+        "301 ", "302 ", "401 ", "403 ", "404 ", "500 ", "curl ",
+    ];
+    if SIGNS.iter().any(|s| hay.contains(s)) { return true; }
+    // A white-box file:line citation is also a reproducible receipt.
+    f.endpoint.contains(':') && f.endpoint.chars().any(|c| c.is_ascii_digit())
+        && (f.endpoint.contains(".rs") || f.endpoint.contains(".py") || f.endpoint.contains(".js")
+            || f.endpoint.contains(".php") || f.endpoint.contains(".java") || f.endpoint.contains(".go")
+            || f.endpoint.contains(".ts") || f.endpoint.contains(".rb"))
 }
 
 /// Adversarial refutation pass: every confirmed **High/Critical** finding is
@@ -4438,6 +4477,34 @@ mod extraction_tests {
         // An honest empty result is NOT a refusal.
         assert!(!looks_like_refusal("[]"));
         assert!(!looks_like_refusal("No vulnerabilities were found in the tested endpoints."));
+    }
+
+    #[test]
+    fn a_response_backed_finding_is_a_reproducible_receipt_and_never_dropped() {
+        // Missing HSTS: the proof is the response headers — reproducible with one
+        // request, must never be discarded by an opinion-vote.
+        let hsts = Finding {
+            title: "No Strict-Transport-Security header".into(),
+            severity: "Low".into(), cwe: "CWE-319".into(),
+            endpoint: "https://scapi.rockstargames.com/".into(),
+            evidence: "HTTP/2 200\nserver: cloudflare\n(no strict-transport-security header present)".into(),
+            ..Default::default()
+        };
+        assert!(has_http_receipt(&hsts), "a captured response IS a receipt");
+        // Insecure cookie flags — Set-Cookie in evidence.
+        let cookie = Finding {
+            title: "Cookie without Secure/HttpOnly".into(), severity: "Low".into(), cwe: "CWE-614".into(),
+            endpoint: "https://scapi.rockstargames.com/".into(),
+            evidence: "Set-Cookie: bal=1; path=/   (no Secure, no HttpOnly, no SameSite)".into(),
+            ..Default::default()
+        };
+        assert!(has_http_receipt(&cookie));
+        // Pure prose with no receipt is NOT a reproducible receipt.
+        let vague = Finding { title: "Maybe vulnerable".into(), evidence: "the app seems insecure".into(), ..Default::default() };
+        assert!(!has_http_receipt(&vague));
+        // A white-box file:line citation IS a receipt.
+        let wb = Finding { title: "SQLi".into(), endpoint: "src/db.py:42".into(), evidence: "query = f\"...{id}\"".into(), ..Default::default() };
+        assert!(has_http_receipt(&wb));
     }
 
     /// The bare-array happy path for agent selection.

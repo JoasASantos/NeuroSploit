@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 #[command(
     name = "neurosploit",
     version,
-    about = "NeuroSploit v4.2.1 — multi-model autonomous pentest harness",
-    long_about = "NeuroSploit v4.2.1 — a Rust multi-model harness that drives a pool of LLMs \
+    about = "NeuroSploit v4.2.2 — multi-model autonomous pentest harness",
+    long_about = "NeuroSploit v4.2.2 — a Rust multi-model harness that drives a pool of LLMs \
 (API key or local subscription: Claude/Codex/Gemini/Grok/OpenCode/Hermes) to autonomously test a target. \
 After recon it INTELLIGENTLY selects only the agents matching the discovered surface, runs \
 them in parallel, then validates every finding by cross-model voting before reporting.\n\n\

@@ -148,7 +148,7 @@ struct LiveCheckpoint {
 pub(crate) const ACCEPTED: &[&str] = &[
     "/?", "/agents", "/attach", "/audit", "/auth", "/burp", "/cap", "/capability", "/chain", "/changed", "/clear", "/config",
     "/context", "/continue", "/creds", "/diff", "/exclude", "/exit", "/expand", "/feed",
-    "/finding", "/findings", "/focus", "/forget", "/full", "/go", "/goal", "/graph", "/guardrail", "/guardrails", "/help",
+    "/pocs", "/poc", "/evidence", "/artifacts", "/finding", "/findings", "/focus", "/forget", "/full", "/go", "/goal", "/graph", "/guardrail", "/guardrails", "/help",
     "/history", "/idle", "/inscope", "/instructions", "/integration", "/integrations", "/key", "/log",
     "/authorize", "/grant", "/inscope-set", "/scope-file", "/scopefile", "/import-scope", "/authorization", "/authz", "/program", "/logs", "/mcp", "/memory", "/model", "/models", "/objective", "/objectives", "/observe",
     "/observe-only", "/offline",
@@ -164,7 +164,7 @@ const COMMANDS: &[&str] = &[
     "/help", "/onboard", "/show", "/config", "/providers", "/model", "/key", "/sub", "/target",
     "/scope-file",     "/authorization", "/class",     "/repo", "/auth", "/creds", "/focus", "/objective", "/scope-out", "/attach", "/context", "/mcp", "/offline",
     "/class", "/research", "/quick", "/economy", "/eco", "/votes", "/chain", "/recon", "/tempmail", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/only", "/theme", "/clear", "/run", "/stop", "/pause", "/continue", "/runs", "/results", "/report",
-    "/status", "/logs", "/diff", "/retest", "/validate", "/finding", "/expand", "/integrations",
+    "/status", "/logs", "/diff", "/retest", "/validate", "/finding", "/pocs", "/expand", "/integrations",
     "/memory", "/forget", "/graph", "/inscope", "/observe", "/guardrail", "/policy",
     "/capability", "/audit", "/quit",
 ];
@@ -1275,6 +1275,31 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
                     browse_results(&runs);
                     if let Some(a) = &active { a.quiet.store(false, Ordering::Relaxed); }
                     if live_now { println!("  \x1b[2m(run still streaming in background — /logs for what happened while browsing)\x1b[0m"); }
+                }
+            }
+            "/pocs" | "/poc" | "/evidence" | "/artifacts" => {
+                // List the PoC and evidence artifacts a run produced (synthesized
+                // or agent-written), with their paths so they can be retrieved.
+                let h = history.lock().unwrap();
+                let rec = if arg.trim().is_empty() { h.last() } else { pick(&h, arg) };
+                match rec {
+                    None => println!("  no run yet — /runs to list, or /pocs <id> after a run"),
+                    Some(r) if r.workdir.is_empty() => println!("  run #{} has no workdir on record", r.id),
+                    Some(r) => {
+                        let dir = std::path::Path::new(&r.workdir);
+                        let mut any = false;
+                        for (sub, label) in [("pocs", "PoC scripts"), ("evidence", "evidence")] {
+                            let p = dir.join(sub);
+                            let mut files: Vec<String> = std::fs::read_dir(&p).map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect()).unwrap_or_default();
+                            files.sort();
+                            if !files.is_empty() {
+                                any = true;
+                                println!("  \x1b[1m{label}\x1b[0m ({}):", p.display());
+                                for f in files { println!("    {}", p.join(&f).display()); }
+                            }
+                        }
+                        if !any { println!("  no pocs/ or evidence/ files for run #{} ({})", r.id, dir.display()); }
+                    }
                 }
             }
             "/finding" | "/findings" => {

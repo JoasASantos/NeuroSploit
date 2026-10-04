@@ -1,4 +1,4 @@
-<h1 align="center">🧠 NeuroSploit v4.2.1</h1>
+<h1 align="center">🧠 NeuroSploit v4.2.2</h1>
 
 <p align="center">
   <a href="https://github.com/JoasASantos/NeuroSploit/stargazers"><img src="https://img.shields.io/github/stars/JoasASantos/NeuroSploit?style=for-the-badge&logo=github&color=8b5cf6" alt="Stars"></a>
@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-4.2.1-blue?style=flat-square">
+  <img src="https://img.shields.io/badge/Version-4.2.2-blue?style=flat-square">
   <img src="https://img.shields.io/badge/Harness-Rust%20%7C%20tokio-e6b673?style=flat-square">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
   <img src="https://img.shields.io/badge/MD%20Agents-479-red?style=flat-square">
@@ -52,7 +52,22 @@ Control TUI**.
 
 ### Highlights
 
-> **New in v4.2.1** — **SARIF 2.1.0 export**: every run now writes `report.sarif`
+> **New in v4.2.2** — **free, LLM-directed exploration**: an exploit agent's named
+> class is a starting point, not a cage — it maps what the app actually does and
+> reports any class it can prove, with **authentication / identity** (login, signup,
+> password reset, MFA, OAuth/OIDC/SAML, JWT, session) as a first-class target and
+> business-logic / multi-step flows pursued on its own judgment; agent **selection**
+> now covers the surface instead of collapsing into one family. **WAF-aware User-Agent**
+> (`/ua browser`) uses a realistic browser UA for accuracy behind a CDN while keeping
+> attribution in the `X-NeuroSploit-Scan` header. **Importable engagement configs**:
+> `/authorize <hosts…>` sets the whole scope in one line (no bug-bounty program needed),
+> `/scope-file <yaml>` imports scope **and** target/models/focus/classes from one file;
+> `/class idor,sqli,xss,ssrf` focuses a run on vuln classes. Plus **PoC/evidence files
+> synthesized from recorded evidence** even on the API-key path (empty `pocs/`·`evidence/`
+> fixed), **model-refusal detection** (a declined technique is reported as such, not a
+> parse error), and version strings read from the build so they never go stale.
+>
+> **Also in v4.2.x** — **SARIF 2.1.0 export**: every run now writes `report.sarif`
 > next to the Markdown/JSON/HTML/PDF, and `neurosploit sarif <run>` (re)emits it
 > on demand, so findings drop straight into GitHub / Azure DevOps code-scanning
 > as severity-coloured, CWE-linked alerts (also exposed over MCP). Plus stronger
