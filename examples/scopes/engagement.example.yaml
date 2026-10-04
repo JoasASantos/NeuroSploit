@@ -1,0 +1,56 @@
+# ===========================================================================
+# NeuroSploit scope config — direct engagement (TEMPLATE)
+# ---------------------------------------------------------------------------
+# For a normal pentest where you have WRITTEN AUTHORIZATION from the asset
+# owner (a signed SOW / contract / authorization letter) — no bug-bounty
+# program or HackerOne needed. You, the operator, assert you are authorized
+# for everything in `hard` below. Fill it from the engagement's authorization.
+#
+# You usually don't even need this file: in the REPL just run
+#     /authorize app.client.com *.client.com 10.0.0.0/24
+# or on the CLI
+#     neurosploit run app.client.com --in-scope "*.client.com" --in-scope 10.0.0.0/24
+# Use this file when the scope is large or you want it version-controlled with
+# the engagement notes.
+#
+# HARD scope is the one thing you MUST set — it is the safety boundary (a host
+# not covered here is refused before any request leaves). Everything else
+# (rate, accounts, destructive verbs) is YOURS to tune for THIS engagement.
+# ===========================================================================
+
+# --- HARD: everything you are authorized to test. -------------------------
+hard:
+  - app.client.example               # a single host
+  - "*.client.example"               # apex + all subdomains
+  - 10.0.0.0/24                      # an internal range (reach it with --transport)
+  - https://api.client.example/v2    # or just one URL prefix
+
+# --- EXCLUDE: anything carved out of the authorization. -------------------
+exclude:
+  # - billing.client.example
+  # - "*.prod.client.example"        # e.g. test staging only
+
+# --- SOFT: guardrails — tune these to the engagement's rules. -------------
+soft:
+  # Look-only hosts (recon, no payloads) — e.g. shared/third-party infra.
+  observe_only: []
+
+  # Direct engagements often authorize more than a bounty would. Set these to
+  # what the SOW allows:
+  allow_destructive_methods: false   # true only if the authorization covers it (e.g. a staging env)
+  allow_account_creation: true       # create test accounts to reach authed surface
+  max_accounts: 3
+  max_requests_per_minute: 240       # raise for a lab / internal test, lower for fragile prod
+
+  # Hard stops regardless of authorization — things that destroy data or DoS.
+  forbidden_payloads:
+    - "drop table"
+    - "truncate table"
+    - "delete from"
+    - "rm -rf /"
+    - "shutdown"
+    - "while(true)"
+
+  notes:
+    - "Authorized under <SOW / contract reference>; owner contact: <email/phone>."
+    - "Test window: <when>. Notify <contact> before any high-impact test."

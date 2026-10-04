@@ -150,7 +150,7 @@ pub(crate) const ACCEPTED: &[&str] = &[
     "/context", "/continue", "/creds", "/diff", "/exclude", "/exit", "/expand", "/feed",
     "/finding", "/findings", "/focus", "/forget", "/full", "/go", "/goal", "/graph", "/guardrail", "/guardrails", "/help",
     "/history", "/idle", "/inscope", "/instructions", "/integration", "/integrations", "/key", "/log",
-    "/scope-file", "/scopefile", "/import-scope", "/authorization", "/authz", "/program", "/logs", "/mcp", "/memory", "/model", "/models", "/objective", "/objectives", "/observe",
+    "/authorize", "/grant", "/inscope-set", "/scope-file", "/scopefile", "/import-scope", "/authorization", "/authz", "/program", "/logs", "/mcp", "/memory", "/model", "/models", "/objective", "/objectives", "/observe",
     "/observe-only", "/offline",
     "/onboard", "/only", "/oos", "/outofscope", "/policy", "/providers", "/proxy", "/class", "/classes", "/focus-class", "/research", "/quick", "/economy", "/eco", "/q", "/quit", "/recon",
     "/pause", "/repo", "/report", "/results", "/resume", "/retest", "/revalidate", "/run", "/runs",
@@ -842,6 +842,44 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
                 }
                 s.objective = Some(arg.to_string());
                 println!("  objective set — steers what agents prioritise and what counts as impact");
+            }
+            "/authorize" | "/inscope-set" | "/grant" => {
+                // Declare the whole authorized scope in ONE line for a direct
+                // engagement (a client test with written authorization — no
+                // bug-bounty program or capability token needed). Accepts
+                // multiple hosts / *.domains / CIDRs / URL-prefixes, sets them
+                // as the hard grant, and pins it so a later /target doesn't
+                // re-derive. The operator asserts they are authorized for these.
+                if arg.trim().is_empty() || arg.trim() == "clear" {
+                    if arg.trim() == "clear" { s.policy.hard.clear(); s.scope_pinned = false; println!("  authorized scope cleared"); continue; }
+                    println!("  declare what you're authorized to test (one line, direct engagement):");
+                    println!("    /authorize app.client.com *.client.com 10.0.0.0/24 https://api.client.com/v2");
+                    println!("  current: {}", s.policy.summary());
+                    continue;
+                }
+                let entries: Vec<&str> = arg.split([',', ';', ' ']).map(str::trim).filter(|x| !x.is_empty()).collect();
+                let keep_exclude = s.policy.exclude.clone();
+                let keep_soft = s.policy.soft.clone();
+                let mut np = harness::scope::ScopePolicy::default();
+                np.exclude = keep_exclude;
+                np.soft = keep_soft;
+                let mut added = 0usize;
+                for e in &entries { let before = np.hard.len(); np.allow(e); added += np.hard.len().saturating_sub(before); }
+                if np.hard.is_empty() {
+                    println!("  \x1b[33mnothing valid to authorize in: {}\x1b[0m", arg);
+                } else {
+                    s.policy = np;
+                    s.scope_pinned = true;
+                    // Seed the target from the first entry if none set, so /run works immediately.
+                    if s.target.is_none() {
+                        let first = entries[0];
+                        let h = harness::scope::host_of(first);
+                        let seed = h.strip_prefix("*.").map(|a| format!("https://{a}")).unwrap_or_else(|| if first.contains("://") { first.to_string() } else { format!("https://{}", harness::scope::host_of(first)) });
+                        s.target = Some(seed);
+                    }
+                    println!("  \x1b[1;32m🔓 authorized scope set\x1b[0m ({} entr{}) — {}", added, if added == 1 { "y" } else { "ies" }, s.policy.summary());
+                    println!("  \x1b[2mdirect engagement — you assert written authorization for these assets. Tune limits with /guardrail · exclude with /scope-out · /run to start.\x1b[0m");
+                }
             }
             "/scope-file" | "/scopefile" | "/import-scope" => {
                 let path = arg.trim().trim_start_matches('@');
@@ -2421,6 +2459,7 @@ fn help() {
     h("/chain <n>",         "attack-chain depth (post-exploitation pivots; 0 = off)");
     h("/recon <1-4>",       "recon intensity: 1 quick · 2 standard · 3 deep · 4 exhaustive (installs tools)");
     h("/class <a,b>",       "focus a run on vuln classes (idor,sqli,xss,ssrf,…) — pins the matching agents");
+    h("/authorize <a b c>",  "direct engagement: declare the whole authorized scope in one line (hosts/*.domains/CIDRs/URLs) — no program needed");
     h("/scope-file <path>",  "import a ready scope config (hard allowlist + exclusions + guardrails) — e.g. examples/scopes/rockstargames.yaml");
     h("/authorization <url>", "declare the program/authorization (e.g. a bug-bounty URL) — recorded; does NOT widen scope");
     h("/research",          "whitebox/greybox: hunt a NOVEL, CVE-reportable bug (known-CVE dedup + patch-diff variant analysis)");
