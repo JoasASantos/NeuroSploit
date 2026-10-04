@@ -21,6 +21,8 @@ the autonomous, multi-model penetration-testing harness.
    - [Grey-box (code + live app)](#53-grey-box-code--live-app)
    - [Host / Infra (Linux / Windows / AD)](#54-host--infra-linux--windows--ad)
 6. [The interactive REPL](#6-the-interactive-repl)
+   - [Scope — three ways](#61-scope--three-ways-from-quick-to-a-full-config)
+   - [Get the most out of a run](#62-get-the-most-out-of-a-run-recommended-potent-setup)
 7. [Mission Control TUI](#7-mission-control-tui)
 8. [Web console](#8-web-console)
 9. [Credentials (`creds.yaml`)](#9-credentials-credsyaml)
@@ -499,6 +501,58 @@ neurosploit run "*.client.com" --scope-file examples/scopes/engagement.example.y
 > A capability **token** (`--capability-token`, verified with
 > `NEUROSPLOIT_CAPABILITY_KEY`) is a separate, *optional* layer for when a lead
 > must hand a tester a scope they cannot widen. Everyday engagements don't need it.
+
+### 6.2 Get the most out of a run (recommended potent setup)
+
+A black-box run against a real, hardened target (behind a WAF/CDN) is only as
+good as how you set it up. This is the recipe that gives the strongest,
+most-reproducible results — paste it into the REPL before `/run`:
+
+```
+# 1) A cross-model jury — the finder AND independent validators. The single
+#    biggest quality lever: one model validating its own findings is weak.
+/model anthropic:claude-opus-5-5, openai:gpt-6-astra
+#    (one model is fine too; two+ enables real cross-validation and voting)
+
+# 2) A realistic browser User-Agent — a self-declaring scanner UA gets
+#    blocked/challenged by a WAF/CDN and causes FALSE NEGATIVES. Attribution
+#    stays in the X-NeuroSploit-Scan header.
+/ua browser
+
+# 3) Deep recon — more rounds, active enumeration, subdomain discovery inside
+#    the wildcard scope (1 quick · 2 standard · 3 deep · 4 exhaustive).
+/recon 4
+
+# 4) Scope + authorization in one step (see §6.1). For a program, record it:
+/scope-file examples/scopes/engagement.example.yaml
+/authorization https://hackerone.com/<program>     # context only, never widens scope
+
+# 5) Point the hunt — in ANY language. Steers the LLM to the high-value surface
+#    (it is NOT boxed in one vuln class; this focuses WHERE it spends effort).
+focus on auth, OAuth/OIDC, IDOR/BOLA and business logic on the less-hardened subdomains
+
+# 6) Go — runs in the background; watch it with /status, /logs, /finding.
+/run
+```
+
+Other high-value knobs:
+
+| Command | When to use |
+|---------|-------------|
+| `/class idor,sqli,ssrf,auth` | Force a run onto specific vuln classes (pins the matching agents). |
+| `/chain 3` | More post-exploitation chaining rounds (pivot a foothold into deeper impact). |
+| `/votes 2` | Require 2 models to agree before a finding is **confirmed** (fewer false positives; needs ≥2 models). |
+| `/proxy http://127.0.0.1:8080` | Route all traffic through Burp/ZAP to inspect & replay. |
+| `/creds creds.yaml` | Authenticated testing — the authenticated surface is where the high-impact bugs live. |
+| `/research` | Whitebox/greybox: hunt a **novel, CVE-reportable** bug (dedup + patch-diff). |
+| `/quick` | The opposite — a fast, cheap, low-token pass. |
+
+> **Reality check.** A mature external surface (a big publisher behind Cloudflare)
+> mostly yields hygiene/info-disclosure findings on black-box — that's the target
+> being hardened, not a tool failure. The high/critical bugs live on the
+> **authenticated** surface and **less-hardened subdomains**; point recon and your
+> focus there. For a *measurable* benchmark, run against a seeded lab (OWASP Juice
+> Shop, crAPI, VAmPI) where "found X of Y known bugs" is countable.
 
 ---
 
