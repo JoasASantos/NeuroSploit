@@ -1,0 +1,63 @@
+# ===========================================================================
+# NeuroSploit scope config — NASA (TEMPLATE)
+# ---------------------------------------------------------------------------
+# ⚠ BEFORE YOU RUN: confirm this matches NASA's CURRENT VDP scope.
+#   NASA Vulnerability Disclosure Policy: https://www.nasa.gov/nasa-vulnerability-disclosure-policy/
+#   (coordinated via https://bugcrowd.com/nasa-vdp). Open the policy/program
+#   page and align `hard` / `exclude` with the EXACT in- and out-of-scope assets
+#   it lists today. A VDP is for good-faith disclosure — follow its rules.
+#
+# `*.nasa.gov` authorizes the apex AND every subdomain, so NeuroSploit's recon
+# will enumerate subdomains and test within this boundary. NASA runs MANY
+# subdomains/mission sites; several are explicitly out of scope and some are
+# third-party hosted — verify before testing.
+#
+# Import it:
+#   neurosploit run "*.nasa.gov" --scope-file examples/scopes/nasa.yaml --subscription
+# or in the REPL:
+#   /scope-file examples/scopes/nasa.yaml
+#   /authorization https://www.nasa.gov/nasa-vulnerability-disclosure-policy/
+#   /target *.nasa.gov
+#   /run
+# ===========================================================================
+
+# --- HARD: the allowlist. Only these are testable. ------------------------
+hard:
+  - "*.nasa.gov"                     # apex + every subdomain (VERIFY against the VDP)
+  - nasa.gov
+
+# --- EXCLUDE: carve-outs that always beat the allowlist. ------------------
+# Fill from the VDP's OUT-OF-SCOPE list. Typical for a large gov org: auth/SSO
+# providers, third-party-hosted services, APIs with their own terms, and any
+# system the policy names as excluded. Examples are PLACEHOLDERS — verify.
+exclude:
+  # - auth.launchpad.nasa.gov
+  # - "*.ndc.nasa.gov"
+  # - api.nasa.gov            # has its own API terms / key system — check first
+
+# --- SOFT: guardrails inside the boundary (VDP-safe, conservative) ---------
+soft:
+  observe_only: []
+
+  # No state-mutating verbs, no account creation — a government VDP expects
+  # minimal-impact, good-faith testing.
+  allow_destructive_methods: false
+  allow_account_creation: false
+  max_accounts: 0
+
+  # Low rate: these are production government systems.
+  max_requests_per_minute: 60
+
+  forbidden_payloads:
+    - "drop table"
+    - "truncate table"
+    - "delete from"
+    - "rm -rf /"
+    - "shutdown"
+    - "while(true)"
+
+  notes:
+    - "Authorized under NASA's Vulnerability Disclosure Policy (good-faith research only)."
+    - "No DoS, no social engineering, no physical testing, no disruption of operations or spacecraft/mission systems."
+    - "Access only the minimum data needed to demonstrate a vulnerability; never exfiltrate or retain PII/ITAR/sensitive data; stop and report if you encounter it."
+    - "Verify in/out-of-scope on the VDP page before each run — scope changes."

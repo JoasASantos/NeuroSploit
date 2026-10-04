@@ -1,0 +1,74 @@
+# ===========================================================================
+# NeuroSploit scope config — Rockstar Games (TEMPLATE)
+# ---------------------------------------------------------------------------
+# ⚠ BEFORE YOU RUN: confirm this matches the program's CURRENT scope.
+#   Rockstar Games bug bounty: https://hackerone.com/rockstargames
+#   Open the program page and align the `hard` allowlist and `exclude` list
+#   below with the EXACT in-scope / out-of-scope assets it lists today. Scope
+#   on a bounty program changes; this file is a starting point, not authority.
+#
+# HARD scope is enforced in code: a request whose host is not covered by `hard`
+# (or hit by `exclude`) is REFUSED before it leaves. `*.rockstargames.com`
+# authorizes the apex AND every subdomain, so NeuroSploit's recon will
+# enumerate subdomains and test them within this boundary.
+#
+# Import it:
+#   neurosploit run "*.rockstargames.com" --scope-file examples/scopes/rockstargames.yaml --subscription
+# or in the REPL:
+#   /scope-file examples/scopes/rockstargames.yaml
+#   /authorization https://hackerone.com/rockstargames
+#   /target *.rockstargames.com
+#   /run
+# ===========================================================================
+
+# --- HARD: the allowlist. Only these are testable. ------------------------
+# Start with the apex + all subdomains the user named. ADD the specific extra
+# roots the program lists (and REMOVE this wildcard if the program only allows
+# named subdomains — check first).
+hard:
+  - "*.rockstargames.com"            # apex + every subdomain
+  - rockstargames.com                # the apex itself
+
+# --- EXCLUDE: carve-outs that always beat the allowlist. ------------------
+# Fill these in from the program's OUT-OF-SCOPE list. Common exclusions on a
+# gaming publisher: live game servers, payment/billing, support/helpdesk,
+# status pages, third-party-hosted marketing. Examples below are PLACEHOLDERS —
+# verify the real ones on the program page before relying on them.
+exclude:
+  # - support.rockstargames.com
+  # - "*.status.rockstargames.com"
+  # - https://www.rockstargames.com/billing
+
+# --- SOFT: guardrails inside the boundary (bounty-safe defaults) -----------
+soft:
+  # Hosts you may LOOK at but never send payloads to.
+  observe_only: []
+
+  # State-mutating verbs (DELETE/PUT/PATCH) stay OFF — a scan must not change
+  # the target's state to "prove" a bug on someone's production.
+  allow_destructive_methods: false
+
+  # No account creation by default. Most programs forbid mass registration;
+  # flip to true only if the program allows it AND keep it to a couple accounts.
+  allow_account_creation: false
+  max_accounts: 0
+
+  # Conservative rate: a bounty target is production. Raise only within the
+  # program's stated limit.
+  max_requests_per_minute: 120
+
+  # Classes that damage production rather than demonstrate a bug — never run.
+  forbidden_payloads:
+    - "drop table"
+    - "truncate table"
+    - "delete from"
+    - "rm -rf /"
+    - "shutdown"
+    - "while(true)"
+
+  # Free-text context for the agents (NOT enforced — prose, not a control).
+  notes:
+    - "Authorized under the Rockstar Games bug bounty program (https://hackerone.com/rockstargames)."
+    - "Stay within the program's rules of engagement: no DoS, no social engineering, no spam/mass-account creation, no disruption of live game services."
+    - "Prove data access with a benign canary, never pull real player PII."
+    - "Verify in/out-of-scope on the program page before each run — scope changes."

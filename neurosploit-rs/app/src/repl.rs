@@ -150,7 +150,7 @@ pub(crate) const ACCEPTED: &[&str] = &[
     "/context", "/continue", "/creds", "/diff", "/exclude", "/exit", "/expand", "/feed",
     "/finding", "/findings", "/focus", "/forget", "/full", "/go", "/goal", "/graph", "/guardrail", "/guardrails", "/help",
     "/history", "/idle", "/inscope", "/instructions", "/integration", "/integrations", "/key", "/log",
-    "/authorization", "/authz", "/program", "/logs", "/mcp", "/memory", "/model", "/models", "/objective", "/objectives", "/observe",
+    "/scope-file", "/scopefile", "/import-scope", "/authorization", "/authz", "/program", "/logs", "/mcp", "/memory", "/model", "/models", "/objective", "/objectives", "/observe",
     "/observe-only", "/offline",
     "/onboard", "/only", "/oos", "/outofscope", "/policy", "/providers", "/proxy", "/class", "/classes", "/focus-class", "/research", "/quick", "/economy", "/eco", "/q", "/quit", "/recon",
     "/pause", "/repo", "/report", "/results", "/resume", "/retest", "/revalidate", "/run", "/runs",
@@ -162,7 +162,7 @@ pub(crate) const ACCEPTED: &[&str] = &[
 /// All slash-commands, for Tab completion.
 const COMMANDS: &[&str] = &[
     "/help", "/onboard", "/show", "/config", "/providers", "/model", "/key", "/sub", "/target",
-    "/authorization", "/class",     "/repo", "/auth", "/creds", "/focus", "/objective", "/scope-out", "/attach", "/context", "/mcp", "/offline",
+    "/scope-file",     "/authorization", "/class",     "/repo", "/auth", "/creds", "/focus", "/objective", "/scope-out", "/attach", "/context", "/mcp", "/offline",
     "/class", "/research", "/quick", "/economy", "/eco", "/votes", "/chain", "/recon", "/tempmail", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/only", "/theme", "/clear", "/run", "/stop", "/pause", "/continue", "/runs", "/results", "/report",
     "/status", "/logs", "/diff", "/retest", "/validate", "/finding", "/expand", "/integrations",
     "/memory", "/forget", "/graph", "/inscope", "/observe", "/guardrail", "/policy",
@@ -289,6 +289,10 @@ struct Session {
     /// Engagement objective / rules-of-engagement context (why + what matters).
     objective: Option<String>,
     authorization: Option<String>,
+    /// Set once the operator defines scope explicitly (scope-file, /inscope, or
+    /// a capability). While pinned, `/target` stops re-deriving the scope from
+    /// the target, so an imported allowlist is not clobbered by picking a target.
+    scope_pinned: bool,
     /// Explicit out-of-scope exclusions the agents must not touch.
     out_of_scope: Option<String>,
     /// Authorization boundary + guardrails, enforced by the harness.
@@ -336,6 +340,7 @@ impl Default for Session {
             instructions: None,
             objective: None,
             authorization: None,
+            scope_pinned: false,
             out_of_scope: None,
             policy: Default::default(),
             capability: None,
@@ -720,7 +725,11 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
                     // no capability, the target the operator picks IS the grant
                     // (same model as `neurosploit run <url>`); explicit excludes
                     // and guardrails are preserved.
-                    if s.capability.is_none() {
+                    // Only re-derive when scope was NOT set explicitly (no
+                    // imported scope-file, no /inscope, no capability) — otherwise
+                    // picking a target would clobber the operator's allowlist.
+                    let rederive = s.capability.is_none() && !s.scope_pinned;
+                    if rederive {
                         let keep_exclude = s.policy.exclude.clone();
                         let keep_soft = s.policy.soft.clone();
                         let mut np = harness::scope::ScopePolicy::for_target(&seeds[0]);
@@ -736,7 +745,9 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
                     }
                     if ts.len() > 1 { println!("  targets ({}): {}", ts.len(), seeds.join(", ")); println!("  \x1b[2m/run tests them sequentially, one report each\x1b[0m"); }
                     else { println!("  target: {}", seeds.first().cloned().unwrap_or_default()); }
-                    if let Some(d) = &wildcard_domain {
+                    if s.scope_pinned {
+                        println!("  \x1b[2mscope: using the imported scope ({}) — target must fall inside it\x1b[0m", s.policy.summary());
+                    } else if let Some(d) = &wildcard_domain {
                         println!("  \x1b[2mscope: *.{d} — apex + all subdomains authorized; recon will enumerate subdomains\x1b[0m");
                         // Nudge recon toward active subdomain discovery for a domain-wide engagement.
                         if s.recon_intensity < 3 { s.recon_intensity = 3; }
@@ -831,6 +842,28 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
                 }
                 s.objective = Some(arg.to_string());
                 println!("  objective set — steers what agents prioritise and what counts as impact");
+            }
+            "/scope-file" | "/scopefile" | "/import-scope" => {
+                let path = arg.trim().trim_start_matches('@');
+                if path.is_empty() {
+                    println!("  import a scope config (hard allowlist + exclusions + guardrails):");
+                    println!("    /scope-file examples/scopes/rockstargames.yaml");
+                    println!("  current scope: {}", s.policy.summary());
+                    continue;
+                }
+                match harness::scope::ScopePolicy::from_file(std::path::Path::new(path)) {
+                    Ok(sp) => {
+                        if sp.hard.is_empty() {
+                            println!("  \x1b[33m⚠ {path} sets no hard scope — nothing would be authorized; not applied.\x1b[0m");
+                        } else {
+                            s.scope_pinned = true;
+                            s.policy = sp;
+                            println!("  \x1b[32m📋 scope imported\x1b[0m from {path} — {}", s.policy.summary());
+                            println!("  \x1b[2m/target a host inside this scope, then /run. Add /authorization <program-url> to record the authorization.\x1b[0m");
+                        }
+                    }
+                    Err(e) => println!("  \x1b[31m⛔ could not read {path}: {e}\x1b[0m"),
+                }
             }
             "/authorization" | "/authz" | "/program" => {
                 if arg == "clear" { s.authorization = None; println!("  authorization reference cleared"); continue; }
@@ -1263,6 +1296,7 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
                     // dropped it is the same lie the ceiling exists to prevent.
                     let before = s.policy.hard.len();
                     s.policy.allow(arg);
+                    s.scope_pinned = true;
                     let refused = reapply_grant(&mut s);
                     if !refused.is_empty() {
                         println!("  \x1b[33m⛔ outside the capability grant, not authorized:\x1b[0m {}", refused.join(", "));
@@ -2387,6 +2421,7 @@ fn help() {
     h("/chain <n>",         "attack-chain depth (post-exploitation pivots; 0 = off)");
     h("/recon <1-4>",       "recon intensity: 1 quick · 2 standard · 3 deep · 4 exhaustive (installs tools)");
     h("/class <a,b>",       "focus a run on vuln classes (idor,sqli,xss,ssrf,…) — pins the matching agents");
+    h("/scope-file <path>",  "import a ready scope config (hard allowlist + exclusions + guardrails) — e.g. examples/scopes/rockstargames.yaml");
     h("/authorization <url>", "declare the program/authorization (e.g. a bug-bounty URL) — recorded; does NOT widen scope");
     h("/research",          "whitebox/greybox: hunt a NOVEL, CVE-reportable bug (known-CVE dedup + patch-diff variant analysis)");
     h("/quick",             "economy preset: short, low-cost run (1 voter · 1 chain round · light recon · ≤6 agents)");
