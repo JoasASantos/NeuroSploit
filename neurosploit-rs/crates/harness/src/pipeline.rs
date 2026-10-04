@@ -1040,6 +1040,12 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
         write_meta(&cfg, &p, &asset);
         crate::probe::probe_json(&p)
     };
+    // Wildcard engagement: deterministically enumerate + liveness-filter the
+    // in-scope subdomains and fold them into the surface, so the run tests the
+    // whole authorized domain, not just the seed host.
+    let subdomains = if cfg.offline { String::new() } else { enumerate_subdomains(&cfg, &tx).await };
+    let probe_facts = if subdomains.is_empty() { probe_facts } else { format!("{probe_facts}{subdomains}") };
+
     let recon = if cfg.offline {
         let _ = tx.send("recon: offline mode — skipping model calls".into()).await;
         "{}".to_string()
@@ -4052,6 +4058,166 @@ const RECON_TOTAL_BUDGET_SECS: u64 = 300; // 5 minutes total
 
 /// Intense, multi-round recon: an initial deep pass, then follow-up rounds that
 /// EXPAND the surface (chase discovered subdomains/endpoints/params, install
+/// Deterministic subdomain fan-out for a WILDCARD engagement (`*.domain` in
+/// scope). The model recon used to test only the seed host even when the scope
+/// authorized the whole domain — so a `*.nasa.gov` run touched `www` and nothing
+/// else. This enumerates the domain via crt.sh (just HTTP, always available),
+/// keeps only IN-SCOPE hosts, probes each for liveness, drops soft-404/parked
+/// catch-alls, and returns a ranked, test-ready list — 401/403 hosts flagged for
+/// a bypass attempt, interesting names (admin/api/dev/staging/internal) first.
+/// Scope-respecting: liveness probes are one lightweight GET per host, so it
+/// maps the surface without hammering it.
+/// Run a recon command either inside the Kali sandbox (when `--sandbox` is set,
+/// so the Kali toolbox powers recon) or on the host. Returns stdout, or None if
+/// the tool isn't available / failed. Short-timed so a missing tool is cheap.
+async fn recon_tool(cfg: &RunConfig, tool: &str, command: &str) -> Option<String> {
+    if let Some(image) = cfg.sandbox.as_deref() {
+        let mut sc = crate::sandbox::SandboxConfig::default();
+        if !image.trim().is_empty() { sc = sc.with_image(image); }
+        let sb = crate::sandbox::Sandbox::new(sc).ok()?;
+        // The container was ensured up earlier in run(); install the tool on
+        // demand if it's missing (one-time, within the Kali image).
+        let out = sb.exec(command).await.ok()?;
+        if out.stdout.trim().is_empty() { None } else { Some(out.stdout) }
+    } else {
+        // Host: only if the tool binary is on PATH.
+        let exists = tokio::process::Command::new("which").arg(tool).output().await
+            .map(|o| o.status.success()).unwrap_or(false);
+        if !exists { return None; }
+        let out = tokio::time::timeout(std::time::Duration::from_secs(90),
+            tokio::process::Command::new("sh").arg("-c").arg(command).output()).await.ok()?.ok()?;
+        let s = String::from_utf8_lossy(&out.stdout).to_string();
+        if s.trim().is_empty() { None } else { Some(s) }
+    }
+}
+
+async fn enumerate_subdomains(cfg: &RunConfig, tx: &Sender<String>) -> String {
+    // Which apex(es) are authorized domain-wide?
+    let apexes: Vec<String> = cfg.scope.hard.iter().filter_map(|p| {
+        let t = p.as_text();
+        t.strip_prefix("*.").map(|a| a.to_string())
+    }).collect();
+    if apexes.is_empty() { return String::new(); }
+
+    let scope = effective_scope(cfg);
+    let seed_host = crate::scope::host_of(&cfg.target);
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(std::time::Duration::from_secs(8))
+        .user_agent(cfg.user_agent.clone().unwrap_or_else(|| default_user_agent()))
+        .build().unwrap_or_default();
+
+    // 1) Enumerate via crt.sh (certificate transparency) — unauthenticated HTTP.
+    let mut candidates: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for apex in &apexes {
+        let _ = tx.send(format!("🔭 enumerating subdomains of *.{apex} (crt.sh + tools)…")).await;
+        // crt.sh (certificate transparency) — always available, no tool needed.
+        let url = format!("https://crt.sh/?q=%25.{apex}&output=json");
+        if let Ok(resp) = client.get(&url).send().await {
+            if let Ok(text) = resp.text().await {
+                if let Ok(serde_json::Value::Array(rows)) = serde_json::from_str::<serde_json::Value>(&text) {
+                    for row in rows {
+                        if let Some(nv) = row.get("name_value").and_then(|v| v.as_str()) {
+                            for name in nv.split('\n') {
+                                let h = name.trim().trim_start_matches("*.").to_lowercase();
+                                if h.ends_with(apex) && !h.is_empty() && !h.contains(' ') { candidates.insert(h); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Passive tooling when present (in the Kali sandbox or on the host):
+        // subfinder and amass find names CT logs miss. Passive only — no brute.
+        for (tool, cmd) in [
+            ("subfinder", format!("subfinder -silent -all -d {apex} 2>/dev/null")),
+            ("amass", format!("amass enum -passive -norecursive -d {apex} 2>/dev/null")),
+        ] {
+            if let Some(out) = recon_tool(cfg, tool, &cmd).await {
+                let mut n = 0;
+                for line in out.lines() {
+                    let h = line.trim().trim_start_matches("*.").to_lowercase();
+                    if h.ends_with(apex) && !h.is_empty() && !h.contains(' ') && candidates.insert(h) { n += 1; }
+                }
+                if n > 0 { let _ = tx.send(format!("🔭 {tool}: +{n} subdomain(s)")).await; }
+            }
+        }
+    }
+    // Keep only in-scope hosts; drop the seed (already probed).
+    let in_scope: Vec<String> = candidates.into_iter()
+        .filter(|h| h != &seed_host && scope.in_hard_scope(&format!("https://{h}")))
+        .collect();
+    if in_scope.is_empty() {
+        let _ = tx.send("🔭 no additional in-scope subdomains found via crt.sh".into()).await;
+        return String::new();
+    }
+    let _ = tx.send(format!("🔭 {} in-scope subdomain(s) from crt.sh — probing liveness…", in_scope.len())).await;
+
+    // 2) Liveness + soft-404 filter. One GET to root, one to a random path; if
+    //    the random path returns the SAME status/size as root with 200, the host
+    //    is a catch-all/soft-404 and is deprioritised. Cap the probe fan-out so a
+    //    huge CT list doesn't take forever, but keep it generous (the operator
+    //    asked that ~50 subdomains actually get tested).
+    const PROBE_CAP: usize = 80;
+    let rand = crate::validation::canary("sub");
+    let probe_one = |host: String| {
+        let client = client.clone();
+        let rand = rand.clone();
+        async move {
+            let root = client.get(format!("https://{host}/")).send().await;
+            let (status, len) = match root {
+                Ok(r) => { let s = r.status().as_u16(); let b = r.text().await.map(|t| t.len()).unwrap_or(0); (s, b) }
+                Err(_) => return None, // dead host
+            };
+            if status == 0 { return None; }
+            // soft-404: a random path answers 200 with ~same size as root.
+            let soft = if status == 200 {
+                match client.get(format!("https://{host}/{rand}")).send().await {
+                    Ok(r2) => { let s2 = r2.status().as_u16(); let l2 = r2.text().await.map(|t| t.len()).unwrap_or(0);
+                                s2 == 200 && (l2 as i64 - len as i64).abs() < 64 }
+                    Err(_) => false,
+                }
+            } else { false };
+            Some((host, status, len, soft))
+        }
+    };
+    let probed: Vec<(String, u16, usize, bool)> = stream::iter(in_scope.into_iter().take(PROBE_CAP))
+        .map(probe_one)
+        .buffer_unordered(16)
+        .filter_map(|x| async move { x })
+        .collect()
+        .await;
+
+    // 3) Rank: 401/403 first (auth surface → bypass), then interesting names,
+    //    then other live hosts; soft-404 catch-alls last (kept but flagged).
+    let interesting = |h: &str| ["admin","api","dev","staging","stage","test","internal","intranet","vpn","portal","auth","login","sso","oauth","account","dashboard","git","jenkins","grafana","kibana","jira","confluence","gateway","mail","secure","beta","uat","qa","backend","service"]
+        .iter().any(|k| h.contains(k));
+    let mut live: Vec<(String, u16, bool)> = probed.into_iter().map(|(h,s,_,soft)| (h,s,soft)).collect();
+    live.sort_by_key(|(h, s, soft)| {
+        let auth = matches!(*s, 401 | 403);
+        (*soft, !auth, !interesting(h), *s) // soft-404 last; auth first; interesting next
+    });
+
+    if live.is_empty() {
+        let _ = tx.send("🔭 enumerated subdomains but none answered — nothing to add".into()).await;
+        return String::new();
+    }
+    let auth_count = live.iter().filter(|(_, s, _)| matches!(*s, 401 | 403)).count();
+    let _ = tx.send(format!("🔭 {} live in-scope subdomain(s) ({} behind 401/403 — try bypass) → added to the test surface",
+        live.len(), auth_count)).await;
+
+    // 4) Build the block injected into recon + exploitation context.
+    let mut block = String::from("\n\nLIVE IN-SCOPE SUBDOMAINS (authorized — TEST THESE end-to-end, ranked; do NOT degrade the service — one request at a time, respect rate limits):\n");
+    for (h, s, soft) in live.iter().take(60) {
+        let tag = if matches!(*s, 401 | 403) { " [AUTH — try access-control bypass: verb/path/case/encoding, X-Original-URL/X-Forwarded-*, direct object/API]" }
+                  else if *soft { " [soft-404 catch-all — low priority]" }
+                  else { "" };
+        block.push_str(&format!("- https://{h}  (HTTP {s}){tag}\n"));
+    }
+    block.push_str("Run the full methodology against each live host (not just the seed): map routes/params from each, test every applicable class, and prioritise the ones with an auth surface or interesting name.\n");
+    block
+}
+
 /// tools, dig where the previous round found signal). Returns the merged recon
 /// text. Rounds scale with `recon_intensity` (2→1 extra, 3→2, 4→3).
 async fn deep_recon(cfg: &RunConfig, pool: &ModelPool, probe_facts: &str, tx: &Sender<String>) -> String {

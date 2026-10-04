@@ -1221,24 +1221,54 @@ pub(crate) struct Spawned {
 /// empty and it looks like "0 findings" when the real cause is auth. Checks the
 /// primary model's provider; prints a clear warning (non-fatal).
 pub(crate) async fn subscription_preflight(cfg: &RunConfig) {
-    if !cfg.subscription || cfg.offline { return; }
-    let Some(primary) = cfg.models.first() else { return };
-    let provider = ModelRef::parse(primary).provider;
-    if harness::models::cli_binary_for(&provider).is_none() { return; }
-    print!("  [*] checking {provider} subscription login… ");
-    use std::io::Write; let _ = std::io::stdout().flush();
-    match harness::models::cli_login_status(&provider).await {
-        harness::models::LoginStatus::LoggedIn => println!("\r  [*] {provider} subscription: logged in ✓            "),
-        harness::models::LoginStatus::NotLoggedIn => {
-            let cli = harness::models::cli_binary_for(&provider).unwrap_or("the CLI");
-            println!("\r  \x1b[1;33m[!] {provider} subscription NOT logged in\x1b[0m — run `{cli}` and log in (e.g. `claude` → /login), then retry.");
-            println!("      \x1b[2m(without login every agent returns empty — this is usually why a run finds 0.)\x1b[0m");
+    if cfg.offline { return; }
+    use std::io::Write;
+    // Check EVERY configured model, not just the primary — a 3-model jury that
+    // silently collapses to 1 (the others not logged in / no key) is the
+    // "I set 3 models and only one ran" surprise. Say which are usable and why.
+    let mut usable = 0usize;
+    for (i, id) in cfg.models.iter().enumerate() {
+        let m = ModelRef::parse(id);
+        let provider = m.provider.clone();
+        let key_present = harness::providers().iter()
+            .find(|p| p.key == provider)
+            .map(|p| std::env::var(p.env_key).ok().filter(|v| !v.trim().is_empty()).is_some())
+            .unwrap_or(false);
+        let has_cli = harness::models::cli_binary_for(&provider).is_some();
+        let role = if i == 0 { "primary" } else { "voter" };
+
+        // API key always works (subscription or not).
+        if key_present {
+            println!("  [*] {id} \x1b[2m({role})\x1b[0m — API key present ✓");
+            usable += 1;
+            continue;
         }
-        harness::models::LoginStatus::NotInstalled => {
-            let cli = harness::models::cli_binary_for(&provider).unwrap_or("?");
-            println!("\r  \x1b[1;33m[!] subscription CLI `{cli}` for {provider} is not installed\x1b[0m — install it or use an API key (drop --subscription).");
+        // Subscription path: needs a logged-in CLI for this provider.
+        if cfg.subscription && has_cli {
+            print!("  [*] checking {id} ({role}) subscription login… ");
+            let _ = std::io::stdout().flush();
+            match harness::models::cli_login_status(&provider).await {
+                harness::models::LoginStatus::LoggedIn => { println!("\r  [*] {id} \x1b[2m({role})\x1b[0m — subscription logged in ✓        "); usable += 1; }
+                harness::models::LoginStatus::Unknown => { println!("\r  [*] {id} \x1b[2m({role})\x1b[0m — login state unknown (will try)   "); usable += 1; }
+                harness::models::LoginStatus::NotLoggedIn => {
+                    let cli = harness::models::cli_binary_for(&provider).unwrap_or("the CLI");
+                    println!("\r  \x1b[1;33m[!] {id} ({role}) NOT logged in\x1b[0m — run `{cli}` and log in, or export {}'s API key. This model will be SKIPPED.        ", provider.to_uppercase());
+                }
+                harness::models::LoginStatus::NotInstalled => {
+                    let cli = harness::models::cli_binary_for(&provider).unwrap_or("?");
+                    println!("\r  \x1b[1;33m[!] {id} ({role}) — subscription CLI `{cli}` not installed\x1b[0m. This model will be SKIPPED.        ");
+                }
+            }
+            continue;
         }
-        harness::models::LoginStatus::Unknown => println!("\r  [*] {provider} subscription: login state unknown (continuing)   "),
+        // Not subscription-capable and no key: unusable.
+        let hint = if has_cli { "add --subscription and log in, or export its API key" } else { "export its API key (this provider is API-key only, e.g. qwen needs DASHSCOPE_API_KEY — or use nous:<model> for Hermes)" };
+        println!("  \x1b[1;33m[!] {id} ({role}) — no API key and not reachable\x1b[0m ({hint}). This model will be SKIPPED.");
+    }
+    if usable == 0 {
+        println!("  \x1b[1;31m[!] NONE of the configured models are usable\x1b[0m — the run will find nothing. Fix a login/key above, then /run.");
+    } else if usable < cfg.models.len() {
+        println!("  \x1b[2m→ {usable}/{} models usable; validation/voting runs with the usable ones only.\x1b[0m", cfg.models.len());
     }
 }
 
