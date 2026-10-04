@@ -457,7 +457,7 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
     println!("  {} agents loaded · detected logins: {}", lib.total(),
         if backends.is_empty() { "none (use API keys)".into() } else { backends.join(", ") });
     println!("  Type \x1b[36m/help\x1b[0m to start, \x1b[36m/run\x1b[0m to launch, \x1b[36m/quit\x1b[0m to exit. (↑/↓ recalls commands)");
-    println!("  \x1b[2mOr just describe it in any language:\x1b[0m \x1b[36mtesta https://loja.com com opus, foco em SQLi, roda\x1b[0m\n");
+    println!("  \x1b[2mOr just describe it in any language:\x1b[0m \x1b[36mtest https://shop.com with opus, focus on SQLi, run\x1b[0m\n");
 
     let mut s = Session::default();
     let resumed = load_session(&mut s);
@@ -870,12 +870,15 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
                 } else {
                     s.policy = np;
                     s.scope_pinned = true;
-                    // Seed the target from the first entry if none set, so /run works immediately.
-                    if s.target.is_none() {
-                        let first = entries[0];
-                        let h = harness::scope::host_of(first);
-                        let seed = h.strip_prefix("*.").map(|a| format!("https://{a}")).unwrap_or_else(|| if first.contains("://") { first.to_string() } else { format!("https://{}", harness::scope::host_of(first)) });
-                        s.target = Some(seed);
+                    // Seed the target so /run works immediately — whenever none
+                    // is set OR the current one falls outside the new scope.
+                    let cur_ok = s.target.as_deref().map(|t| s.policy.in_hard_scope(t)).unwrap_or(false);
+                    if !cur_ok {
+                        let had = s.target.is_some();
+                        if let Some(seed) = scope_seed_target(&s.policy) {
+                            if had { println!("  \x1b[33m⚠ previous target was outside this scope — target reset to {seed}\x1b[0m"); }
+                            s.target = Some(seed);
+                        }
                     }
                     println!("  \x1b[1;32m🔓 authorized scope set\x1b[0m ({} entr{}) — {}", added, if added == 1 { "y" } else { "ies" }, s.policy.summary());
                     println!("  \x1b[2mdirect engagement — you assert written authorization for these assets. Tune limits with /guardrail · exclude with /scope-out · /run to start.\x1b[0m");
@@ -885,7 +888,7 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
                 let path = arg.trim().trim_start_matches('@');
                 if path.is_empty() {
                     println!("  import a scope config (hard allowlist + exclusions + guardrails):");
-                    println!("    /scope-file examples/scopes/rockstargames.yaml");
+                    println!("    /scope-file examples/scopes/engagement.example.yaml");
                     println!("  current scope: {}", s.policy.summary());
                     continue;
                 }
@@ -897,7 +900,37 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
                             s.scope_pinned = true;
                             s.policy = sp;
                             println!("  \x1b[32m📋 scope imported\x1b[0m from {path} — {}", s.policy.summary());
-                            println!("  \x1b[2m/target a host inside this scope, then /run. Add /authorization <program-url> to record the authorization.\x1b[0m");
+                            // A target left over from a previous session may be
+                            // outside the imported scope (it would be denied on
+                            // /run). Reseed it from the scope's first host so the
+                            // run is ready and consistent with what was imported.
+                            let cur_ok = s.target.as_deref().map(|t| s.policy.in_hard_scope(t)).unwrap_or(false);
+                            if !cur_ok {
+                                let had_target = s.target.is_some();
+                                if let Some(seed) = scope_seed_target(&s.policy) {
+                                    if had_target { println!("  \x1b[33m⚠ previous target was outside this scope — target reset to {seed}\x1b[0m"); }
+                                    s.target = Some(seed);
+                                }
+                            }
+                            // Optional engagement settings in the SAME file:
+                            // target, models, focus, objective, authorization,
+                            // classes — so one YAML defines the whole engagement.
+                            if let Ok(text) = std::fs::read_to_string(path) {
+                                let meta = read_engagement_meta(&text);
+                                if let Some(t) = meta.target { if s.policy.in_hard_scope(&t) { s.target = Some(t.clone()); println!("  \x1b[2m· target: {t}\x1b[0m"); } else { println!("  \x1b[33m⚠ file's target {t} is outside its own scope — ignored\x1b[0m"); } }
+                                if !meta.models.is_empty() { s.models = meta.models.clone(); println!("  \x1b[2m· models: {}\x1b[0m", meta.models.join(", ")); }
+                                if let Some(f) = meta.focus { s.instructions = Some(f.clone()); println!("  \x1b[2m· focus: {f}\x1b[0m"); }
+                                if let Some(o) = meta.objective { s.objective = Some(o.clone()); println!("  \x1b[2m· objective: {o}\x1b[0m"); }
+                                if let Some(a) = meta.authorization { s.authorization = Some(a.clone()); println!("  \x1b[2m· authorization: {a}\x1b[0m"); }
+                                if !meta.classes.is_empty() {
+                                    let lib = agents::load(base);
+                                    let mut pinned: Vec<String> = Vec::new();
+                                    for c in &meta.classes { for n in agents_for_class(&lib, &c.to_lowercase()) { if !pinned.contains(&n) { pinned.push(n); } } }
+                                    if !pinned.is_empty() { s.pinned = pinned; println!("  \x1b[2m· classes: {} → {} agent(s)\x1b[0m", meta.classes.join(", "), s.pinned.len()); }
+                                }
+                            }
+                            println!("  \x1b[2mtarget: {} · /run to start · /authorization <program-url> to record the authorization\x1b[0m",
+                                s.target.clone().unwrap_or_else(|| "(set one inside this scope with /target)".into()));
                         }
                     }
                     Err(e) => println!("  \x1b[31m⛔ could not read {path}: {e}\x1b[0m"),
@@ -1961,6 +1994,78 @@ fn memory_cmd(s: &Session, arg: &str) {
 /// Project-local store: `<cwd>/.neurosploit/` so each project keeps its own
 /// session, run history and command history (resume on reopen). No DB needed —
 /// it's structured state, not semantic search.
+/// Optional engagement settings read from the SAME YAML a scope file lives in,
+/// so one file can define the whole engagement (scope + target + models + focus
+/// + classes). These are top-level keys alongside `hard:`/`exclude:`/`soft:`;
+/// all are optional. Minimal reader: scalar `key: value` and simple `- item`
+/// lists at indent 0, which is all these need.
+#[derive(Default)]
+struct EngagementMeta {
+    target: Option<String>,
+    models: Vec<String>,
+    focus: Option<String>,
+    objective: Option<String>,
+    authorization: Option<String>,
+    classes: Vec<String>,
+}
+
+fn read_engagement_meta(text: &str) -> EngagementMeta {
+    let mut m = EngagementMeta::default();
+    let mut list_key: Option<String> = None; // which top-level list we're in
+    let unq = |s: &str| s.trim().trim_matches('"').trim_matches('\'').to_string();
+    for raw in text.lines() {
+        let line = raw.split('#').next().unwrap_or(raw); // strip comments
+        if line.trim().is_empty() { continue; }
+        let indent = line.len() - line.trim_start().len();
+        let t = line.trim();
+        // A list item under a top-level engagement list key.
+        if let Some(item) = t.strip_prefix("- ") {
+            if indent > 0 { if let Some(k) = &list_key {
+                let v = unq(item);
+                if !v.is_empty() { match k.as_str() {
+                    "models" => m.models.push(v),
+                    "classes" => m.classes.push(v),
+                    _ => {}
+                }}
+            }}
+            continue;
+        }
+        let (key, val) = match t.split_once(':') { Some((k, v)) => (k.trim(), unq(v)), None => continue };
+        if indent != 0 { list_key = None; continue; } // only top-level keys here
+        list_key = None;
+        match key {
+            "target" if !val.is_empty() => m.target = Some(val),
+            "focus" if !val.is_empty() => m.focus = Some(val),
+            "objective" if !val.is_empty() => m.objective = Some(val),
+            "authorization" if !val.is_empty() => m.authorization = Some(val),
+            "models" | "classes" => {
+                if val.is_empty() { list_key = Some(key.to_string()); }
+                else { // inline comma list: `models: a, b`
+                    let items: Vec<String> = val.split([',', ';']).map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
+                    if key == "models" { m.models = items; } else { m.classes = items; }
+                }
+            }
+            _ => {}
+        }
+    }
+    m
+}
+
+/// A target URL to seed a run from a scope policy: the first hard entry, with a
+/// wildcard (`*.dom`) reduced to its apex (a literal `*.dom` has no DNS record).
+fn scope_seed_target(p: &harness::scope::ScopePolicy) -> Option<String> {
+    let first = p.hard.first()?.as_text();
+    if let Some(url) = first.strip_prefix("https://").or_else(|| first.strip_prefix("http://")) {
+        return Some(format!("https://{}", url.split('/').next().unwrap_or(url)));
+    }
+    if first.contains('/') { // CIDR or path — not a clean host to seed; skip.
+        if first.contains("://") { return Some(first); }
+        return None;
+    }
+    let host = first.strip_prefix("*.").unwrap_or(&first);
+    Some(format!("https://{host}"))
+}
+
 /// Expand a vuln-class keyword (idor, sqli, xss, ssrf, …) to the agent names in
 /// the library that implement it. Matches on the agent's name, title and CWE by
 /// a set of substrings per class, so `/class sqli` pins every SQLi agent
@@ -2460,7 +2565,7 @@ fn help() {
     h("/recon <1-4>",       "recon intensity: 1 quick · 2 standard · 3 deep · 4 exhaustive (installs tools)");
     h("/class <a,b>",       "focus a run on vuln classes (idor,sqli,xss,ssrf,…) — pins the matching agents");
     h("/authorize <a b c>",  "direct engagement: declare the whole authorized scope in one line (hosts/*.domains/CIDRs/URLs) — no program needed");
-    h("/scope-file <path>",  "import a ready scope config (hard allowlist + exclusions + guardrails) — e.g. examples/scopes/rockstargames.yaml");
+    h("/scope-file <path>",  "import a ready scope config (hard allowlist + exclusions + guardrails) — e.g. examples/scopes/engagement.example.yaml");
     h("/authorization <url>", "declare the program/authorization (e.g. a bug-bounty URL) — recorded; does NOT widen scope");
     h("/research",          "whitebox/greybox: hunt a NOVEL, CVE-reportable bug (known-CVE dedup + patch-diff variant analysis)");
     h("/quick",             "economy preset: short, low-cost run (1 voter · 1 chain round · light recon · ≤6 agents)");

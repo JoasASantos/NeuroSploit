@@ -21,6 +21,16 @@
 #   /run
 # ===========================================================================
 
+# --- Optional: define the whole engagement in this one file -----------------
+# These top-level keys are read by `/scope-file` (and ignored by the CLI's
+# --scope-file, which only reads scope). All optional.
+target: "*.nasa.gov"                 # seed; must fall inside `hard` below
+# models:                            # provider:model list (uncomment to pin)
+#   - anthropic:claude-opus-5-5
+# classes: idor, ssrf, xss           # focus the run on these vuln classes
+focus: "prioritize auth, access control and SSRF on in-scope subdomains"
+authorization: "https://www.nasa.gov/nasa-vulnerability-disclosure-policy/"
+
 # --- HARD: the allowlist. Only these are testable. ------------------------
 hard:
   - "*.nasa.gov"                     # apex + every subdomain (VERIFY against the VDP)

@@ -1,4 +1,4 @@
-# NeuroSploit — Tutorial & User Guide (v4.1.0)
+# NeuroSploit — Tutorial & User Guide (v4.2.1)
 
 A complete, hands-on guide to installing, configuring and running NeuroSploit —
 the autonomous, multi-model penetration-testing harness.
@@ -100,8 +100,8 @@ Agents **degrade gracefully**: if `rustscan` is absent they use `nmap`; if neith
 ### Verify
 
 ```bash
-neurosploit --version          # neurosploit 4.1.0
-neurosploit agents             # {"vulns":241,...,"ai":30,...,"total":430}
+neurosploit --version          # neurosploit 4.2.1
+neurosploit agents             # {"vulns":255,...,"ai":30,...,"total":480}
 neurosploit models             # all providers & models
 ```
 
@@ -368,15 +368,31 @@ A context bar shows `model auth · cwd · mode▸target`. Key commands:
 /target <url>       black-box target           /repo <path>   add a repo (repo+target = greybox)
 /auth <value>       send an auth header         /creds <file>  load creds.yaml
 /focus <text>       steer the tests (or just type the instruction)
+/class <a,b,..>     focus on vuln CLASSES (idor,sqli,xss,ssrf,…) — pins the matching agents
+/only <agents>      run EXACTLY these named agents (skips recon-based selection)
 @path  @dir  @f:1-20   attach a file/folder/line-range to context (Tab → menu)
 /mcp on|off   /offline on|off   /votes <n>   /agents <n>   /theme color|mono
+/quick              economy preset (1 voter · 1 chain round · light recon · ≤6 agents)
+/research on|off    whitebox/greybox: hunt a NOVEL, CVE-reportable bug (dedup + patch-diff)
 /tempmail on|off    opt-in disposable inbox (mail.tm) for a register confirmation code
+── scope & authorization ──
+/authorize <a b c>  direct engagement: declare the whole authorized scope in one line
+                    (hosts / *.domains / CIDRs / URL-prefixes) — no program needed
+/scope-file <path>  import a ready scope/engagement config (see §6.1)
+/inscope <entry>    add one more host/*.domain/CIDR to scope · /scope-out <entry> exclude
+/guardrail <k> <v>  tune limits: destructive on|off · accounts <n|off> · rate <req/min>
+/authorization <url>  record the program/authorization (e.g. a bug-bounty URL) — context only
 /run                launch the engagement
 /runs   /results [n]   /report [n]   /status [n]
 /diff               what changed vs the previous run
 /retest [n]         re-verify a past run's findings
 /quit
 ```
+
+> **Any language.** You don't have to use slash-commands — just **describe the
+> engagement in plain text, in any language** (the REPL interprets it):
+> `test https://shop.com with opus, focus on SQLi, out of scope /admin, run`.
+> The output and help are English; your input can be Portuguese, Spanish, etc.
 
 Line editing: **↑/↓** history, **Tab** completes commands & `@paths`, **Ctrl-A/E/K**,
 end a line with **`\`** for multiline.
@@ -410,6 +426,79 @@ state) and prints `⏸ token/quota exhausted … PAUSED`. Then either:
   arrow-select menu) — then **`/continue`** to resume on the new model.
 
 (When stdin is piped/non-interactive, `/run` falls back to blocking mode.)
+
+### 6.1 Scope — three ways, from quick to a full config
+
+Hard scope is the **safety boundary**: a request whose host isn't authorized is
+*refused before it leaves*. You must declare what you're allowed to test — but
+that's frictionless, and **no bug-bounty program or capability token is required**
+for a normal client engagement with written authorization.
+
+**1. Just point at the target** (the target *is* the grant):
+
+```
+/target app.client.com        → authorized against app.client.com
+/target *.client.com          → apex + ALL subdomains (recon enumerates them)
+/run
+```
+
+**2. Declare the whole scope in one line** (direct engagement, multiple assets):
+
+```
+/authorize app.client.com *.client.com 10.0.0.0/24 https://api.client.com/v2
+/run
+```
+
+You assert written authorization for those assets. Tune limits any time with
+`/guardrail` (e.g. `/guardrail destructive on`, `/guardrail rate 60`,
+`/guardrail accounts 2`), exclude with `/scope-out`.
+
+**3. Import a ready config file** (large scope, version-controlled, or reusable):
+
+```
+/scope-file examples/scopes/engagement.example.yaml
+/run
+```
+
+A scope config is a **single YAML** that can define the *whole* engagement —
+scope **plus** target, models, focus, objective, authorization and vuln classes:
+
+```yaml
+# scope (the safety boundary — the one thing you must set)
+hard:
+  - "*.client.com"            # apex + every subdomain
+  - 10.0.0.0/24               # an internal range
+exclude:
+  - billing.client.com        # carve-outs always beat the allowlist
+soft:
+  allow_destructive_methods: false   # true only if the authorization covers it
+  allow_account_creation: true
+  max_accounts: 3
+  max_requests_per_minute: 240       # raise for a lab, lower for fragile prod
+  forbidden_payloads: ["drop table", "rm -rf /", "shutdown"]
+
+# optional — define the rest of the engagement in the same file:
+target: "*.client.com"
+models:
+  - anthropic:claude-opus-5-5
+classes: idor, sqli, ssrf     # focus the run on these classes
+focus: "prioritize access control and SSRF"
+authorization: "<SOW / contract reference, or a program URL>"
+```
+
+Importing it sets everything in one step; if a stale target left over from a
+previous session falls outside the new scope, it's reset to a host inside it.
+Ready templates live in **`examples/scopes/`** (`engagement.example.yaml` for a
+direct client test; `nasa.yaml` as a VDP example). On the CLI the same file works
+with `--scope-file` (which reads the scope portion):
+
+```bash
+neurosploit run "*.client.com" --scope-file examples/scopes/engagement.example.yaml --subscription
+```
+
+> A capability **token** (`--capability-token`, verified with
+> `NEUROSPLOIT_CAPABILITY_KEY`) is a separate, *optional* layer for when a lead
+> must hand a tester a scope they cannot widen. Everyday engagements don't need it.
 
 ---
 

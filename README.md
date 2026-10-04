@@ -257,7 +257,7 @@ Zero npm dependencies (Node built-ins only).
   flat list — click any node or row for the full finding detail, including any PoC script the
   exploiting agent wrote to `pocs/`.
 - **Real REPL underneath `run`/`whitebox`/`greybox`** — the wizard scripts an actual interactive
-  `neurosploit` session (`/target`, `/model`, `/only`, `/run`, …) instead of a one-shot CLI
+  `neurosploit` session (`/target`, `/authorize`, `/scope-file`, `/class`, `/model`, `/only`, `/research`, `/quick`, `/run`, …) instead of a one-shot CLI
   invocation, so the session **keeps reading stdin while the engagement streams**. The Activity
   log tab grows a prompt box (`❭`) to send `/status`, `/stop`, `/continue`, or a plain-language
   instruction mid-run — same REPL described in [§6](TUTORIAL.md#6-the-interactive-repl). `host` /
