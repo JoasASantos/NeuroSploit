@@ -1,4 +1,4 @@
-# NeuroSploit — Tutorial & User Guide (v4.2.3)
+# NeuroSploit — Tutorial & User Guide (v4.2.4)
 
 A complete, hands-on guide to installing, configuring and running NeuroSploit —
 the autonomous, multi-model penetration-testing harness.
@@ -102,7 +102,7 @@ Agents **degrade gracefully**: if `rustscan` is absent they use `nmap`; if neith
 ### Verify
 
 ```bash
-neurosploit --version          # neurosploit 4.2.3
+neurosploit --version          # neurosploit 4.2.4
 neurosploit agents             # {"vulns":255,...,"ai":30,...,"total":480}
 neurosploit models             # all providers & models
 ```

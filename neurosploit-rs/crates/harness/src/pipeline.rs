@@ -1057,7 +1057,24 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
     // in-scope subdomains and fold them into the surface, so the run tests the
     // whole authorized domain, not just the seed host.
     let subdomains = if cfg.offline { String::new() } else { enumerate_subdomains(&cfg, &tx).await };
-    let probe_facts = if subdomains.is_empty() { probe_facts } else { format!("{probe_facts}{subdomains}") };
+    // Live hosts discovered (parsed from the block) — fed to the tool-recon pass.
+    let live_hosts: Vec<String> = subdomains.lines()
+        .filter_map(|l| l.trim().strip_prefix("- https://").map(|r| r.split_whitespace().next().unwrap_or("").to_string()))
+        .filter(|h| !h.is_empty()).collect();
+
+    // KALI TOOL-RECON: run the real recon pipeline (gau/katana URL harvest +
+    // targeted nuclei) inside the sandbox (or on host tools), then let the LLM
+    // refine on top of the output. Provisions the toolbox in Kali on demand.
+    let tool_recon = if cfg.offline {
+        String::new()
+    } else {
+        if let Some(sb) = engagement_sandbox(&cfg) {
+            kali_provision_recon_tools(&sb, &tx).await;
+        }
+        kali_tool_recon(&cfg, &live_hosts, &tx).await
+    };
+
+    let probe_facts = format!("{probe_facts}{subdomains}{tool_recon}");
 
     let recon = if cfg.offline {
         let _ = tx.send("recon: offline mode — skipping model calls".into()).await;
@@ -2810,6 +2827,15 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
         let _ = tx.send(format!("notify: phase complete — {} validated finding(s) [{}]", findings.len(), sev)).await;
     }
 
+    // Tear the Kali sandbox down at the end of the engagement (spin up for the
+    // run, kill it after), unless the operator asked to keep it.
+    if cfg.sandbox.is_some() && !std::env::var("NEUROSPLOIT_KEEP_SANDBOX").map(|v| v == "1" || v == "true").unwrap_or(false) {
+        if let Some(sb) = engagement_sandbox(&cfg) {
+            sb.teardown().await;
+            let _ = tx.send("notify: 📦 Kali sandbox torn down".into()).await;
+        }
+    }
+
     RunOutput {
         target: cfg.target.clone(),
         workdir: cfg.workdir.clone().unwrap_or_default(),
@@ -4102,6 +4128,115 @@ async fn recon_tool(cfg: &RunConfig, tool: &str, command: &str) -> Option<String
         let s = String::from_utf8_lossy(&out.stdout).to_string();
         if s.trim().is_empty() { None } else { Some(s) }
     }
+}
+
+/// A Sandbox handle for the engagement when `--sandbox` is set (the container
+/// was ensured up earlier in run()). None when not sandboxed.
+fn engagement_sandbox(cfg: &RunConfig) -> Option<crate::sandbox::Sandbox> {
+    let image = cfg.sandbox.as_deref()?;
+    let mut sc = crate::sandbox::SandboxConfig::default();
+    if !image.trim().is_empty() { sc = sc.with_image(image); }
+    crate::sandbox::Sandbox::new(sc).ok()
+}
+
+/// Install the recon toolbox in the Kali sandbox on demand (idempotent — skips
+/// anything already present). Runs once per engagement. Best-effort: a tool that
+/// fails to install just won't be used.
+async fn kali_provision_recon_tools(sb: &crate::sandbox::Sandbox, tx: &Sender<String>) {
+    // Which recon tools are missing?
+    let check = sb.exec("for t in subfinder httpx katana gau waybackurls nuclei naabu dnsx assetfinder gf qsreplace anew; do command -v $t >/dev/null 2>&1 || echo $t; done").await;
+    let missing: Vec<String> = check.map(|o| o.stdout.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()).unwrap_or_default();
+    if missing.is_empty() { return; }
+    let _ = tx.send(format!("📦 provisioning Kali recon tools: {}", missing.join(", "))).await;
+    // ProjectDiscovery + bug-bounty tools install via `go install`; a couple via apt.
+    // Install Go first if needed, then the PD suite in one shot.
+    let _ = sb.exec("command -v go >/dev/null 2>&1 || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq golang-go) ; true").await;
+    let go = |pkg: &str| format!("GOBIN=/usr/local/bin go install -v {pkg}@latest 2>/dev/null; true");
+    let pd: &[(&str, &str)] = &[
+        ("subfinder", "github.com/projectdiscovery/subfinder/v2/cmd/subfinder"),
+        ("httpx", "github.com/projectdiscovery/httpx/cmd/httpx"),
+        ("katana", "github.com/projectdiscovery/katana/cmd/katana"),
+        ("nuclei", "github.com/projectdiscovery/nuclei/v3/cmd/nuclei"),
+        ("naabu", "github.com/projectdiscovery/naabu/v2/cmd/naabu"),
+        ("dnsx", "github.com/projectdiscovery/dnsx/cmd/dnsx"),
+        ("gau", "github.com/lc/gau/v2/cmd/gau"),
+        ("waybackurls", "github.com/tomnomnom/waybackurls"),
+        ("assetfinder", "github.com/tomnomnom/assetfinder"),
+        ("gf", "github.com/tomnomnom/gf"),
+        ("qsreplace", "github.com/tomnomnom/qsreplace"),
+        ("anew", "github.com/tomnomnom/anew"),
+    ];
+    for (bin, pkg) in pd {
+        if missing.iter().any(|m| m == bin) { let _ = sb.exec(&go(pkg)).await; }
+    }
+    // nuclei templates (quietly).
+    if missing.iter().any(|m| m == "nuclei") { let _ = sb.exec("nuclei -update-templates -silent 2>/dev/null; true").await; }
+}
+
+/// Deterministic TOOL-RECON phase: run the real bug-bounty recon pipeline inside
+/// the Kali sandbox (or on the host) against the live hosts, and return a
+/// structured block (URL harvest + targeted nuclei quick-wins + gf-flagged
+/// candidate URLs) to feed the LLM refine phase. This is the "recon by tools,
+/// then the LLM works on top of the output" the operator asked for.
+async fn kali_tool_recon(cfg: &RunConfig, hosts: &[String], tx: &Sender<String>) -> String {
+    // Need either a sandbox or host tools; the recon_tool() helper handles both.
+    let seed = crate::scope::host_of(&cfg.target);
+    let mut targets: Vec<String> = Vec::new();
+    if !seed.is_empty() { targets.push(seed); }
+    for h in hosts { if !targets.contains(h) { targets.push(h.clone()); } }
+    targets.truncate(12); // bound the deterministic pass; the LLM covers the rest
+    if targets.is_empty() { return String::new(); }
+
+    let _ = tx.send(format!("🛠 tool-recon over {} host(s) (gau/katana + targeted nuclei)…", targets.len())).await;
+    let mut urls: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut nuclei_hits: Vec<String> = Vec::new();
+
+    for host in &targets {
+        // URL harvest (historical + crawl).
+        let harvest = format!("( echo {host} | gau --threads 20 2>/dev/null; echo {host} | waybackurls 2>/dev/null; katana -u https://{host} -d 2 -jc -silent 2>/dev/null ) | sort -u | head -400");
+        if let Some(out) = recon_tool(cfg, "gau", &harvest).await {
+            for l in out.lines() { let u = l.trim(); if u.starts_with("http") { urls.insert(u.to_string()); } }
+        }
+        // Targeted nuclei quick-wins (exposures/misconfig/takeover), high signal only.
+        let nuc = format!("nuclei -u https://{host} -t exposures/,misconfiguration/,takeovers/ -severity critical,high,medium -silent -nc 2>/dev/null | head -40");
+        if let Some(out) = recon_tool(cfg, "nuclei", &nuc).await {
+            for l in out.lines() { let t = l.trim(); if !t.is_empty() { nuclei_hits.push(t.to_string()); } }
+        }
+    }
+    if urls.is_empty() && nuclei_hits.is_empty() {
+        let _ = tx.send("🛠 tool-recon: no tools available or no output (LLM recon continues)".into()).await;
+        return String::new();
+    }
+    // gf-flag candidate URLs by class for the exploitation phase.
+    let url_list = urls.iter().cloned().collect::<Vec<_>>().join("\n");
+    let mut gf_block = String::new();
+    if !url_list.is_empty() {
+        for pat in ["sqli", "xss", "ssrf", "redirect", "lfi", "idor"] {
+            let cmd = format!("printf '%s' {:?} | gf {pat} 2>/dev/null | head -15", url_list.chars().take(8000).collect::<String>());
+            if let Some(out) = recon_tool(cfg, "gf", &cmd).await {
+                let hits: Vec<&str> = out.lines().map(|l| l.trim()).filter(|l| l.starts_with("http")).collect();
+                if !hits.is_empty() { gf_block.push_str(&format!("  {pat}: {}\n", hits.join("  "))); }
+            }
+        }
+    }
+
+    let _ = tx.send(format!("🛠 tool-recon: {} URL(s) harvested, {} nuclei hit(s){}", urls.len(), nuclei_hits.len(),
+        if gf_block.is_empty() { String::new() } else { " · gf-flagged candidates added".into() })).await;
+
+    let mut block = String::from("\n\nTOOL-RECON OUTPUT (deterministic — work on top of this, verify each before reporting):\n");
+    if !nuclei_hits.is_empty() {
+        block.push_str("Nuclei quick-wins (CONFIRM each with your own request — do not report a template name as a finding):\n");
+        for h in nuclei_hits.iter().take(40) { block.push_str(&format!("- {h}\n")); }
+    }
+    if !gf_block.is_empty() {
+        block.push_str("Candidate URLs by vuln class (gf-flagged — TEST these parameters):\n");
+        block.push_str(&gf_block);
+    }
+    if !urls.is_empty() {
+        block.push_str(&format!("Harvested URLs (sample of {}):\n", urls.len()));
+        for u in urls.iter().take(80) { block.push_str(&format!("- {u}\n")); }
+    }
+    block
 }
 
 async fn enumerate_subdomains(cfg: &RunConfig, tx: &Sender<String>) -> String {

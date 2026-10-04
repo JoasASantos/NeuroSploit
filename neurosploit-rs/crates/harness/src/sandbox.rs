@@ -209,7 +209,46 @@ impl Sandbox {
     ///
     /// Returns a human-readable status. Idempotent: a second call on an
     /// already-running container is a no-op, so the pipeline can call it freely.
+    /// Is the container ENGINE (daemon) responsive? `<bin> info` only succeeds
+    /// when the daemon is up — the binary being installed is not enough.
+    async fn engine_up(&self) -> bool {
+        run(self.runtime.bin(), &["info"], Duration::from_secs(10)).await
+            .map(|o| o.code == 0).unwrap_or(false)
+    }
+
+    /// Start the container engine if it's installed but not running — so a run
+    /// with `--sandbox` doesn't fail just because Docker Desktop/Colima/the
+    /// docker daemon/the podman machine wasn't started. Tries the common starts
+    /// for the platform, then polls `<bin> info` until it comes up.
+    async fn start_engine(&self) -> Result<(), String> {
+        if self.engine_up().await { return Ok(()); }
+        let starters: &[(&str, &[&str])] = match self.runtime {
+            Runtime::Docker => &[
+                ("colima", &["start"]),                 // macOS/Linux, common
+                ("systemctl", &["start", "docker"]),     // Linux systemd
+                ("service", &["docker", "start"]),       // Linux sysv
+                ("open", &["-a", "Docker"]),             // macOS Docker Desktop
+            ],
+            Runtime::Podman => &[
+                ("podman", &["machine", "start"]),
+            ],
+        };
+        for (bin, args) in starters {
+            if !which(bin) { continue; }
+            let _ = run(bin, args, Duration::from_secs(120)).await;
+            // Poll for the daemon to come up (engines take a few seconds).
+            for _ in 0..30 {
+                if self.engine_up().await { return Ok(()); }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+        if self.engine_up().await { Ok(()) }
+        else { Err(format!("the {} engine is installed but not running, and could not be started automatically — start it (e.g. `colima start`, `open -a Docker`, or `sudo systemctl start docker`) and retry", self.runtime.bin())) }
+    }
+
     pub async fn ensure(&self) -> Result<String, String> {
+        // Bring the engine up first — installed-but-not-running is the common case.
+        self.start_engine().await?;
         if self.is_up().await {
             return Ok(format!("{} container `{}` already running", self.runtime.bin(), self.cfg.name));
         }

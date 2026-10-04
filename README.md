@@ -1,4 +1,4 @@
-<h1 align="center">🧠 NeuroSploit v4.2.3</h1>
+<h1 align="center">🧠 NeuroSploit v4.2.4</h1>
 
 <p align="center">
   <a href="https://github.com/JoasASantos/NeuroSploit/stargazers"><img src="https://img.shields.io/github/stars/JoasASantos/NeuroSploit?style=for-the-badge&logo=github&color=8b5cf6" alt="Stars"></a>
@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-4.2.3-blue?style=flat-square">
+  <img src="https://img.shields.io/badge/Version-4.2.4-blue?style=flat-square">
   <img src="https://img.shields.io/badge/Harness-Rust%20%7C%20tokio-e6b673?style=flat-square">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
   <img src="https://img.shields.io/badge/MD%20Agents-479-red?style=flat-square">
@@ -52,7 +52,7 @@ Control TUI**.
 
 ### Highlights
 
-> **New in v4.2.3** — **free, LLM-directed exploration**: an exploit agent's named
+> **New in v4.2.4** — **free, LLM-directed exploration**: an exploit agent's named
 > class is a starting point, not a cage — it maps what the app actually does and
 > reports any class it can prove, with **authentication / identity** (login, signup,
 > password reset, MFA, OAuth/OIDC/SAML, JWT, session) as a first-class target and
