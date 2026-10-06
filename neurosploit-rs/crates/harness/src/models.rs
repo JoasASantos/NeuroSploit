@@ -23,7 +23,7 @@ pub struct Provider {
 pub fn providers() -> Vec<Provider> {
     vec![
         Provider { key: "anthropic", label: "Anthropic Claude", base_url: "https://api.anthropic.com/v1", env_key: "ANTHROPIC_API_KEY", kind: "cli",
-            models: vec!["claude-opus-5-5", "claude-opus-5", "claude-sonnet-5", "claude-fable-5-1", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"] },
+            models: vec!["claude-opus-5-5", "claude-mythos-5-1", "claude-opus-5", "claude-sonnet-5", "claude-fable-5-1", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"] },
         Provider { key: "openai", label: "OpenAI (ChatGPT)", base_url: "https://api.openai.com/v1", env_key: "OPENAI_API_KEY", kind: "cli",
             models: vec!["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2", "gpt-5.1", "gpt-5.1-codex", "o4"] },
         Provider { key: "xai", label: "xAI Grok", base_url: "https://api.x.ai/v1", env_key: "XAI_API_KEY", kind: "cli",
@@ -54,7 +54,7 @@ pub fn providers() -> Vec<Provider> {
         Provider { key: "litellm", label: "LiteLLM (proxy)", base_url: "http://localhost:4000/v1", env_key: "LITELLM_API_KEY", kind: "api",
             models: vec!["gpt-4o", "claude-3-7-sonnet", "gemini/gemini-2.5-pro"] },
         Provider { key: "openrouter", label: "OpenRouter", base_url: "https://openrouter.ai/api/v1", env_key: "OPENROUTER_API_KEY", kind: "api",
-            models: vec!["anthropic/claude-opus-5-5", "anthropic/claude-opus-4-8", "z-ai/glm-5.3", "qwen/qwen3.8-max", "deepseek/deepseek-v4.1", "meta-llama/llama-3.3-70b-instruct"] },
+            models: vec!["anthropic/claude-opus-5-5", "anthropic/claude-mythos-5-1", "anthropic/claude-opus-4-8", "z-ai/glm-5.3", "qwen/qwen3.8-max", "deepseek/deepseek-v4.1", "meta-llama/llama-3.3-70b-instruct"] },
         // OpenCode Zen — the curated OpenAI-compatible gateway behind the
         // `opencode` CLI (https://opencode.ai/zen). Works two ways, like
         // anthropic/openai/xai/gemini above: as a plain API-key provider here,
@@ -62,7 +62,7 @@ pub fn providers() -> Vec<Provider> {
         // `opencode` agentic CLI on the user's own Zen/plan login — no key
         // needed in that mode. `kind: "cli"` reflects the latter.
         Provider { key: "opencode", label: "OpenCode Zen", base_url: "https://opencode.ai/zen/v1", env_key: "OPENCODE_API_KEY", kind: "cli",
-            models: vec!["claude-opus-5-5", "claude-opus-5", "claude-sonnet-5", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.5", "gemini-3-pro", "gemini-3.8-flash", "grok-4.7", "grok-4.5", "glm-5.3", "deepseek-v4.1", "deepseek-v4-pro", "qwen3.8-max", "kimi-k3"] },
+            models: vec!["claude-opus-5-5", "claude-mythos-5-1", "claude-opus-5", "claude-sonnet-5", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.5", "gemini-3-pro", "gemini-3.8-flash", "grok-4.7", "grok-4.5", "glm-5.3", "deepseek-v4.1", "deepseek-v4-pro", "qwen3.8-max", "kimi-k3"] },
         // Nous Research — Hermes models via the Nous Portal. As an API-key
         // provider here (OpenAI-compatible `inference-api.nousresearch.com`),
         // or (with --subscription) driven through the `hermes` CLI
@@ -72,7 +72,7 @@ pub fn providers() -> Vec<Provider> {
         // (`hermes chat -m <model> --provider nous`): `nous:qwen3.8-max` and other
         // routed models work even though only the Hermes-family defaults are listed.
         Provider { key: "nous", label: "Nous Research (Hermes)", base_url: "https://inference-api.nousresearch.com/v1", env_key: "NOUS_API_KEY", kind: "cli",
-            models: vec!["Hermes-4-405B", "Hermes-4-70B", "DeepHermes-3-Mistral-24B-Preview", "qwen3.8-max", "qwen3.8-omni-flash"] },
+            models: vec!["Hermes-4-405B", "Hermes-4-70B", "DeepHermes-3-Mistral-24B-Preview", "claude-mythos-5-1", "qwen3.8-max", "qwen3.8-omni-flash"] },
         // Azure OpenAI (OpenAI-compatible). Set AZURE_OPENAI_ENDPOINT (e.g.
         // https://<resource>.openai.azure.com), optionally AZURE_OPENAI_API_VERSION
         // (default 2024-10-21), and use `azure:<your-deployment-name>` as the model.

@@ -163,7 +163,7 @@ pub(crate) const ACCEPTED: &[&str] = &[
 const COMMANDS: &[&str] = &[
     "/help", "/onboard", "/show", "/config", "/providers", "/model", "/key", "/sub", "/target",
     "/scope-file",     "/authorization", "/class",     "/repo", "/auth", "/creds", "/focus", "/objective", "/scope-out", "/attach", "/context", "/mcp", "/offline",
-    "/class", "/research", "/quick", "/economy", "/eco", "/votes", "/chain", "/recon", "/tempmail", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/only", "/theme", "/clear", "/run", "/stop", "/pause", "/continue", "/runs", "/results", "/report",
+    "/class", "/research", "/quick", "/economy", "/eco", "/sandbox", "/votes", "/chain", "/recon", "/tempmail", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/only", "/theme", "/clear", "/run", "/stop", "/pause", "/continue", "/runs", "/results", "/report",
     "/status", "/logs", "/diff", "/retest", "/validate", "/finding", "/pocs", "/expand", "/integrations",
     "/memory", "/forget", "/graph", "/inscope", "/observe", "/guardrail", "/policy",
     "/capability", "/audit", "/quit",
@@ -305,6 +305,10 @@ struct Session {
     color: bool,
     /// Engagement scope from onboarding: web | infra | cloud | ai | skills.
     scope: &'static str,
+    /// Kali sandbox image (Some("") = default kali-rolling, Some(img) = custom,
+    /// None = off / host execution). Auto-enabled for wildcard scope when a
+    /// container runtime is available.
+    sandbox: Option<String>,
     /// Explicit agent allowlist (`/only <agent>[,agent2,...]`) — when non-empty,
     /// /run tests EXACTLY these agents and skips recon-based selection, same as
     /// the CLI's `--only` flag. Empty = normal recon-driven auto-selection.
@@ -348,6 +352,7 @@ impl Default for Session {
             attachments: Vec::new(),
             color: true,
             scope: "web",
+            sandbox: None,
             pinned: Vec::new(),
         }
     }
@@ -1080,6 +1085,23 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
                 println!("    1 voter · 1 chain round · light recon · ≤6 agents");
                 println!("    \x1b[2m(raise any back up with /votes /chain /recon /agents — or /run to go)\x1b[0m");
             }
+            "/sandbox" => {
+                match arg.trim() {
+                    "" | "on" | "kali" => {
+                        s.sandbox = Some(String::new());
+                        println!("  \x1b[1;35m📦 sandbox ON\x1b[0m — agent commands run inside a Kali container (isolation + recon toolbox)");
+                        println!("    \x1b[2mThe container auto-starts on /run (Docker or Podman required).\x1b[0m");
+                    }
+                    "off" => {
+                        s.sandbox = None;
+                        println!("  sandbox off — commands run on the host");
+                    }
+                    image => {
+                        s.sandbox = Some(image.to_string());
+                        println!("  \x1b[1;35m📦 sandbox ON\x1b[0m — image: {image}");
+                    }
+                }
+            }
             "/tempmail" | "/temp-email" => {
                 match arg.trim() {
                     "on" | "true" | "1" => { s.temp_email = true; println!("  temp-email: \x1b[32mon\x1b[0m — register flows may use the free mail.tm inbox to read a confirmation code"); }
@@ -1746,6 +1768,7 @@ async fn run(base: &Path, s: &Session, history: &mut Vec<RunRecord>) {
     cfg.oob_dns = s.oob_dns.clone();
     cfg.sms = s.sms.clone();
     cfg.auth = s.auth.clone();
+    cfg.sandbox = s.sandbox.clone();
     cfg.pinned = s.pinned.clone();
     // Multiple /auth identities → prepend the access-control (IDOR/BOLA/BFLA) directive.
     if let Some(rd) = roles_directive(&s.roles) {
@@ -1831,6 +1854,7 @@ async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
     cfg.oob_dns = s.oob_dns.clone();
     cfg.sms = s.sms.clone();
     cfg.auth = s.auth.clone();
+    cfg.sandbox = s.sandbox.clone();
     cfg.pinned = s.pinned.clone();
     if matches!(mode_e, crate::Mode::Grey) { cfg.repo = s.repo.clone(); }
     crate::apply_creds(&mut cfg, s.creds.as_deref()).await;
@@ -2552,6 +2576,11 @@ fn show(s: &Session) {
     println!("  │  out-scope: {}", s.out_of_scope.clone().unwrap_or_else(|| "(none — /scope-out <exclusions>)".into()));
     if let Some(a) = &s.authorization { println!("  │  authz ref: {a}"); }
     if !s.pinned.is_empty() { println!("  │  pinned   : {} agent(s) — {} \x1b[2m(/only clear or /class clear to unpin)\x1b[0m", s.pinned.len(), s.pinned.join(", ")); }
+    println!("  │  sandbox  : {}", match &s.sandbox {
+        Some(img) if img.is_empty() => "📦 ON (kalilinux/kali-rolling)".to_string(),
+        Some(img) => format!("📦 ON ({img})"),
+        None => "(off — /sandbox to enable Kali container)".into(),
+    });
     println!("  │  opts     : mcp={} offline={} votes={} recon={} chain-depth={} max-agents={} research={} idle-stop={} temp-email={}",
         onoff(s.mcp), onoff(s.offline), s.vote_n, s.recon_intensity, s.chain_depth, s.max_agents, onoff(s.research),
         if s.idle_secs == 0 { "off".to_string() } else { format!("{}m", s.idle_secs / 60) }, onoff(s.temp_email));
@@ -2648,6 +2677,7 @@ fn help() {
     h("/authorization <url>", "declare the program/authorization (e.g. a bug-bounty URL) — recorded; does NOT widen scope");
     h("/research",          "whitebox/greybox: hunt a NOVEL, CVE-reportable bug (known-CVE dedup + patch-diff variant analysis)");
     h("/quick",             "economy preset: short, low-cost run (1 voter · 1 chain round · light recon · ≤6 agents)");
+    h("/sandbox [img|off]", "run agent commands inside a Kali container (isolation + recon toolbox); auto-enables for wildcard scope");
     h("/tempmail on|off",   "opt-in disposable inbox (mail.tm) to read a register confirmation code");
     h("/timeout <min>",     "idle guardrail: stop if no new finding in <min> (0 = off)");
     h("/proxy <url>|off",   "route agent HTTP through Burp/ZAP  (/burp = default :8080)");
