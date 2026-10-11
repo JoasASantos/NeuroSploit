@@ -285,3 +285,18 @@ node web/server.js                            # http://localhost:4173
 `PORT` (or `NEUROSPLOIT_WEB_PORT`) overrides the port. The server auto-locates the compiled binary
 under `neurosploit-rs/target/{release,debug}/neurosploit` relative to the repo root; if neither
 exists, `/api/exploit` and `/api/repl` return a 500 with a build hint.
+
+## Attack graph, traffic, traces, re-test
+
+Everything below reads files the CLI wrote into the run directory, or shells out
+to the CLI — the console never re-implements harness logic.
+
+| Method | Path | What |
+|---|---|---|
+| `GET` | `/api/runs/:id/graph` | `{ chains, todo, graph }` — `graph/{live-chains,chains}.json`, `graph/todo.json`, `graph/{live,graph}.json` (live files win while the run is in progress) |
+| `POST` | `/api/runs/:id/graph` | Recompute with `neurosploit graph <run>`; body `{ "push": true }` adds `--push` (Neo4j credentials from the server's `NEO4J_URI` / `NEO4J_USER` / `NEO4J_PASSWORD`). Returns the CLI output and the refreshed graph. |
+| `GET` | `/api/runs/:id/traffic?host=&method=&q=&offset=&limit=` | The recording interceptor's `flows.jsonl`, filtered, newest first; `hosts` lists every host seen. |
+| `GET` | `/api/runs/:id/traces?q=` | The shared agent traces (`traces/*.md`) and, with `q`, line hits across all of them. |
+| `POST` | `/api/runs/:id/retest` | `neurosploit poc <run>` — re-runs every finding's recorded proof and reports what still reproduces (report only; nothing is written back). |
+
+`GET /api/runs/:id` now also returns `extras`: `{ graph, todo, traces, flows, deliverables[] }`.

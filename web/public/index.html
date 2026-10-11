@@ -346,7 +346,6 @@
       </div>
       <nav class="run-tabs">
         <button class="run-tab active" data-tab="findings">Findings <span id="liveFindingsCount">0</span></button>
-        <button class="run-tab" data-tab="attackpath">Generative Attack Path Chaining</button>
         <button class="run-tab" data-tab="log">Activity log</button>
       </nav>
       <div class="run-body">
@@ -361,13 +360,12 @@
           </div>
           <div class="table-wrap">
             <table class="data-table" id="liveFindingsTable">
-              <thead><tr><th data-sort="severity">Severity</th><th data-sort="title">Title</th><th data-sort="endpoint">Endpoint</th><th data-sort="cwe">CWE</th><th data-sort="agent">Agent</th><th data-sort="confidence" class="col-conf">Conf.</th></tr></thead>
+              <thead><tr><th data-sort="severity">Severity</th><th data-sort="title">Title</th><th data-sort="endpoint">Endpoint</th><th data-sort="cwe">CWE</th><th data-sort="review_status">Status</th><th data-sort="wire">Wire</th><th data-sort="agent">Agent</th><th data-sort="confidence" class="col-conf">Conf.</th></tr></thead>
               <tbody></tbody>
             </table>
           </div>
           <div class="empty-state" id="liveFindingsEmpty">No validated findings yet.</div>
         </div>
-        <div class="run-tab-panel" data-tabpanel="attackpath" hidden><div id="liveAttackPath"></div></div>
         <div class="run-tab-panel log-tab-panel" data-tabpanel="log" hidden>
           <div class="log-panel" id="logList"></div>
           <div class="send-prompt-row" id="sendPromptRow" hidden>
@@ -393,6 +391,9 @@
           <a class="btn" id="detailOpenReport" target="_blank" hidden>Open report</a>
           <a class="btn" id="detailOpenPdf" target="_blank" hidden>⤓ PDF</a>
           <button class="btn" id="btnBuildReport" title="Regenerate this run's report from its findings">Generate report</button>
+          <button class="btn" id="btnGraphRecompute" title="Recompute the attack graph with the CLI (neurosploit graph)">↻ Graph</button>
+          <button class="btn" id="btnGraphPush" title="Push the attack graph to Neo4j (neurosploit graph --push; needs NEO4J_URI / NEO4J_USER / NEO4J_PASSWORD on the server)">⇪ Neo4j</button>
+          <button class="btn" id="btnRetest" title="Re-run every finding's recorded proof (neurosploit poc) and see what still reproduces">⟳ Re-test</button>
           <a class="btn" id="detailOpenAudit" target="_blank" hidden title="Every action this run took, hash-chained">Audit trail</a>
           <button class="btn btn-danger" id="btnDeleteRun" title="Permanently delete this session and its report">🗑 Delete</button>
           <button class="btn" id="btnDetailBack">← New engagement</button>
@@ -400,7 +401,6 @@
       </header>
       <nav class="run-tabs">
         <button class="run-tab active" data-tab="findings">Findings <span id="detailFindingsCount">0</span></button>
-        <button class="run-tab" data-tab="attackpath">Generative Attack Path Chaining</button>
       </nav>
       <div class="run-body">
         <div class="run-tab-panel" data-tabpanel="findings">
@@ -411,16 +411,17 @@
               <span class="search-icon" aria-hidden="true">⌕</span>
               <input id="detailFindingSearch" type="text" placeholder="Filter findings" />
             </div>
+            <button class="btn btn-sm" id="btnExportCsv" title="Export the filtered findings as CSV">⤓ CSV</button>
           </div>
+          <div class="kpi-row" id="detailKpis"></div>
           <div class="table-wrap">
             <table class="data-table" id="detailFindingsTable">
-              <thead><tr><th data-sort="severity">Severity</th><th data-sort="title">Title</th><th data-sort="endpoint">Endpoint</th><th data-sort="cwe">CWE</th><th data-sort="agent">Agent</th><th data-sort="confidence" class="col-conf">Conf.</th></tr></thead>
+              <thead><tr><th data-sort="severity">Severity</th><th data-sort="title">Title</th><th data-sort="endpoint">Endpoint</th><th data-sort="cwe">CWE</th><th data-sort="review_status">Status</th><th data-sort="wire">Wire</th><th data-sort="agent">Agent</th><th data-sort="confidence" class="col-conf">Conf.</th></tr></thead>
               <tbody></tbody>
             </table>
           </div>
           <div class="empty-state" id="detailFindingsEmpty">No validated findings.</div>
         </div>
-        <div class="run-tab-panel" data-tabpanel="attackpath" hidden><div id="detailAttackPath"></div></div>
       </div>
     </section>
 

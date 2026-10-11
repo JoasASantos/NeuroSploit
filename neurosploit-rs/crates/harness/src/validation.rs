@@ -63,6 +63,12 @@ pub struct Exchange {
     /// questions.
     #[serde(default)]
     pub request_headers: std::collections::BTreeMap<String, String>,
+    /// Who observed this exchange: "" (the agent's account), "wire:replay"
+    /// (the harness re-sent it through its own scope-guarded client),
+    /// "wire:recorded" (seen by the recording interceptor), "wire:harness"
+    /// (the harness made the original request itself).
+    #[serde(default)]
+    pub provenance: String,
 }
 
 impl Exchange {
@@ -124,8 +130,95 @@ pub struct Evidence {
     /// requested by a different identity.
     pub identity_a: Option<Exchange>,
     pub identity_b: Option<Exchange>,
+    /// Authorization matrix: one probe per identity for a single route+method,
+    /// each tagged with the privilege decision policy SAYS should happen.
+    #[serde(default)]
+    pub matrix: Vec<MatrixProbe>,
+    /// The 403-vs-business-error oracle for a state-changing route: a
+    /// should-be-denied identity and the privileged control both call the route
+    /// with a well-formed NON-EXISTENT id, so reachability is proven without
+    /// mutating any real object.
+    #[serde(default)]
+    pub oracle: Option<OracleProbe>,
+    /// What the wire said about the agent's account (see `crate::wire`).
+    #[serde(default)]
+    pub wire: Option<WireCheck>,
     #[serde(default)]
     pub notes: Vec<String>,
+}
+
+/// The result of checking an agent's recorded exchanges against the wire.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WireCheck {
+    /// Exchanges the harness re-observed itself and that reproduced the claim.
+    #[serde(default)]
+    pub reproduced: usize,
+    /// Exchanges whose method/URL/status the recording interceptor corroborated.
+    #[serde(default)]
+    pub corroborated: usize,
+    /// Exchanges already observed by the harness (no agent account to check).
+    #[serde(default)]
+    pub harness_observed: usize,
+    /// Exchanges nothing on the wire could speak to (mutating verb, scope,
+    /// missing credentials, network error).
+    #[serde(default)]
+    pub unverified: usize,
+    /// Where the wire disagreed with the agent — each a human-readable reason.
+    #[serde(default)]
+    pub contradicted: Vec<String>,
+    /// Requests the agent reports that the active recording interceptor never
+    /// saw. A signal, not a verdict: tools can bypass a proxy.
+    #[serde(default)]
+    pub absent_from_capture: Vec<String>,
+}
+
+impl WireCheck {
+    /// At least one exchange the verdict rests on came from the wire.
+    pub fn wire_backed(&self) -> bool {
+        self.reproduced + self.corroborated + self.harness_observed > 0
+    }
+}
+
+impl Exchange {
+    /// True when the harness itself observed this exchange.
+    pub fn from_wire(&self) -> bool {
+        self.provenance.starts_with("wire:")
+    }
+}
+
+/// What the access policy says an identity should get on a route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Expect {
+    Allow,
+    Deny,
+}
+
+impl Default for Expect {
+    fn default() -> Self {
+        Expect::Deny
+    }
+}
+
+/// One identity's attempt at one route+method.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MatrixProbe {
+    /// "admin" | "readonly" | "tenantB" | "anonymous" | …
+    #[serde(default)]
+    pub identity: String,
+    #[serde(default)]
+    pub expect: Expect,
+    pub exchange: Exchange,
+}
+
+/// The non-destructive write-route oracle: both calls use a non-existent id.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OracleProbe {
+    /// The should-be-denied identity calling the write route.
+    pub denied: Exchange,
+    /// The privileged identity calling the same route with the same
+    /// non-existent id — the control the denied call is compared against.
+    pub privileged: Exchange,
 }
 
 /// What the engine concluded.
@@ -363,7 +456,9 @@ impl CweValidator for IdorValidator {
         "idor"
     }
     fn cwes(&self) -> &'static [&'static str] {
-        &["639", "862", "863", "284", "285", "566", "425"]
+        // Object-level / BOLA + forced browsing. Function-level authorization
+        // (862/863/285) is owned by AuthzMatrixValidator — see its note.
+        &["639", "284", "566", "425"]
     }
     fn evidence_required(&self) -> &'static [&'static str] {
         &["identity_A_resource", "identity_B_request", "successful unauthorized access", "response_semantics_match"]
@@ -400,6 +495,159 @@ impl CweValidator for IdorValidator {
             b.status,
             overlap * 100.0
         ))
+    }
+}
+
+/// Does this response look like an auth denial?
+fn is_auth_denied(x: &Exchange) -> bool {
+    x.status == 401 || x.status == 403
+}
+
+/// A body that is really a login page / redirect to sign-in, or equal to the
+/// public/unauthenticated view — the classic "status says yes, body says no".
+fn looks_like_login_or_public(x: &Exchange) -> bool {
+    if x.is_redirect() {
+        let loc = x.header("location").to_lowercase();
+        if loc.contains("login") || loc.contains("signin") || loc.contains("sign-in") || loc.contains("auth") {
+            return true;
+        }
+    }
+    let b = x.body.to_lowercase();
+    b.contains("type=\"password\"")
+        || b.contains("name=\"password\"")
+        || b.contains("please log in")
+        || b.contains("please sign in")
+        || b.contains("login required")
+}
+
+/// An auth-shaped error signature in a body (used to tell a FORBIDDEN apart
+/// from a business-level "not found").
+fn has_auth_signature(x: &Exchange) -> bool {
+    let b = x.body.to_lowercase();
+    b.contains("forbidden")
+        || b.contains("unauthorized")
+        || b.contains("access denied")
+        || b.contains("not authorized")
+        || b.contains("permission denied")
+}
+
+/// A business-level signature — the request reached the handler and stopped on
+/// a domain rule, not on authorization.
+fn has_business_signature(x: &Exchange) -> bool {
+    let b = x.body.to_lowercase();
+    b.contains("not found")
+        || b.contains("does not exist")
+        || b.contains("no such")
+        || b.contains("invalid state")
+        || b.contains("already")
+        || b.contains("cannot be")
+}
+
+/// Did the call reach business logic? Either a success, or a business-shaped
+/// error (404/409/422/400) that is NOT an authorization refusal.
+fn reached_business_logic(x: &Exchange) -> bool {
+    if is_auth_denied(x) || has_auth_signature(x) {
+        return false;
+    }
+    if x.is_success() {
+        return true;
+    }
+    matches!(x.status, 400 | 404 | 409 | 422) && has_business_signature(x)
+}
+
+/// Did the denied identity get the SAME business outcome as the privileged
+/// control — i.e. identical treatment, which means authorization did nothing?
+fn same_business_outcome(denied: &Exchange, privileged: &Exchange) -> bool {
+    // Same status class.
+    let same_class = (denied.status / 100) == (privileged.status / 100);
+    // Both business (not auth) and roughly the same shape.
+    same_class && reached_business_logic(denied) && reached_business_logic(privileged)
+}
+
+/// Function-level authorization: missing-auth, BFLA, and read-only-can-write,
+/// decided from a per-identity matrix and/or the 403-vs-business-error oracle.
+/// Object-level (BOLA) stays with `IdorValidator`.
+pub struct AuthzMatrixValidator;
+impl CweValidator for AuthzMatrixValidator {
+    fn name(&self) -> &'static str {
+        "authz-matrix"
+    }
+    fn cwes(&self) -> &'static [&'static str] {
+        // Missing Authorization, Incorrect Authorization, Improper Authorization.
+        &["862", "863", "285"]
+    }
+    fn evidence_required(&self) -> &'static [&'static str] {
+        &[
+            "per-identity matrix (>=1 should-be-denied identity) OR the 403-vs-business-error oracle",
+            "privileged baseline for contrast",
+            "a write proven non-destructively (non-existent id) or a read proven by matching content",
+        ]
+    }
+    fn validate(&self, f: &Finding, ev: &Evidence) -> Verdict {
+        // 862/863/285 can also describe an object-level access check. When the
+        // evidence is the identity pair (not a matrix/oracle), that is exactly
+        // what `IdorValidator` judges — delegate so a BOLA labeled 863 is not
+        // forced through the function-level path.
+        if ev.matrix.is_empty()
+            && ev.oracle.is_none()
+            && (ev.identity_a.is_some() || ev.identity_b.is_some())
+        {
+            return IdorValidator.validate(f, ev);
+        }
+
+        // (A) Oracle path — non-destructive proof for state-changing routes.
+        if let Some(o) = &ev.oracle {
+            if is_auth_denied(&o.denied) {
+                return Verdict::Rejected(format!(
+                    "authorization enforced — the denied identity got {}",
+                    o.denied.status
+                ));
+            }
+            if looks_like_login_or_public(&o.denied) {
+                return Verdict::Rejected(
+                    "the response is a login page / public view, not the protected handler".into(),
+                );
+            }
+            if reached_business_logic(&o.denied) && same_business_outcome(&o.denied, &o.privileged) {
+                return Verdict::Confirmed(format!(
+                    "state-changing route reached business logic as a should-be-denied identity \
+                     (non-existent id → {} matching the privileged control, not a 401/403)",
+                    o.denied.status
+                ));
+            }
+            return Verdict::NeedsReview(format!(
+                "ambiguous — the denied identity got {} with no clear business or auth signature; \
+                 cannot separate authorization from a generic error",
+                o.denied.status
+            ));
+        }
+
+        // (B) Matrix path — read/data routes across identities.
+        let deny_probes: Vec<&MatrixProbe> =
+            ev.matrix.iter().filter(|p| p.expect == Expect::Deny).collect();
+        if deny_probes.is_empty() {
+            return Verdict::NeedsReview(
+                "no should-be-denied identity in the matrix — there is nothing to prove".into(),
+            );
+        }
+        let served = deny_probes.iter().find(|p| {
+            let x = &p.exchange;
+            x.is_success()
+                && !x.is_empty()
+                && !looks_like_login_or_public(x)
+                && !has_auth_signature(x)
+        });
+        match served {
+            Some(p) => Verdict::Confirmed(format!(
+                "identity '{}' (expected deny) was served the protected resource: {} with {} bytes",
+                if p.identity.is_empty() { "denied" } else { &p.identity },
+                p.exchange.status,
+                p.exchange.len()
+            )),
+            None => Verdict::Rejected(
+                "every should-be-denied identity was correctly refused (401/403, login page, or empty)".into(),
+            ),
+        }
     }
 }
 
@@ -961,6 +1209,7 @@ pub fn validators() -> Vec<Box<dyn CweValidator>> {
         Box::new(SqliValidator),
         Box::new(XssValidator),
         Box::new(IdorValidator),
+        Box::new(AuthzMatrixValidator),
         Box::new(SsrfValidator),
         Box::new(LfiValidator),
         Box::new(RceValidator),
@@ -1006,8 +1255,19 @@ pub fn validator_for(f: &Finding) -> Option<Box<dyn CweValidator>> {
         ("cross-site scripting", || Box::new(XssValidator)),
         ("xss", || Box::new(XssValidator)),
         ("idor", || Box::new(IdorValidator)),
-        ("broken access control", || Box::new(IdorValidator)),
         ("bola", || Box::new(IdorValidator)),
+        ("object-level", || Box::new(IdorValidator)),
+        // Function-level authorization → the matrix validator. These are
+        // listed before the broad "broken access control" fallback so the
+        // more specific label wins.
+        ("bfla", || Box::new(AuthzMatrixValidator)),
+        ("function-level", || Box::new(AuthzMatrixValidator)),
+        ("function level", || Box::new(AuthzMatrixValidator)),
+        ("missing authorization", || Box::new(AuthzMatrixValidator)),
+        ("improper authorization", || Box::new(AuthzMatrixValidator)),
+        ("authorization matrix", || Box::new(AuthzMatrixValidator)),
+        ("read-only", || Box::new(AuthzMatrixValidator)),
+        ("broken access control", || Box::new(IdorValidator)),
         ("ssrf", || Box::new(SsrfValidator)),
         ("server-side request forgery", || Box::new(SsrfValidator)),
         ("path traversal", || Box::new(LfiValidator)),
@@ -1066,6 +1326,47 @@ pub fn validator_for(f: &Finding) -> Option<Box<dyn CweValidator>> {
 /// promoted to confirmed by this stage — the engine's job is to remove doubt it
 /// can actually remove, not to add confidence it has not measured.
 pub fn judge(f: &Finding, ev: Option<&Evidence>) -> Verdict {
+    let v = judge_evidence(f, ev);
+    wire_temper(v, ev)
+}
+
+/// Temper a verdict with what the wire said about the agent's account.
+///
+/// A confirmation that rests on exchanges the wire contradicted is not a
+/// confirmation: it becomes needs-review with the contradiction as the reason.
+/// The wire never *upgrades* a verdict here — reproduced exchanges already
+/// replaced the agent's account before the validator ran, so they are what was
+/// judged. Always on: there is no switch for honesty.
+fn wire_temper(v: Verdict, ev: Option<&Evidence>) -> Verdict {
+    let Verdict::Confirmed(reason) = v else { return v };
+    let wc = ev.and_then(|e| e.wire.as_ref());
+    if let Some(w) = wc {
+        if !w.contradicted.is_empty() {
+            return Verdict::NeedsReview(format!(
+                "validator would confirm ({reason}), but the wire contradicts the agent's account: {}",
+                w.contradicted.join("; ")
+            ));
+        }
+    }
+    let wire_backed = wc.map(|w| w.wire_backed()).unwrap_or(false)
+        || ev.map(|e| e.attack.as_ref().map(|a| a.from_wire()).unwrap_or(false)).unwrap_or(false);
+    if wire_backed {
+        Verdict::Confirmed(format!("{reason} [wire-verified]"))
+    } else {
+        Verdict::Confirmed(reason)
+    }
+}
+
+fn judge_evidence(f: &Finding, ev: Option<&Evidence>) -> Verdict {
+    // Authorization-matrix evidence is self-identifying: if the matrix engine
+    // (or an agent) recorded per-identity probes or the 403-vs-business-error
+    // oracle, judge it with the function-level rule regardless of how the
+    // finding was labeled — the evidence shape is unambiguous.
+    if let Some(ev) = ev {
+        if !ev.matrix.is_empty() || ev.oracle.is_some() {
+            return AuthzMatrixValidator.validate(f, ev);
+        }
+    }
     let Some(v) = validator_for(f) else {
         return Verdict::NeedsReview(format!(
             "no deterministic validator for {} — kept for human review",
@@ -1455,6 +1756,151 @@ mod tests {
     }
     fn f(cwe: &str, title: &str) -> Finding {
         Finding { cwe: cwe.into(), title: title.into(), confidence: 0.8, ..Default::default() }
+    }
+
+    // Helper: an exchange tagged with an identity.
+    fn ex_id(status: u16, body: &str, id: &str) -> Exchange {
+        Exchange { identity: id.into(), ..ex(status, body) }
+    }
+
+    #[test]
+    fn wire_contradiction_blocks_confirmation() {
+        let base = ex(200, "welcome user");
+        let attack = ex(500, "You have an error in your SQL syntax near '1''");
+        let mut ev = Evidence {
+            baseline: Some(base),
+            attack: Some(attack.clone()),
+            repeats: vec![attack.clone(), attack],
+            ..Default::default()
+        };
+        assert!(matches!(judge(&f("CWE-89", "SQLi"), Some(&ev)), Verdict::Confirmed(_)));
+        ev.wire = Some(WireCheck { contradicted: vec!["replay returned 200 with no SQL error".into()], ..Default::default() });
+        match judge(&f("CWE-89", "SQLi"), Some(&ev)) {
+            Verdict::NeedsReview(r) => assert!(r.contains("wire contradicts"), "{r}"),
+            v => panic!("expected needs-review, got {v:?}"),
+        }
+    }
+
+    #[test]
+    fn wire_backed_confirmation_is_labelled() {
+        let base = ex(200, "welcome user");
+        let mut attack = ex(500, "You have an error in your SQL syntax near '1''");
+        attack.provenance = "wire:replay".into();
+        let ev = Evidence { baseline: Some(base), attack: Some(attack.clone()), repeats: vec![attack.clone(), attack], ..Default::default() };
+        match judge(&f("CWE-89", "SQLi"), Some(&ev)) {
+            Verdict::Confirmed(r) => assert!(r.contains("[wire-verified]"), "{r}"),
+            v => panic!("expected confirmation, got {v:?}"),
+        }
+    }
+
+    #[test]
+    fn authz_oracle_403_is_enforced() {
+        let ev = Evidence {
+            oracle: Some(OracleProbe {
+                denied: ex_id(403, "Forbidden", "readonly"),
+                privileged: ex_id(404, "record not found", "admin"),
+            }),
+            ..Default::default()
+        };
+        assert!(matches!(
+            judge(&f("CWE-862", "Missing authorization on refund"), Some(&ev)),
+            Verdict::Rejected(_)
+        ));
+    }
+
+    #[test]
+    fn authz_oracle_business_error_matching_control_confirms() {
+        // Denied identity reached business logic: non-existent id → same
+        // "not found" the privileged control got, not a 403.
+        let ev = Evidence {
+            oracle: Some(OracleProbe {
+                denied: ex_id(404, "record not found", "readonly"),
+                privileged: ex_id(404, "record not found", "admin"),
+            }),
+            ..Default::default()
+        };
+        match judge(&f("", "read-only role can PATCH decision"), Some(&ev)) {
+            Verdict::Confirmed(r) => assert!(r.contains("business logic"), "{r}"),
+            v => panic!("expected confirmation, got {v:?}"),
+        }
+    }
+
+    #[test]
+    fn authz_oracle_generic_error_is_needs_review() {
+        let ev = Evidence {
+            oracle: Some(OracleProbe {
+                denied: ex_id(500, "Internal Server Error", "anonymous"),
+                privileged: ex_id(404, "record not found", "admin"),
+            }),
+            ..Default::default()
+        };
+        assert!(matches!(
+            judge(&f("CWE-862", "missing authorization"), Some(&ev)),
+            Verdict::NeedsReview(_)
+        ));
+    }
+
+    #[test]
+    fn authz_matrix_denied_identity_served_confirms() {
+        let ev = Evidence {
+            matrix: vec![
+                MatrixProbe { identity: "admin".into(), expect: Expect::Allow, exchange: ex_id(200, "{\"total\":86776,\"items\":[...]}", "admin") },
+                MatrixProbe { identity: "readonly".into(), expect: Expect::Deny, exchange: ex_id(200, "{\"total\":86776,\"items\":[...]}", "readonly") },
+            ],
+            ..Default::default()
+        };
+        match judge(&f("CWE-862", "chargeback list – missing authorization"), Some(&ev)) {
+            Verdict::Confirmed(r) => assert!(r.contains("expected deny"), "{r}"),
+            v => panic!("expected confirmation, got {v:?}"),
+        }
+    }
+
+    #[test]
+    fn authz_matrix_anonymous_denied_is_rejected() {
+        let ev = Evidence {
+            matrix: vec![MatrixProbe {
+                identity: "anonymous".into(),
+                expect: Expect::Deny,
+                exchange: ex_id(401, "Unauthorized", "anonymous"),
+            }],
+            ..Default::default()
+        };
+        assert!(matches!(
+            judge(&f("CWE-862", "missing authorization"), Some(&ev)),
+            Verdict::Rejected(_)
+        ));
+    }
+
+    #[test]
+    fn authz_matrix_login_page_200_is_not_a_finding() {
+        let ev = Evidence {
+            matrix: vec![MatrixProbe {
+                identity: "anonymous".into(),
+                expect: Expect::Deny,
+                exchange: ex_id(200, "<form><input type=\"password\" name=\"password\"></form>", "anonymous"),
+            }],
+            ..Default::default()
+        };
+        assert!(matches!(
+            judge(&f("CWE-862", "missing authorization"), Some(&ev)),
+            Verdict::Rejected(_)
+        ));
+    }
+
+    #[test]
+    fn authz_matrix_without_deny_identity_is_needs_review() {
+        let ev = Evidence {
+            matrix: vec![MatrixProbe {
+                identity: "admin".into(),
+                expect: Expect::Allow,
+                exchange: ex_id(200, "ok", "admin"),
+            }],
+            ..Default::default()
+        };
+        assert!(matches!(
+            judge(&f("CWE-862", "authorization matrix"), Some(&ev)),
+            Verdict::NeedsReview(_)
+        ));
     }
 
     #[test]

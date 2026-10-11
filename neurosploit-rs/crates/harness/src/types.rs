@@ -286,6 +286,18 @@ pub struct RunConfig {
     /// `pci-dss`·`hipaa`·`soc2`.
     #[serde(default)]
     pub compliance: Vec<String>,
+    /// Authorization matrix engine: `on`|`off`|`auto` (auto = run when
+    /// `creds_file` loads >=2 identities across >=2 privilege tiers).
+    #[serde(default)]
+    pub authz_matrix: Option<String>,
+    /// Path to a `creds.yaml` carrying the multi-identity block the matrix
+    /// engine sweeps (admin/readonly/tenant/anonymous + sample values).
+    #[serde(default)]
+    pub creds_file: Option<String>,
+    /// Neo4j endpoint for the attack graph (bolt:// or http(s)://). Falls back
+    /// to `NEO4J_URI`. Credentials only from `NEO4J_USER`/`NEO4J_PASSWORD`.
+    #[serde(default)]
+    pub neo4j: Option<String>,
     /// How much compute to spend and where. Defaults to unlimited, which is the
     /// behaviour that existed before budgets — an operator who asks for nothing
     /// gets the full run.
@@ -348,6 +360,9 @@ impl RunConfig {
             sandbox: None,
             revalidate_poc: false,
             compliance: Vec::new(),
+            authz_matrix: None,
+            creds_file: None,
+            neo4j: None,
         }
     }
 }

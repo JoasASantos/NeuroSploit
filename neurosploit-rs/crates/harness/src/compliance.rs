@@ -35,6 +35,8 @@ pub enum Framework {
     Hipaa,
     /// SOC 2 — Trust Services Criteria (security, availability, confidentiality).
     Soc2,
+    /// GDPR — EU General Data Protection Regulation (2016/679).
+    Gdpr,
 }
 
 impl Framework {
@@ -43,6 +45,7 @@ impl Framework {
             Framework::PciDss => "pci-dss",
             Framework::Hipaa => "hipaa",
             Framework::Soc2 => "soc2",
+            Framework::Gdpr => "gdpr",
         }
     }
     pub fn title(self) -> &'static str {
@@ -50,6 +53,7 @@ impl Framework {
             Framework::PciDss => "PCI-DSS v4.0",
             Framework::Hipaa => "HIPAA Security Rule",
             Framework::Soc2 => "SOC 2 (Trust Services Criteria)",
+            Framework::Gdpr => "GDPR (EU 2016/679)",
         }
     }
     pub fn parse(s: &str) -> Option<Framework> {
@@ -57,11 +61,12 @@ impl Framework {
             "pci" | "pci-dss" | "pcidss" => Framework::PciDss,
             "hipaa" => Framework::Hipaa,
             "soc2" | "soc-2" | "soc" => Framework::Soc2,
+            "gdpr" | "eu-gdpr" => Framework::Gdpr,
             _ => return None,
         })
     }
-    pub fn all() -> [Framework; 3] {
-        [Framework::PciDss, Framework::Hipaa, Framework::Soc2]
+    pub fn all() -> [Framework; 4] {
+        [Framework::PciDss, Framework::Hipaa, Framework::Soc2, Framework::Gdpr]
     }
 }
 
@@ -191,6 +196,22 @@ fn controls_for(cat: Category, fw: Framework) -> Vec<Control> {
         (Soc2, InsufficientLogging) => vec![Control::new("CC7.2", "Security events are monitored and logged for analysis")],
         (Soc2, Csrf) => vec![Control::new("CC6.1", "Actions are performed only by authenticated, authorized users")],
         (Soc2, Other) => vec![Control::new("CC7.1", "Vulnerabilities are identified, evaluated and remediated")],
+
+        // ---- GDPR (EU 2016/679) ------------------------------------------
+        // Art. 5(1)(f) integrity & confidentiality; Art. 25 data protection by
+        // design; Art. 30 records of processing; Art. 32 security of processing;
+        // Art. 33/34 breach notification to the authority / data subjects.
+        (Gdpr, Injection) => vec![Control::new("Art. 32(1)(b)", "Ongoing confidentiality, integrity and resilience of processing systems"), Control::new("Art. 25", "Data protection by design and by default")],
+        (Gdpr, BrokenAccessControl) => vec![Control::new("Art. 32(1)(b)", "Confidentiality of processing — personal data accessible only to authorised persons"), Control::new("Art. 5(1)(f)", "Integrity and confidentiality principle")],
+        (Gdpr, BrokenAuth) => vec![Control::new("Art. 32(1)(b)", "Access to processing systems restricted by appropriate authentication"), Control::new("Art. 5(1)(f)", "Protection against unauthorised processing")],
+        (Gdpr, CryptoTransport) => vec![Control::new("Art. 32(1)(a)", "Encryption of personal data"), Control::new("Art. 5(1)(f)", "Protection against unauthorised access in transit")],
+        (Gdpr, SensitiveDataExposure) => vec![Control::new("Art. 5(1)(f)", "Protection against unauthorised or unlawful processing and accidental loss"), Control::new("Art. 33", "Notification of a personal data breach to the supervisory authority"), Control::new("Art. 5(1)(c)", "Data minimisation — expose no more than necessary")],
+        (Gdpr, SecurityMisconfig) => vec![Control::new("Art. 32(1)", "Appropriate technical and organisational security measures"), Control::new("Art. 25", "Data protection by design and by default")],
+        (Gdpr, Ssrf) => vec![Control::new("Art. 32(1)(b)", "Confidentiality of internal systems that process personal data")],
+        (Gdpr, VulnerableComponent) => vec![Control::new("Art. 32(1)(d)", "Regularly testing, assessing and evaluating the effectiveness of security measures")],
+        (Gdpr, InsufficientLogging) => vec![Control::new("Art. 30", "Records of processing activities"), Control::new("Art. 33(5)", "Documenting personal data breaches")],
+        (Gdpr, Csrf) => vec![Control::new("Art. 32(1)(b)", "Protection against unauthorised processing actions")],
+        (Gdpr, Other) => vec![Control::new("Art. 32(1)(d)", "Regular testing and evaluation of security measures")],
     }
 }
 

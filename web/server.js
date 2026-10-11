@@ -556,7 +556,101 @@ async function runDetail(id) {
   const assets = ['report.html', 'report.pdf', 'report.md', 'recon.md', 'exploitation.md', 'audit.jsonl', 'graph.json']
     .filter((f) => fs.existsSync(path.join(dir, f)));
   const pocs = await fsp.readdir(path.join(dir, 'pocs')).catch(() => []);
-  return { id, name: engagementNames.get(id) || '', meta, status, findings, assets, pocs };
+  // What the harness produced beyond the report: the attack graph, the shared
+  // traces, the recorded traffic, the deliverables. Presence only — the tabs
+  // fetch the content on demand.
+  const exists = (f) => fs.existsSync(path.join(dir, f));
+  const traces = await fsp.readdir(path.join(dir, 'traces')).catch(() => []);
+  const extras = {
+    graph: exists('graph/chains.json') || exists('graph/live-chains.json') || exists('graph/graph.json') || exists('graph/live.json'),
+    todo: exists('graph/todo.json'),
+    traces: traces.filter((f) => f.endsWith('.md')).length,
+    flows: exists('flows.jsonl'),
+    deliverables: await listTree(path.join(dir, 'deliverables'), 'deliverables'),
+  };
+  return { id, name: engagementNames.get(id) || '', meta, status, findings, assets, pocs, extras };
+}
+
+/// Relative file list under a directory (one level of nesting is enough for
+/// `deliverables/`: tests/, nuclei/, detection/).
+async function listTree(abs, rel, depth = 0) {
+  const out = [];
+  const ents = await fsp.readdir(abs, { withFileTypes: true }).catch(() => []);
+  for (const e of ents) {
+    if (e.isDirectory() && depth < 2) out.push(...await listTree(path.join(abs, e.name), `${rel}/${e.name}`, depth + 1));
+    else if (e.isFile()) out.push(`${rel}/${e.name}`);
+  }
+  return out.sort();
+}
+
+/// Run the real CLI against a run directory and capture its output. The web
+/// console never re-implements harness logic — it shells out, like `rebuild`.
+function runCli(args) {
+  return new Promise((resolve) => {
+    if (!BIN) return resolve({ code: -1, buf: 'neurosploit binary not found — run `cargo build --release` in neurosploit-rs/' });
+    const child = spawn(BIN, args, { cwd: ROOT, env: { ...process.env, ...envOverrides() } });
+    let buf = '';
+    child.stdout.on('data', (c) => { buf += c.toString('utf8'); });
+    child.stderr.on('data', (c) => { buf += c.toString('utf8'); });
+    child.on('close', (code) => resolve({ code, buf: stripAnsi(buf) }));
+    child.on('error', (e) => resolve({ code: -1, buf: e.message }));
+  });
+}
+
+/// The attack graph a run produced: chains, the dependency todolist and the
+/// graph itself. Live files (written during the run) win while it runs.
+async function runGraph(dir) {
+  const pick = async (...names) => {
+    for (const n of names) {
+      const v = await readJsonSafe(path.join(dir, n), null);
+      if (v) return v;
+    }
+    return null;
+  };
+  return {
+    chains: await pick('graph/live-chains.json', 'graph/chains.json'),
+    todo: await pick('graph/todo.json'),
+    graph: await pick('graph/live.json', 'graph/graph.json'),
+  };
+}
+
+/// The recording interceptor's log, filtered and paged.
+async function runTraffic(dir, q) {
+  const text = await fsp.readFile(path.join(dir, 'flows.jsonl'), 'utf8').catch(() => '');
+  let rows = text.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  const hostOf = (u) => { try { return new URL(u).host; } catch { return String(u || '').split('/')[0]; } };
+  const hosts = [...new Set(rows.map((r) => hostOf(r.url)))].sort();
+  const host = (q.get('host') || '').trim().toLowerCase();
+  const method = (q.get('method') || '').trim().toUpperCase();
+  const needle = (q.get('q') || '').trim().toLowerCase();
+  if (host) rows = rows.filter((r) => hostOf(r.url).toLowerCase().includes(host));
+  if (method) rows = rows.filter((r) => (r.method || '').toUpperCase() === method);
+  if (needle) rows = rows.filter((r) => `${r.method} ${r.url} ${r.status} ${r.content_type}`.toLowerCase().includes(needle));
+  rows.reverse(); // newest first
+  const offset = Math.max(0, parseInt(q.get('offset') || '0', 10) || 0);
+  const limit = Math.min(500, Math.max(1, parseInt(q.get('limit') || '100', 10) || 100));
+  return { total: rows.length, hosts, rows: rows.slice(offset, offset + limit), offset, limit };
+}
+
+/// Search every agent's trace (the shared-trace store) for a keyword.
+async function searchTraces(dir, needle) {
+  const tdir = path.join(dir, 'traces');
+  const files = (await fsp.readdir(tdir).catch(() => [])).filter((f) => f.endsWith('.md')).sort();
+  const list = [];
+  const hits = [];
+  const n = (needle || '').trim().toLowerCase();
+  for (const f of files) {
+    const text = await fsp.readFile(path.join(tdir, f), 'utf8').catch(() => '');
+    list.push({ agent: f.replace(/\.md$/, ''), file: `traces/${f}`, bytes: Buffer.byteLength(text) });
+    if (!n || hits.length >= 200) continue;
+    const lines = text.split('\n');
+    lines.forEach((line, i) => {
+      if (hits.length < 200 && line.toLowerCase().includes(n)) {
+        hits.push({ agent: f.replace(/\.md$/, ''), file: `traces/${f}`, line: i + 1, snippet: stripAnsi(line).slice(0, 300) });
+      }
+    });
+  }
+  return { traces: list, hits, query: needle || '' };
 }
 
 function safeRunDir(id) {
@@ -1190,7 +1284,8 @@ async function serveRunAsset(req, res, id, rest) {
   const dir = safeRunDir(id);
   if (!dir) { res.writeHead(400); res.end(); return; }
   const full = path.join(dir, rest);
-  if (!full.startsWith(dir)) { res.writeHead(403); res.end(); return; }
+  // Separator-aware: `ns-1` must not reach into `ns-10`.
+  if (full !== dir && !full.startsWith(dir + path.sep)) { res.writeHead(403); res.end(); return; }
   try {
     const data = await fsp.readFile(full);
     const ext = path.extname(full);
@@ -1447,6 +1542,44 @@ const server = http.createServer(async (req, res) => {
       const ping = setInterval(() => res.write(':ping\n\n'), 20000);
       req.on('close', () => { session.off('data', onData); session.off('close', onClose); clearInterval(ping); });
       return;
+    }
+
+    // ---- attack graph / traffic / traces (files the CLI wrote) ----
+    m = p.match(/^\/api\/runs\/([^/]+)\/graph$/);
+    if (m) {
+      const dir = safeRunDir(decodeURIComponent(m[1]));
+      if (!dir || !fs.existsSync(dir)) return sendJson(res, 404, { error: 'run not found' });
+      if (req.method === 'GET') return sendJson(res, 200, await runGraph(dir));
+      if (req.method === 'POST') {
+        // Recompute (and optionally push to Neo4j) through the CLI itself.
+        const body = await readBody(req);
+        const args = ['graph', dir, '--top', '0'];
+        if (body.push) args.push('--push');
+        const out = await runCli(args);
+        if (out.code !== 0) return sendJson(res, 502, { error: out.buf.trim() || 'graph failed' });
+        return sendJson(res, 200, { ok: true, output: out.buf.trim(), ...(await runGraph(dir)) });
+      }
+    }
+    m = p.match(/^\/api\/runs\/([^/]+)\/traffic$/);
+    if (req.method === 'GET' && m) {
+      const dir = safeRunDir(decodeURIComponent(m[1]));
+      if (!dir || !fs.existsSync(dir)) return sendJson(res, 404, { error: 'run not found' });
+      return sendJson(res, 200, await runTraffic(dir, u.searchParams));
+    }
+    m = p.match(/^\/api\/runs\/([^/]+)\/traces$/);
+    if (req.method === 'GET' && m) {
+      const dir = safeRunDir(decodeURIComponent(m[1]));
+      if (!dir || !fs.existsSync(dir)) return sendJson(res, 404, { error: 'run not found' });
+      return sendJson(res, 200, await searchTraces(dir, u.searchParams.get('q')));
+    }
+    // ---- PoC re-test (the CLI re-runs each finding's recorded proof) ----
+    m = p.match(/^\/api\/runs\/([^/]+)\/retest$/);
+    if (req.method === 'POST' && m) {
+      const dir = safeRunDir(decodeURIComponent(m[1]));
+      if (!dir || !fs.existsSync(dir)) return sendJson(res, 404, { error: 'run not found' });
+      const out = await runCli(['poc', dir]);
+      if (out.code !== 0) return sendJson(res, 502, { error: out.buf.trim() || 're-test failed' });
+      return sendJson(res, 200, { ok: true, output: out.buf.trim() });
     }
 
     // ---- report rebuild (generate/refresh the PDF for a finished run) ----

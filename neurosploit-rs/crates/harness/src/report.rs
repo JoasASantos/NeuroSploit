@@ -506,6 +506,8 @@ fn tq(s: &str) -> String {
 /// the `.typ` when `typst` is unavailable.
 pub fn typst_report(target: &str, findings: &[Finding], dir: &Path) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
+    let shown = crate::redact::for_people(findings);
+    let findings = &shown[..];
     let run_id = dir.file_name().and_then(|s| s.to_str()).unwrap_or("run").to_string();
     let meta = read_meta(dir);
 
@@ -807,15 +809,35 @@ pub fn write_all(target: &str, findings: &[Finding], dir: &Path) -> std::io::Res
     std::fs::create_dir_all(dir)?;
     let run_id = dir.file_name().and_then(|s| s.to_str()).unwrap_or("run").to_string();
     let meta = read_meta(dir);
+    // Reports are for people: credentials the agents quoted become `$SECRET_n`.
+    // findings.json and the vault keep the raw values for re-testing.
+    let redactor = crate::redact::Redactor::learn(findings);
+    let raw = findings;
+    let shown = redactor.findings(findings);
+    let findings = &shown[..];
     let mut md = markdown(target, findings, &meta);
     md.push_str(&pocs_section(dir));
-    std::fs::write(dir.join("report.md"), md)?;
+    std::fs::write(dir.join("report.md"), redactor.text(&md))?;
     std::fs::write(dir.join("report.json"), json_report(target, findings, &run_id, &meta))?;
     std::fs::write(dir.join("report.sarif"), crate::sarif::to_string(target, findings))?;
+    // Additive deliverables (differential proof, custody chain, exploit-as-test,
+    // detection content, personas). Best-effort: a failure here never affects
+    // the reports above.
+    // They get the raw findings: the regression tests need the real payloads,
+    // and each applies its own data-minimisation rules.
+    if let Err(e) = crate::deliverables::write_all(target, raw, dir) {
+        eprintln!("deliverables: skipped ({e})");
+    }
+    // Attack graph (web + internal): chains, Cypher export, JSON. Works without
+    // Neo4j; best-effort like the deliverables. Raw so equal secrets correlate
+    // (only salted fingerprints are written).
+    if let Err(e) = crate::graph_memory::write_artifacts(target, &run_id, raw, dir) {
+        eprintln!("graph: skipped ({e})");
+    }
     let pocs: Vec<String> = std::fs::read_dir(dir.join("pocs"))
         .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect())
         .unwrap_or_default();
-    std::fs::write(dir.join("report.html"), html_with_pocs(target, findings, &meta, &pocs))?;
+    std::fs::write(dir.join("report.html"), redactor.text(&html_with_pocs(target, findings, &meta, &pocs)))?;
     typst_report(target, findings, dir)
 }
 

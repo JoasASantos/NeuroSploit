@@ -19,6 +19,27 @@
 //!   password: admin
 //!   success: Logout
 //! ```
+//!
+//! Multi-identity block for the authorization matrix (each identity is a named
+//! block; `tier` is `high|readonly|tenant|none`, and an explicit `none` keeps a
+//! credential-less anonymous context the matrix needs):
+//! ```yaml
+//! admin:
+//!   header: "Authorization: Bearer AAA"
+//!   tier: high
+//! readonly:
+//!   header: "Authorization: Bearer BBB"
+//!   tier: readonly
+//! tenantB:
+//!   cookie: "session=ccc"
+//!   known_id: "6531bb"            # a real object this identity owns (BOLA baseline)
+//! anonymous:
+//!   tier: none
+//! sample_values:                   # valid domain values to pass format gates
+//!   nfe_key: "3520...0017"
+//!   cnpj: "11222333000181"
+//!   known_ids: "6531aa, 6531bb"
+//! ```
 
 #[derive(Default, Debug, Clone)]
 pub struct Login {
@@ -92,6 +113,30 @@ pub struct Identity {
     pub login_url: String,        // login endpoint (agent authenticates itself)
     pub username: String,
     pub password: String,
+    /// Privilege tier for the authorization matrix: "high"|"readonly"|"tenant"|
+    /// "none"/"anonymous". Empty → derived from the name.
+    pub tier: String,
+    /// A real object id this identity legitimately owns (for BOLA baselines).
+    pub known_id: String,
+}
+
+/// Privilege tier an identity holds, for deriving the access-control prior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Tier {
+    High,
+    ReadOnly,
+    Tenant,
+    None,
+}
+
+/// Valid domain values the matrix engine uses to get a request past input/format
+/// validation so it actually reaches the authorization check and the handler.
+#[derive(Default, Debug, Clone)]
+pub struct SampleValues {
+    pub nfe_key: String,
+    pub cnpj: String,
+    /// Comma-separated real ids, per the friendly YAML (`known_ids: a,b,c`).
+    pub known_ids: Vec<String>,
 }
 
 impl Identity {
@@ -110,6 +155,54 @@ impl Identity {
         else if !self.login_url.is_empty() { format!("{} → log in at {} as {}:{} and reuse the session", self.name, self.login_url, self.username, self.password) }
         else { format!("{} → (no usable credential)", self.name) }
     }
+
+    /// Explicitly declared as the no-credential anonymous context (so a
+    /// credential-less block is kept only when it is meant to be anonymous,
+    /// never a typo'd empty one).
+    pub fn is_explicit_anonymous(&self) -> bool {
+        let t = self.tier.to_lowercase();
+        t == "none" || t == "anonymous" || t == "anon" || self.name.to_lowercase().contains("anon")
+    }
+
+    /// Resolve the privilege tier from the explicit `tier` or, failing that,
+    /// the name. A credential-less, tier-less block is treated as anonymous.
+    pub fn tier_kind(&self) -> Tier {
+        let t = self.tier.to_lowercase();
+        let hay = format!("{t} {}", self.name.to_lowercase());
+        match t.as_str() {
+            "high" | "admin" | "superuser" | "super" => return Tier::High,
+            "readonly" | "read-only" | "read only" | "ro" | "viewer" => return Tier::ReadOnly,
+            "tenant" | "user" | "customer" => return Tier::Tenant,
+            "none" | "anonymous" | "anon" => return Tier::None,
+            _ => {}
+        }
+        if self.header_line().is_none() && self.login_url.is_empty() {
+            return Tier::None; // no credential, no tier → anonymous
+        }
+        if hay.contains("admin") || hay.contains("super") || hay.contains("root") {
+            Tier::High
+        } else if hay.contains("readonly") || hay.contains("read-only") || hay.contains("read only") || hay.contains("viewer") {
+            Tier::ReadOnly
+        } else if hay.contains("anon") {
+            Tier::None
+        } else {
+            Tier::Tenant
+        }
+    }
+
+    /// The access-control prior: what SHOULD happen for this identity on a
+    /// route. `write` = the route changes state (POST/PUT/PATCH/DELETE or a
+    /// decision verb). The matrix flags any observed Allow where Deny was
+    /// expected. Cross-tenant object access is left to the BOLA validator.
+    pub fn expected(&self, write: bool) -> crate::validation::Expect {
+        use crate::validation::Expect;
+        match self.tier_kind() {
+            Tier::High => Expect::Allow,
+            Tier::None => Expect::Deny,
+            Tier::ReadOnly => if write { Expect::Deny } else { Expect::Allow },
+            Tier::Tenant => if write { Expect::Deny } else { Expect::Allow },
+        }
+    }
 }
 
 #[derive(Default, Debug, Clone)]
@@ -123,6 +216,8 @@ pub struct Creds {
     pub cloud: Option<Cloud>,
     /// Named identities for multi-role access-control testing.
     pub roles: Vec<Identity>,
+    /// Valid domain values for the authorization matrix engine.
+    pub samples: SampleValues,
 }
 
 impl Creds {
@@ -133,6 +228,7 @@ impl Creds {
         let mut ssh = Ssh { port: "22".into(), ..Default::default() };
         let mut win = Win::default();
         let mut cloud = Cloud::default();
+        let mut samples = SampleValues::default();
         let (mut have_login, mut have_ssh, mut have_win) = (false, false, false);
         let mut roles: Vec<Identity> = Vec::new();
         let mut cur_role = 0usize;
@@ -157,6 +253,7 @@ impl Creds {
                     "gcp" | "google" | "gcloud" => "gcp",
                     "azure" | "az" => "azure",
                     "roles" | "identities" | "users" => "", // optional wrapper — ignore
+                    "sample_values" | "samples" | "fixtures" => "samples",
                     // Any other named block is a role/identity for access-control testing.
                     other => { roles.push(Identity { name: other.to_string(), ..Default::default() }); cur_role = roles.len() - 1; "role" }
                 };
@@ -219,8 +316,18 @@ impl Creds {
                             "login" | "url" | "login_url" => r.login_url = v,
                             "username" | "user" => r.username = v,
                             "password" | "pass" => r.password = v,
+                            "tier" | "level" | "privilege" => r.tier = v,
+                            "known_id" | "id" => r.known_id = v,
                             _ => {}
                         }
+                    },
+                    "samples" => match k.as_str() {
+                        "nfe_key" | "nfekey" | "access_key" | "chave" => samples.nfe_key = v,
+                        "cnpj" => samples.cnpj = v,
+                        "known_ids" | "ids" => {
+                            samples.known_ids = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+                        }
+                        _ => {}
                     },
                     _ => {}
                 }
@@ -238,14 +345,34 @@ impl Creds {
         if have_ssh && !ssh.host.is_empty() { c.ssh = Some(ssh); }
         if have_win && !win.host.is_empty() { c.win = Some(win); }
         if !cloud.is_empty() { c.cloud = Some(cloud); }
-        roles.retain(|r| r.header_line().is_some() || !r.login_url.is_empty());
+        // Keep an identity with real credentials, a self-login, or one that is
+        // EXPLICITLY the anonymous context (the matrix needs anonymous), but
+        // drop a typo'd empty block.
+        roles.retain(|r| r.header_line().is_some() || !r.login_url.is_empty() || r.is_explicit_anonymous());
         c.roles = roles;
+        c.samples = samples;
         if c.jwt.is_none() && c.header.is_none() && c.cookie.is_none()
             && c.login.is_none() && c.ssh.is_none() && c.win.is_none() && c.cloud.is_none()
             && c.roles.is_empty() {
             return None;
         }
         Some(c)
+    }
+
+    /// True when the authorization matrix can run: at least two identities
+    /// spanning at least two distinct privilege tiers (so there is a
+    /// should-be-denied context to differentiate against a privileged one).
+    pub fn authz_matrix_ready(&self) -> bool {
+        let tiers: std::collections::HashSet<Tier> = self.roles.iter().map(|r| r.tier_kind()).collect();
+        self.roles.len() >= 2 && tiers.len() >= 2
+    }
+
+    /// The highest-privilege identity, used as the matrix's privileged baseline.
+    pub fn highest_identity(&self) -> Option<&Identity> {
+        self.roles.iter().find(|r| r.tier_kind() == Tier::High)
+            .or_else(|| self.roles.iter().max_by_key(|r| match r.tier_kind() {
+                Tier::High => 3, Tier::Tenant => 2, Tier::ReadOnly => 1, Tier::None => 0,
+            }))
     }
 
     /// Multi-role access-control testing directive: lists every identity and
@@ -444,5 +571,88 @@ fn unquote(s: &str) -> String {
         s[1..s.len() - 1].to_string()
     } else {
         s.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_tmp(name: &str, body: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("ns_creds_{}_{}.yaml", name, std::process::id()));
+        std::fs::write(&p, body).unwrap();
+        p
+    }
+
+    #[test]
+    fn parses_identities_tiers_and_samples() {
+        let yaml = r#"
+admin:
+  header: "Authorization: Bearer AAA"
+  tier: high
+readonly:
+  header: "Authorization: Bearer BBB"
+  tier: readonly
+tenantB:
+  cookie: "session=ccc"
+  known_id: "6531bb"
+anonymous:
+  tier: none
+sample_values:
+  nfe_key: "35200114200166000187550010000000071000000017"
+  cnpj: "11222333000181"
+  known_ids: "6531aa, 6531bb, 6531cc"
+"#;
+        let p = write_tmp("matrix", yaml);
+        let c = Creds::load(&p).expect("should parse");
+        std::fs::remove_file(&p).ok();
+
+        // Anonymous (credential-less) is KEPT because it is explicit.
+        assert_eq!(c.roles.len(), 4, "roles: {:?}", c.roles.iter().map(|r| &r.name).collect::<Vec<_>>());
+
+        let tier = |name: &str| c.roles.iter().find(|r| r.name == name).unwrap().tier_kind();
+        assert_eq!(tier("admin"), Tier::High);
+        assert_eq!(tier("readonly"), Tier::ReadOnly);
+        assert_eq!(tier("tenantB"), Tier::Tenant);
+        assert_eq!(tier("anonymous"), Tier::None);
+
+        // Samples parsed.
+        assert_eq!(c.samples.cnpj, "11222333000181");
+        assert_eq!(c.samples.known_ids.len(), 3);
+        assert!(!c.samples.nfe_key.is_empty());
+
+        assert!(c.authz_matrix_ready());
+        assert_eq!(c.highest_identity().unwrap().name, "admin");
+    }
+
+    #[test]
+    fn expected_prior_matches_policy() {
+        use crate::validation::Expect;
+        let admin = Identity { name: "admin".into(), header: "Authorization: Bearer x".into(), tier: "high".into(), ..Default::default() };
+        let ro = Identity { name: "ro".into(), header: "Authorization: Bearer x".into(), tier: "readonly".into(), ..Default::default() };
+        let anon = Identity { name: "anon".into(), tier: "none".into(), ..Default::default() };
+
+        // Admin allowed everywhere.
+        assert_eq!(admin.expected(true), Expect::Allow);
+        assert_eq!(admin.expected(false), Expect::Allow);
+        // Read-only may read, must not write.
+        assert_eq!(ro.expected(false), Expect::Allow);
+        assert_eq!(ro.expected(true), Expect::Deny);
+        // Anonymous denied on any protected route.
+        assert_eq!(anon.expected(false), Expect::Deny);
+        assert_eq!(anon.expected(true), Expect::Deny);
+    }
+
+    #[test]
+    fn typoed_empty_block_is_dropped_but_not_anonymous() {
+        // A credential-less block with no tier and a non-anon name is a typo,
+        // not an identity — it must be dropped.
+        let yaml = "ghost:\n  note: nothing\nadmin:\n  header: \"Authorization: Bearer A\"\n  tier: high\n";
+        let p = write_tmp("typo", yaml);
+        let c = Creds::load(&p).expect("should parse");
+        std::fs::remove_file(&p).ok();
+        assert_eq!(c.roles.len(), 1);
+        assert_eq!(c.roles[0].name, "admin");
+        assert!(!c.authz_matrix_ready(), "one identity, one tier → not ready");
     }
 }

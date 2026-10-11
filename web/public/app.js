@@ -616,7 +616,6 @@ function attachLiveJob(id, target, name, pinnedAgents) {
   $('#livePhase').textContent = 'starting';
   $('#phaseDot').style.background = '';
   $('#phaseDot').classList.remove('static');
-  $('#liveAttackPath').innerHTML = '';
   $('#logList').innerHTML = '';
   state.tables.live.sev = null;
   state.tables.live.query = '';
@@ -716,12 +715,40 @@ $('#sendPromptInput').addEventListener('keydown', async (e) => {
   }
 });
 
+// What the wire said about a finding's evidence (see the harness's wire pass):
+// the harness re-sent the agent's requests itself and/or matched them against
+// recorded traffic. A contradiction means the finding cannot stand as proven.
+function wireState(f) {
+  const ev = f.evidence_data;
+  if (!ev) return { key: 'none', rank: 3, label: 'no evidence', title: 'No structured evidence was recorded — nothing to check on the wire.' };
+  const w = ev.wire;
+  const fromWire = (x) => x && String(x.provenance || '').startsWith('wire:');
+  if (w && (w.contradicted || []).length) {
+    return { key: 'contradicted', rank: 0, label: 'contradicted', title: w.contradicted.join('\n') };
+  }
+  const backed = w ? (w.reproduced || 0) + (w.corroborated || 0) + (w.harness_observed || 0) : 0;
+  if (backed > 0 || fromWire(ev.attack)) {
+    const parts = w ? [`${w.reproduced || 0} re-observed by the harness`, `${w.corroborated || 0} matched recorded traffic`, `${w.harness_observed || 0} harness-made`] : ['harness-observed'];
+    return { key: 'verified', rank: 1, label: 'wire-verified', title: parts.join(' · ') };
+  }
+  if (w) return { key: 'unverified', rank: 2, label: 'unverifiable', title: `${w.unverified || 0} exchange(s) could not be re-observed (mutating verb, scope, missing credentials or network).${(w.absent_from_capture || []).length ? `\nAbsent from the capture: ${w.absent_from_capture.join(', ')}` : ''}` };
+  return { key: 'pending', rank: 2, label: 'pending', title: 'Not checked yet — the wire pass runs before final validation.' };
+}
+
+function reviewStatus(f) {
+  return f.review_status || (f.validated ? 'confirmed' : 'candidate');
+}
+
 function findingRow(f, idx) {
+  const w = wireState(f);
+  const st = reviewStatus(f);
   return `<tr data-idx="${idx}">
     <td><span class="sev ${sevClass(f.severity)}">${esc(f.severity)}</span></td>
     <td>${esc(f.title)}</td>
     <td class="col-endpoint" title="${esc(f.endpoint)}">${esc(f.endpoint)}</td>
     <td class="col-cwe">${esc(f.cwe)}</td>
+    <td><span class="status-badge st-${esc(st)}">${esc(st)}</span></td>
+    <td><span class="wire-badge wire-${w.key}" title="${esc(w.title)}">${esc(w.label)}</span></td>
     <td class="col-agent">${esc(f.agent)}</td>
     <td class="col-conf">${f.confidence ? f.confidence.toFixed(2) : '—'}</td>
   </tr>`;
@@ -738,7 +765,7 @@ function findingRow(f, idx) {
 
 const TABLES = {
   live: { tbody: '#liveFindingsTable tbody', table: '#liveFindingsTable', empty: '#liveFindingsEmpty', count: '#liveFindingsCount', summary: '#liveSevSummary', search: '#liveFindingSearch' },
-  detail: { tbody: '#detailFindingsTable tbody', table: '#detailFindingsTable', empty: '#detailFindingsEmpty', count: '#detailFindingsCount', summary: '#detailSevSummary', search: '#detailFindingSearch' },
+  detail: { tbody: '#detailFindingsTable tbody', table: '#detailFindingsTable', empty: '#detailFindingsEmpty', count: '#detailFindingsCount', summary: '#detailSevSummary', search: '#detailFindingSearch', kpis: '#detailKpis' },
 };
 const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
 
@@ -763,11 +790,15 @@ function renderFindings(which) {
     let cmp;
     if (key === 'severity') cmp = sevRank(a.f.severity) - sevRank(b.f.severity) || (b.f.confidence || 0) - (a.f.confidence || 0);
     else if (key === 'confidence') cmp = (b.f.confidence || 0) - (a.f.confidence || 0);
+    else if (key === 'wire') cmp = wireState(a.f).rank - wireState(b.f).rank;
+    else if (key === 'review_status') cmp = reviewStatus(a.f).localeCompare(reviewStatus(b.f));
     else cmp = String(a.f[key] || '').localeCompare(String(b.f[key] || ''));
     return cmp * t.dir;
   });
 
+  t.visible = rows.map(({ f }) => f);
   $(cfg.tbody).innerHTML = rows.map(({ f, idx }) => findingRow(f, idx)).join('');
+  if (cfg.kpis) renderKpis(cfg.kpis, all);
   $(cfg.count).textContent = all.length;
   show($(cfg.empty), rows.length === 0);
   $(cfg.empty).textContent = all.length && !rows.length
@@ -815,7 +846,6 @@ bindFindingTableClicks('#detailFindingsTable tbody', () => state.detailFindings 
 function addFinding(f) {
   state.currentJob.findings.push(f);
   renderFindings('live');
-  renderAttackPath($('#liveAttackPath'), state.currentJob.findings, state.currentJob.target);
 }
 
 // Live "what's being tested" grid: one chip per agent, coloured by status.
@@ -954,10 +984,6 @@ $('#btnDetailBack').addEventListener('click', () => { clearInterval(state.detail
 $('#btnNewEngagement').addEventListener('click', () => { leaveLiveJob(); clearInterval(state.detailPoll); show($('#detailView'), false); show($('#liveView'), false); show($('#dashView'), false); show($('#wizardView'), true); });
 
 // ---------------------------------------------------------------------------
-// Generative Attack Path Chaining
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Finding detail modal — full evidence/impact/remediation + any PoC script
 // ---------------------------------------------------------------------------
 
@@ -1043,399 +1069,6 @@ function openFindingModal(f, pocs, runId) {
 $('#btnCloseFinding').addEventListener('click', () => show($('#findingModal'), false));
 $('#findingModal').addEventListener('click', (e) => { if (e.target.id === 'findingModal') show($('#findingModal'), false); });
 
-// ---------------------------------------------------------------------------
-// Generative Attack Path Chaining
-//
-// The graph answers one question: how does an attacker get from the target to
-// impact? Three things it must not do, each of which the first version did:
-//
-//  1. **Drop findings.** Stages were matched against a hardcoded list of seven,
-//     so anything the harness emitted outside it (`credential-access`,
-//     `discovery`, `persistence`, …) silently vanished — 5 of 27 findings on a
-//     real run. The stage list now mirrors `knowledge_graph::STAGES`, and any
-//     unknown stage still gets its own column rather than being discarded.
-//  2. **Blur into unreadable boxes.** Titles were cut at 22 characters, so a
-//     column read "SQL Injection Authent…" six times. Nodes now wrap onto two
-//     lines and carry CWE / technique / exploitability.
-//  3. **Present a guess as evidence.** Agents only sometimes fill `chains_from`.
-//     Without it every node fanned off the root, which looks like a chain and
-//     is not one. Inferred progression edges are drawn dashed, counted
-//     separately in the toolbar, and can be hidden.
-//
-// When a run wrote `graph.json` (the harness's own knowledge graph), its edges
-// are used verbatim — including which ones it inferred. Older runs fall back to
-// deriving the same shape client-side, so the view degrades rather than empties.
-// ---------------------------------------------------------------------------
-
-// Mirrors knowledge_graph::STAGES on the Rust side. Order = attack progression.
-const KILL_CHAIN_STAGES = [
-  'recon', 'discovery', 'initial-access', 'execution', 'persistence',
-  'privesc', 'credential-access', 'lateral', 'collection', 'exfil', 'impact',
-];
-const stageRank = (s) => {
-  const i = KILL_CHAIN_STAGES.indexOf(s);
-  return i === -1 ? KILL_CHAIN_STAGES.length : i;
-};
-
-// Same severity tokens the rest of the console uses — the graph canvas
-// follows the light/dark theme instead of a fixed dark palette.
-function canvasColor(sev) { return `var(--sev-${['critical', 'high', 'medium', 'low', 'info'][sevRank(sev)]}-fg)`; }
-
-function nodeIcon(f) {
-  const t = `${f.title} ${f.evidence} ${f.cwe} ${f.stage}`.toLowerCase();
-  if (/credential|password|secret|token|api[ _]?key|jwt/.test(t)) return '🔑';
-  if (/admin|privile|domain admin|root/.test(t)) return '🛡';
-  if (/account|user|identity/.test(t)) return '👤';
-  if (/host|server|ip |port|service/.test(t)) return '🖥';
-  if (/database|sql/.test(t)) return '🗄';
-  if (t.includes('impact') || t.includes('exfil')) return '💥';
-  return '⚠';
-}
-
-/// Greedy wrap into at most `lines` lines of `max` chars, ellipsizing the tail.
-function wrapLabel(s, max, lines) {
-  const words = String(s || '').split(/\s+/).filter(Boolean);
-  const out = [];
-  let cur = '';
-  for (const w of words) {
-    const next = cur ? `${cur} ${w}` : w;
-    if (next.length <= max) { cur = next; continue; }
-    if (out.length === lines - 1) { cur = `${next.slice(0, max - 1)}…`; break; }
-    out.push(cur || w.slice(0, max));
-    cur = cur ? w : '';
-  }
-  if (cur) out.push(cur);
-  return out.slice(0, lines);
-}
-
-/// Chain edges between findings, and where they came from.
-/// Returns `{ edges: [{from, to, inferred}], source }` with indices into
-/// `findings`, so the caller can tell the operator what it is looking at.
-function chainEdges(findings, graph) {
-  const byId = new Map(findings.map((f, i) => [f.id, i]));
-
-  // 1. The harness's own graph, when the run wrote one.
-  if (graph?.edges?.length) {
-    const nodeToFinding = new Map();
-    for (const [id, n] of Object.entries(graph.nodes || {})) {
-      const fid = n.meta?.finding_id;
-      if (n.kind === 'finding' && fid !== undefined && byId.has(fid)) nodeToFinding.set(id, byId.get(fid));
-    }
-    const edges = [];
-    for (const e of graph.edges) {
-      if (e.kind !== 'chains') continue;
-      const a = nodeToFinding.get(e.from), b = nodeToFinding.get(e.to);
-      if (a !== undefined && b !== undefined && a !== b) edges.push({ from: a, to: b, inferred: !!e.inferred });
-    }
-    if (edges.length) return { edges, source: edges.every((e) => e.inferred) ? 'graph-inferred' : 'graph' };
-  }
-
-  // 2. Edges the agents asserted on the findings themselves.
-  const asserted = [];
-  findings.forEach((f, i) => {
-    for (const src of f.chains_from || []) {
-      const a = byId.get(src);
-      if (a !== undefined && a !== i) asserted.push({ from: a, to: i, inferred: false });
-    }
-  });
-  if (asserted.length) return { edges: asserted, source: 'asserted' };
-
-  // 3. Derive progression the same way the harness does: forward only, between
-  // adjacent populated stages, from the strongest finding of the earlier one.
-  // A full cross-product would look richer and mean nothing.
-  const byStage = new Map();
-  findings.forEach((f, i) => {
-    const r = stageRank(f.stage || '');
-    if (!byStage.has(r)) byStage.set(r, []);
-    byStage.get(r).push(i);
-  });
-  const ranks = [...byStage.keys()].sort((a, b) => a - b);
-  const weight = (i) => (4 - sevRank(findings[i].severity)) * (findings[i].confidence || 0.5);
-  const edges = [];
-  for (let k = 0; k + 1 < ranks.length; k++) {
-    const from = byStage.get(ranks[k]).slice().sort((a, b) => weight(b) - weight(a))[0];
-    for (const to of byStage.get(ranks[k + 1])) edges.push({ from, to, inferred: true });
-  }
-  return { edges, source: edges.length ? 'derived' : 'none' };
-}
-
-const AP_SEV_FILTERS = ['all', 'critical', 'high', 'medium', 'low'];
-
-function renderAttackPath(container, allFindings, target, graph) {
-  const view = (container.__ap = container.__ap || { k: 1, tx: 0, ty: 0, sev: 'all', hideInferred: false, fitted: false });
-
-  if (!allFindings.length) {
-    container.innerHTML = '<div class="attackpath-empty">The attack path builds automatically as findings chain together — nothing confirmed yet.</div>';
-    return;
-  }
-
-  const minRank = view.sev === 'all' ? 99 : sevRank(view.sev);
-  const findings = view.sev === 'all' ? allFindings : allFindings.filter((f) => sevRank(f.severity) <= minRank);
-  if (!findings.length) {
-    container.innerHTML = `<div class="attackpath-empty">No ${esc(view.sev)}-or-higher finding to chain. <button class="btn btn-sm" data-ap-reset>Show all severities</button></div>`;
-    container.querySelector('[data-ap-reset]')?.addEventListener('click', () => { view.sev = 'all'; renderAttackPath(container, allFindings, target, graph); });
-    return;
-  }
-
-  const model = chainEdges(findings, graph);
-  const edges = view.hideInferred ? model.edges.filter((e) => !e.inferred) : model.edges;
-
-  // ---- columns: one per stage actually present, in progression order --------
-  const groups = new Map();
-  findings.forEach((f, i) => {
-    const key = (f.stage || '').trim() || 'unstaged';
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(i);
-  });
-  const cols = [...groups.entries()].sort((a, b) => {
-    const ra = a[0] === 'unstaged' ? 999 : stageRank(a[0]);
-    const rb = b[0] === 'unstaged' ? 999 : stageRank(b[0]);
-    return ra - rb || a[0].localeCompare(b[0]);
-  });
-  for (const [, idxs] of cols) {
-    idxs.sort((a, b) => sevRank(findings[a].severity) - sevRank(findings[b].severity) || (findings[b].confidence || 0) - (findings[a].confidence || 0));
-  }
-
-  const NODE_W = 236, NODE_H = 66, COL_GAP = 88, ROW_GAP = 14, PAD = 28, HEAD_H = 34, ROOT_W = 132;
-  const rowH = NODE_H + ROW_GAP;
-  const tallest = Math.max(...cols.map(([, v]) => v.length));
-  const bodyH = tallest * rowH;
-  const pos = new Map(); // finding index -> {x, y}
-  cols.forEach(([, idxs], ci) => {
-    const x = PAD + ROOT_W + ci * (NODE_W + COL_GAP);
-    const colH = idxs.length * rowH;
-    const top = PAD + HEAD_H + (bodyH - colH) / 2;
-    idxs.forEach((fi, ri) => pos.set(fi, { x, y: top + ri * rowH }));
-  });
-  const width = PAD * 2 + ROOT_W + cols.length * NODE_W + Math.max(0, cols.length - 1) * COL_GAP;
-  const height = PAD * 2 + HEAD_H + bodyH;
-  const rootY = PAD + HEAD_H + bodyH / 2;
-
-  const hasParent = new Set(edges.map((e) => e.to));
-  const roots = findings.map((_, i) => i).filter((i) => !hasParent.has(i));
-
-  const curve = (x1, y1, x2, y2) => {
-    const mid = (x1 + x2) / 2;
-    return `M ${x1},${y1} C ${mid},${y1} ${mid},${y2} ${x2},${y2}`;
-  };
-
-  const edgeSvg = edges.map((e, i) => {
-    const a = pos.get(e.from), b = pos.get(e.to);
-    if (!a || !b) return '';
-    return `<path class="ap-edge${e.inferred ? ' inferred' : ''}" data-e="${i}" data-from="${e.from}" data-to="${e.to}"
-      d="${curve(a.x + NODE_W, a.y + NODE_H / 2, b.x, b.y + NODE_H / 2)}" fill="none" marker-end="url(#apArrow)" />`;
-  }).join('');
-
-  const rootEdges = roots.map((i) => {
-    const b = pos.get(i);
-    return `<path class="ap-edge root-edge" data-root-to="${i}" d="${curve(PAD + ROOT_W - 18, rootY, b.x, b.y + NODE_H / 2)}" fill="none" />`;
-  }).join('');
-
-  const nodeSvg = findings.map((f, i) => {
-    const p = pos.get(i);
-    if (!p) return '';
-    const color = canvasColor(f.severity);
-    const title = wrapLabel(f.title, 30, 2);
-    const meta = [f.cwe, f.mitre || f.owasp, f.exploitability].filter(Boolean).join(' · ');
-    return `<g class="ap-node-g" data-idx="${i}" tabindex="0" role="button" aria-label="${esc(f.severity)}: ${esc(f.title)}">
-      <rect class="ap-node" x="${p.x}" y="${p.y}" width="${NODE_W}" height="${NODE_H}" rx="9" style="stroke:${color};" />
-      <rect class="ap-sevbar" x="${p.x}" y="${p.y}" width="4" height="${NODE_H}" rx="2" style="fill:${color};" />
-      <text class="ap-icon" x="${p.x + 14}" y="${p.y + 22}">${nodeIcon(f)}</text>
-      ${title.map((line, li) => `<text class="ap-title" x="${p.x + 34}" y="${p.y + 21 + li * 14}">${esc(line)}</text>`).join('')}
-      <text class="ap-meta" x="${p.x + 34}" y="${p.y + NODE_H - 12}">${esc(meta || f.agent)}</text>
-      <text class="ap-conf" x="${p.x + NODE_W - 10}" y="${p.y + NODE_H - 12}" text-anchor="end">${f.confidence ? f.confidence.toFixed(2) : ''}</text>
-    </g>`;
-  }).join('');
-
-  // Column headers name the stage and count it — unlabelled separator lines
-  // made the columns unreadable, which defeats a kill-chain layout entirely.
-  const headSvg = cols.map(([stage, idxs], ci) => {
-    const x = PAD + ROOT_W + ci * (NODE_W + COL_GAP);
-    return `<g class="ap-col">
-      <line class="ap-col-line" x1="${x - COL_GAP / 2}" y1="${PAD}" x2="${x - COL_GAP / 2}" y2="${height - PAD}" />
-      <text class="ap-col-name" x="${x}" y="${PAD + 14}">${esc(stage.replace(/-/g, ' '))}</text>
-      <text class="ap-col-count" x="${x + NODE_W}" y="${PAD + 14}" text-anchor="end">${idxs.length}</text>
-    </g>`;
-  }).join('');
-
-  const inferredCount = model.edges.filter((e) => e.inferred).length;
-  const provenance = {
-    graph: 'chain edges from this run\'s knowledge graph',
-    'graph-inferred': 'no chain was asserted — progression inferred by the harness',
-    asserted: 'chain edges asserted by the agents',
-    derived: 'no chain was asserted — progression inferred from kill-chain stages',
-    none: 'no chain links',
-  }[model.source];
-
-  container.innerHTML = `
-    <div class="ap-toolbar">
-      <div class="ap-stats">
-        <b>${findings.length}</b> finding(s) · <b>${cols.length}</b> stage(s) · <b>${edges.length}</b> link(s)${inferredCount ? ` <span class="ap-inferred-note">(${inferredCount} inferred)</span>` : ''} · <b>${roots.length}</b> entry point(s)
-      </div>
-      <div class="topbar-spacer"></div>
-      <label class="ap-check"><input type="checkbox" id="apHideInferred" ${view.hideInferred ? 'checked' : ''} /> hide inferred</label>
-      <select class="ap-sev" id="apSev" title="Minimum severity">
-        ${AP_SEV_FILTERS.map((s) => `<option value="${s}"${view.sev === s ? ' selected' : ''}>${s === 'all' ? 'all severities' : `${s} and above`}</option>`).join('')}
-      </select>
-      <div class="ap-zoom">
-        <button class="btn btn-sm" data-ap-zoom="-1" title="Zoom out">−</button>
-        <button class="btn btn-sm" data-ap-fit title="Fit to window">fit</button>
-        <button class="btn btn-sm" data-ap-zoom="1" title="Zoom in">+</button>
-      </div>
-    </div>
-    <div class="ap-provenance">${esc(provenance)} — inferred links are hypotheses, drawn dashed.</div>
-    <div class="ap-canvas-wrap" id="apWrap">
-      <svg class="ap-canvas" id="apSvg" width="100%" height="100%">
-        <defs>
-          <marker id="apArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" />
-          </marker>
-        </defs>
-        <g class="ap-pan" id="apPan">
-          ${headSvg}
-          ${rootEdges}
-          ${edgeSvg}
-          <g class="ap-root">
-            <rect class="ap-node" x="${PAD}" y="${rootY - 22}" width="${ROOT_W - 18}" height="44" rx="9" />
-            <text class="ap-icon" x="${PAD + 14}" y="${rootY + 4}">🎯</text>
-            <text class="ap-title" x="${PAD + 34}" y="${rootY - 2}">target</text>
-            <text class="ap-meta" x="${PAD + 34}" y="${rootY + 12}">${esc(trimMid(target || '', 14))}</text>
-          </g>
-          ${nodeSvg}
-        </g>
-      </svg>
-      <div class="ap-hint">drag to pan · scroll to zoom · click a node for the finding</div>
-    </div>
-    <div class="ap-legend">
-      ${['critical', 'high', 'medium', 'low', 'info'].map((s) => `<span class="ap-key"><i style="background:var(--sev-${s}-fg)"></i>${s}</span>`).join('')}
-      <span class="ap-key"><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" class="ap-edge" /></svg>asserted chain</span>
-      <span class="ap-key"><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" class="ap-edge inferred" /></svg>inferred</span>
-    </div>`;
-
-  const svg = container.querySelector('#apSvg');
-  const pan = container.querySelector('#apPan');
-  const wrap = container.querySelector('#apWrap');
-
-  const apply = () => pan.setAttribute('transform', `translate(${view.tx},${view.ty}) scale(${view.k})`);
-  const fit = () => {
-    const box = wrap.getBoundingClientRect();
-    // The panel is rendered while its tab is still hidden, so the box measures
-    // zero and a "fit" there would lock in a garbage scale. Report the failure
-    // so the caller can try again once the tab is actually on screen.
-    if (!box.width || !box.height) return false;
-    view.k = Math.min(box.width / width, box.height / height, 1);
-    view.tx = (box.width - width * view.k) / 2;
-    view.ty = (box.height - height * view.k) / 2;
-    apply();
-    return true;
-  };
-  apply();
-  // Auto-fit once, and only once it can actually measure: re-fitting on every
-  // live finding would yank the canvas out from under someone mid-inspection.
-  if (!view.fitted) {
-    const tryFit = () => { if (fit()) view.fitted = true; };
-    requestAnimationFrame(tryFit);
-    if (window.ResizeObserver) {
-      const ro = new ResizeObserver(() => { if (view.fitted) ro.disconnect(); else tryFit(); });
-      ro.observe(wrap);
-    }
-  }
-
-  container.querySelector('[data-ap-fit]').addEventListener('click', fit);
-  container.querySelectorAll('[data-ap-zoom]').forEach((b) => b.addEventListener('click', () => {
-    const box = wrap.getBoundingClientRect();
-    const factor = Number(b.dataset.apZoom) > 0 ? 1.2 : 1 / 1.2;
-    const cx = box.width / 2, cy = box.height / 2;
-    view.tx = cx - (cx - view.tx) * factor;
-    view.ty = cy - (cy - view.ty) * factor;
-    view.k = Math.max(0.15, Math.min(3, view.k * factor));
-    apply();
-  }));
-  container.querySelector('#apHideInferred').addEventListener('change', (e) => {
-    view.hideInferred = e.target.checked;
-    renderAttackPath(container, allFindings, target, graph);
-  });
-  container.querySelector('#apSev').addEventListener('change', (e) => {
-    view.sev = e.target.value;
-    renderAttackPath(container, allFindings, target, graph);
-  });
-
-  wrap.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    const box = wrap.getBoundingClientRect();
-    const mx = e.clientX - box.left, my = e.clientY - box.top;
-    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-    view.tx = mx - (mx - view.tx) * factor;
-    view.ty = my - (my - view.ty) * factor;
-    view.k = Math.max(0.15, Math.min(3, view.k * factor));
-    apply();
-  }, { passive: false });
-
-  let dragging = false, sx = 0, sy = 0, moved = 0;
-  wrap.addEventListener('pointerdown', (e) => {
-    dragging = true; moved = 0; sx = e.clientX - view.tx; sy = e.clientY - view.ty;
-    wrap.setPointerCapture(e.pointerId);
-    wrap.classList.add('dragging');
-  });
-  wrap.addEventListener('pointermove', (e) => {
-    if (!dragging) return;
-    moved += Math.abs(e.movementX) + Math.abs(e.movementY);
-    view.tx = e.clientX - sx; view.ty = e.clientY - sy;
-    apply();
-  });
-  const endDrag = (e) => { dragging = false; wrap.classList.remove('dragging'); if (e?.pointerId !== undefined) { try { wrap.releasePointerCapture(e.pointerId); } catch { /* already released */ } } };
-  wrap.addEventListener('pointerup', endDrag);
-  wrap.addEventListener('pointercancel', endDrag);
-
-  // Highlight the whole path through a node, both directions — the question a
-  // reader has in front of a graph is "what led here, and where does it go".
-  const up = new Map(), down = new Map();
-  edges.forEach((e) => {
-    if (!down.has(e.from)) down.set(e.from, []);
-    down.get(e.from).push(e.to);
-    if (!up.has(e.to)) up.set(e.to, []);
-    up.get(e.to).push(e.from);
-  });
-  const reach = (start, map) => {
-    const seen = new Set(), stack = [start];
-    while (stack.length) {
-      const n = stack.pop();
-      for (const m of map.get(n) || []) if (!seen.has(m)) { seen.add(m); stack.push(m); }
-    }
-    return seen;
-  };
-  const focusOn = (idx) => {
-    const set = new Set([idx, ...reach(idx, up), ...reach(idx, down)]);
-    svg.classList.add('has-focus');
-    container.querySelectorAll('.ap-node-g').forEach((g) => g.classList.toggle('focus', set.has(Number(g.dataset.idx))));
-    container.querySelectorAll('.ap-edge').forEach((p) => {
-      const f = Number(p.dataset.from), t = Number(p.dataset.to);
-      const r = Number(p.dataset.rootTo);
-      p.classList.toggle('focus', (set.has(f) && set.has(t)) || (!Number.isNaN(r) && r === idx));
-    });
-  };
-  const clearFocus = () => {
-    svg.classList.remove('has-focus');
-    container.querySelectorAll('.focus').forEach((el) => el.classList.remove('focus'));
-  };
-
-  container.querySelectorAll('.ap-node-g').forEach((g) => {
-    const idx = Number(g.dataset.idx);
-    g.addEventListener('mouseenter', () => focusOn(idx));
-    g.addEventListener('focus', () => focusOn(idx));
-    g.addEventListener('mouseleave', clearFocus);
-    g.addEventListener('blur', clearFocus);
-    const open = () => {
-      const isLive = container.id === 'liveAttackPath';
-      const pocs = isLive ? (state.currentJob?.pocs || []) : (state.detailPocs || []);
-      const runId = isLive ? state.currentJob?.runId : state.currentDetailId;
-      openFindingModal(findings[idx], pocs, runId);
-    };
-    // A pan that ends on a node is not a click on it.
-    g.addEventListener('click', () => { if (moved < 6) open(); });
-    g.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
-  });
-}
 /// Exactly where the problem is: parameter/field/flow, not just the URL.
 function locationLine(f) {
   const loc = (f.location || '').trim();
@@ -1772,6 +1405,9 @@ function openRun(run) {
 
 async function loadDetail(id) {
   clearInterval(state.detailPoll);
+  // A poll for the previously opened run may still be in flight; when it
+  // lands it must not repaint that run over the one the operator opened.
+  const token = (state.detailToken = (state.detailToken || 0) + 1);
   if (state.detailLoadedId !== id) {
     // A filter left over from the previous run would silently hide findings
     // in the one just opened.
@@ -1781,6 +1417,7 @@ async function loadDetail(id) {
     state.detailLoadedId = id;
   }
   const detail = await api(`/api/runs/${encodeURIComponent(id)}`);
+  if (token !== state.detailToken) return;
   const target = detail.status?.target || detail.meta?.target || id;
   $('#detailTarget').textContent = detail.name || target;
   $('#detailTargetSub').textContent = detail.name ? target : '';
@@ -1799,11 +1436,6 @@ async function loadDetail(id) {
     id,
   ].filter(Boolean);
   $('#detailFacts').innerHTML = facts.map((f) => `<span>${esc(f)}</span>`).join('');
-  // The harness writes graph.json per run (knowledge_graph::ingest). When it
-  // exists, its edges — including which ones it inferred — beat anything the
-  // browser could re-derive; older runs simply fall back.
-  const graph = await api(`/api/runs/${encodeURIComponent(id)}/asset/graph.json`).catch(() => null);
-  renderAttackPath($('#detailAttackPath'), detail.findings, target, graph);
   const reportLink = $('#detailOpenReport');
   if (detail.assets.includes('report.html')) {
     reportLink.href = `/api/runs/${encodeURIComponent(id)}/asset/report.html`;
@@ -1825,6 +1457,8 @@ async function loadDetail(id) {
     pdfLink.setAttribute('download', `${id}.pdf`);
     show(pdfLink, true);
   } else show(pdfLink, false);
+  afterDetailLoaded(id, detail);
+  if (token !== state.detailToken) return;
   if (detail.status?.state === 'running') state.detailPoll = setInterval(() => loadDetail(id), 4000);
 }
 
@@ -2762,3 +2396,586 @@ async function offerInterruptedJobs() {
   bar.querySelector('.resume-x').addEventListener('click', () => bar.remove());
   document.body.insertBefore(bar, document.body.firstChild);
 }
+
+// ---------------------------------------------------------------------------
+// Run detail — attack graph, dependencies, traffic, traces, deliverables.
+//
+// Every tab reads files the CLI wrote into the run directory, and every action
+// (recompute the graph, push to Neo4j, re-test the PoCs) shells out to the CLI
+// through the server — the console never re-implements harness logic.
+// ---------------------------------------------------------------------------
+
+function renderKpis(sel, all) {
+  const el = $(sel);
+  if (!el) return;
+  const by = (fn) => all.filter(fn).length;
+  const sev = (s) => by((f) => SEV_ORDER[sevRank(f.severity)] === s);
+  const cards = [
+    { k: 'Findings', v: all.length, sub: `${sev('critical')} critical · ${sev('high')} high · ${sev('medium')} medium · ${sev('low')} low` },
+    { k: 'Confirmed', v: by((f) => reviewStatus(f) === 'confirmed'), sub: `${by((f) => reviewStatus(f) === 'needs-review')} need review`, cls: 'kpi-ok' },
+    { k: 'Wire-verified', v: by((f) => wireState(f).key === 'verified'), sub: 'evidence re-observed on the wire', cls: 'kpi-ok' },
+    { k: 'Contradicted', v: by((f) => wireState(f).key === 'contradicted'), sub: 'the wire disagreed with the agent', cls: 'kpi-bad' },
+  ];
+  el.innerHTML = cards.map((c) => `<div class="kpi ${c.cls || ''}"><div class="kpi-k">${esc(c.k)}</div><div class="kpi-v">${c.v}</div><div class="kpi-sub">${esc(c.sub)}</div></div>`).join('');
+}
+
+function exportCsv() {
+  const rows = state.tables.detail.visible || state.detailFindings || [];
+  const cols = ['severity', 'title', 'endpoint', 'cwe', 'status', 'wire', 'agent', 'confidence', 'cvss'];
+  const cell = (v) => `"${String(v ?? '').replace(/"/g, '""').replace(/\r?\n/g, ' ')}"`;
+  const lines = [cols.join(',')].concat(rows.map((f) => [f.severity, f.title, f.endpoint, f.cwe, reviewStatus(f), wireState(f).label, f.agent, f.confidence, f.cvss].map(cell).join(',')));
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${state.detailLoadedId || 'findings'}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+$('#btnExportCsv')?.addEventListener('click', exportCsv);
+
+function showOutput(title, text) {
+  const host = document.createElement('div');
+  host.className = 'modal-overlay';
+  host.innerHTML = `<div class="modal modal-lg out-modal" role="dialog" aria-label="${esc(title)}">
+    <header class="modal-head"><span class="title">${esc(title)}</span><button class="btn btn-sm" data-close>Close</button></header>
+    <pre class="out-pre">${esc(text || '(no output)')}</pre></div>`;
+  document.body.appendChild(host);
+  const close = () => host.remove();
+  host.addEventListener('click', (e) => { if (e.target === host || e.target.hasAttribute('data-close')) close(); });
+}
+
+// ---- the extras component ---------------------------------------------------
+//
+// Attack graph · Chains · Dependencies · Traffic · Traces · Deliverables, mounted into
+// both the past-run detail view and the live view. Each mount owns its state
+// and queries only inside its own root, so the two never collide.
+
+const EXTRAS_TABS = [
+  ['graph', 'Attack graph'], ['chains', 'Chains'], ['todo', 'Dependencies'],
+  ['traffic', 'Traffic'], ['traces', 'Traces'], ['deliverables', 'Deliverables'],
+];
+const STATUS_LABEL = { confirmed: 'confirmed', needs_validation: 'needs validation', hypothesis: 'hypothesis', needs_review: 'needs review' };
+
+function extrasPanelsHtml(uid) {
+  return `
+  <div class="run-tab-panel" data-tabpanel="chains" hidden>
+    <div class="panel-toolbar"><div class="chip-row" data-x="chain-filters"></div><div class="topbar-spacer"></div>
+      <span class="muted">Chain severity rises above the findings only when every step is evidenced.</span></div>
+    <div data-x="moves"></div><div class="chain-list" data-x="chains"></div>
+    <div class="empty-state" data-x="chains-empty" hidden>No multi-step path to an impact yet. Findings keep their local severity.</div>
+  </div>
+  <div class="run-tab-panel" data-tabpanel="todo" hidden>
+    <p class="panel-help">Each open chain, step by step in dependency order. <b>ready</b> steps are what the chaining rounds dispatch next; <b>blocked</b> steps wait for the fact an earlier step yields; steps turn <b>done</b> when the graph holds evidence for them.</p>
+    <div data-x="todo"></div><div class="empty-state" data-x="todo-empty" hidden>Nothing pending — every chain is confirmed, or there is no multi-step path yet.</div>
+  </div>
+  <div class="run-tab-panel" data-tabpanel="graph" hidden>
+    <div class="panel-toolbar"><div class="chip-row" data-x="legend"></div><div class="topbar-spacer"></div>
+      <label class="toggle"><input type="checkbox" data-x="full" /> full graph</label></div>
+    <div class="gm-wrap" data-x="wrap"><div class="gm-stage" data-x="stage"></div>
+      <div class="gm-zoom"><button class="btn btn-sm" data-z="in">+</button><button class="btn btn-sm" data-z="out">−</button><button class="btn btn-sm" data-z="fit">⤢</button></div></div>
+    <div class="gm-detail" data-x="node" hidden></div>
+    <div class="empty-state" data-x="graph-empty" hidden>No attack graph yet — it is written at every graph checkpoint of a run, or press ↻ Graph on a finished run.</div>
+  </div>
+  <div class="run-tab-panel" data-tabpanel="traffic" hidden>
+    <div class="panel-toolbar">
+      <input type="text" placeholder="host…" class="input-sm" data-x="t-host" list="${uid}-hosts" /><datalist id="${uid}-hosts" data-x="t-hosts"></datalist>
+      <div class="search-wrap"><span class="search-icon" aria-hidden="true">⌕</span><input type="text" placeholder="Search URL / method / status / type" data-x="t-q" /></div>
+      <select class="input-sm" data-x="t-method"><option value="">all methods</option><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>CONNECT</option></select>
+      <div class="topbar-spacer"></div><span class="muted" data-x="t-count"></span></div>
+    <div class="table-wrap"><table class="data-table"><thead><tr><th>Time</th><th>Host</th><th>Method</th><th>URL</th><th>Status</th><th>Type</th><th class="col-conf">Size</th></tr></thead><tbody data-x="t-body"></tbody></table></div>
+    <div class="empty-state" data-x="t-empty" hidden>No recorded traffic. The recording interceptor runs with <code>--intercept own</code>; findings are still wire-checked by the harness's own replay.</div>
+  </div>
+  <div class="run-tab-panel" data-tabpanel="traces" hidden>
+    <div class="panel-toolbar"><div class="search-wrap"><span class="search-icon" aria-hidden="true">⌕</span><input type="text" placeholder="Search every agent's trace (error, parameter, version…)" data-x="tr-q" /></div>
+      <div class="topbar-spacer"></div><span class="muted" data-x="tr-note"></span></div>
+    <div class="trace-layout"><ul class="trace-files" data-x="tr-files"></ul><div class="trace-hits" data-x="tr-hits"></div></div>
+    <div class="empty-state" data-x="tr-empty" hidden>No agent traces yet.</div>
+  </div>
+  <div class="run-tab-panel" data-tabpanel="deliverables" hidden>
+    <div class="deliv-grid" data-x="deliv"></div><div class="empty-state" data-x="deliv-empty" hidden>No deliverables yet — they are written with the report.</div>
+  </div>`;
+}
+
+function makeExtras(viewSel, uid, getRunId) {
+  const root = $(viewSel);
+  const nav = $('.run-tabs', root);
+  const body = $('.run-body', root);
+  if (!root || !nav || !body) return null;
+  for (const [tab, label] of EXTRAS_TABS) {
+    const b = document.createElement('button');
+    b.className = 'run-tab';
+    b.dataset.tab = tab;
+    // Only tabs with a meaningful number carry a counter.
+    b.innerHTML = ['chains', 'todo', 'traces', 'deliverables'].includes(tab) ? `${esc(label)} <span data-count="${tab}">0</span>` : esc(label);
+    nav.appendChild(b);
+  }
+  body.insertAdjacentHTML('beforeend', extrasPanelsHtml(uid));
+  const x = {
+    root, getRunId, graphData: null, extras: {}, chainFilter: 'all',
+    view: { k: 1, tx: 20, ty: 20, sel: null }, timers: {},
+    q: (k) => $(`[data-x="${k}"]`, root),
+    count: (tab, n) => { const el = $(`[data-count="${tab}"]`, root); if (el) el.textContent = n; },
+    active: () => $('.run-tab.active', root)?.dataset.tab || 'findings',
+  };
+  // Our tabs switch panels like the built-in ones (whose handlers already
+  // hide every .run-tab-panel in this view, ours included).
+  $$('.run-tab', nav).forEach((t) => {
+    if (!EXTRAS_TABS.some(([k]) => k === t.dataset.tab)) return;
+    t.addEventListener('click', () => {
+      $$('.run-tab', root).forEach((o) => o.classList.remove('active'));
+      t.classList.add('active');
+      $$('.run-tab-panel', root).forEach((p) => show(p, p.dataset.tabpanel === t.dataset.tab));
+      extrasLoad(x, t.dataset.tab);
+    });
+  });
+  // Inputs.
+  const debounce = (k, fn) => () => { clearTimeout(x.timers[k]); x.timers[k] = setTimeout(fn, 250); };
+  x.q('t-host').addEventListener('input', debounce('t', () => extrasTraffic(x)));
+  x.q('t-q').addEventListener('input', debounce('t', () => extrasTraffic(x)));
+  x.q('t-method').addEventListener('change', () => extrasTraffic(x));
+  x.q('tr-q').addEventListener('input', debounce('tr', () => extrasTraces(x)));
+  x.q('full').addEventListener('change', () => renderGraphMemory(x));
+  bindGraphInteractions(x);
+  return x;
+}
+
+async function extrasGraph(x, force) {
+  const id = x.getRunId();
+  if (!id) return {};
+  if (!force && x.graphData && x.graphData.id === id) return x.graphData;
+  const g = await api(`/api/runs/${encodeURIComponent(id)}/graph`);
+  if (id !== x.getRunId()) return x.graphData || {};
+  x.graphData = { id, ...g };
+  return x.graphData;
+}
+
+function extrasCounts(x) {
+  const g = x.graphData || {};
+  x.count('chains', (g.chains?.chains || []).length);
+  x.count('todo', (g.todo || []).filter((t) => t.state === 'ready').length);
+  x.count('traces', x.extras.traces || 0);
+  x.count('deliverables', (x.extras.deliverables || []).length);
+}
+
+// Refresh after the run's metadata changed (detail load, or a live tick).
+async function extrasRefresh(x, extras, force) {
+  if (!x) return;
+  const id = x.getRunId();
+  if (x.lastId !== id) { x.lastId = id; x.graphData = null; x.view = { k: 1, tx: 20, ty: 20, sel: null }; }
+  x.extras = extras || {};
+  try { await extrasGraph(x, force); } catch { /* no graph yet */ }
+  extrasCounts(x);
+  const tab = x.active();
+  if (EXTRAS_TABS.some(([k]) => k === tab)) extrasLoad(x, tab, true);
+}
+
+async function extrasLoad(x, tab, quiet) {
+  try {
+    if (tab === 'chains') renderChains(x, await extrasGraph(x));
+    else if (tab === 'todo') renderTodo(x, await extrasGraph(x));
+    else if (tab === 'graph') {
+      const g = (await extrasGraph(x))?.graph;
+      const sig = g ? `${(g.nodes || []).length}:${(g.edges || []).length}` : '';
+      // Redraw only when the graph changed, so a live refresh keeps the
+      // operator's zoom, pan and selection.
+      if (!quiet || sig !== x.drawnSig) { x.drawnSig = sig; renderGraphMemory(x); }
+    }
+    else if (tab === 'traffic') await extrasTraffic(x);
+    else if (tab === 'traces') await extrasTraces(x);
+    else if (tab === 'deliverables') renderDeliverables(x);
+  } catch (e) {
+    if (!quiet) toast(`Could not load ${tab}: ${e.message}`, 'error');
+  }
+}
+
+// ---- chains ----------------------------------------------------------------
+
+function renderChains(x, g) {
+  const all = g?.chains?.chains || [];
+  const moves = g?.chains?.next_moves || [];
+  const counts = { all: all.length };
+  for (const c of all) counts[c.status] = (counts[c.status] || 0) + 1;
+  x.q('chain-filters').innerHTML = ['all', 'confirmed', 'needs_validation', 'hypothesis']
+    .map((k) => `<button class="chip${x.chainFilter === k ? ' chip-active' : ''}" data-cf="${k}">${esc(k === 'all' ? 'all' : STATUS_LABEL[k])} <span>${counts[k] || 0}</span></button>`).join('');
+  $$('[data-cf]', x.q('chain-filters')).forEach((b) => b.addEventListener('click', () => { x.chainFilter = b.dataset.cf; renderChains(x, g); }));
+  const mv = (m) => `<li title="${esc(m)}">${esc(m)}</li>`;
+  x.q('moves').innerHTML = moves.length ? `<div class="moves"><div class="moves-h">Next moves · ${moves.length}</div>
+    <ul>${moves.slice(0, 3).map(mv).join('')}</ul>
+    ${moves.length > 3 ? `<details><summary>show all ${moves.length}</summary><ul>${moves.slice(3).map(mv).join('')}</ul></details>` : ''}</div>` : '';
+  const list = all.filter((c) => x.chainFilter === 'all' || c.status === x.chainFilter);
+  show(x.q('chains-empty'), all.length === 0);
+  x.q('chains').innerHTML = list.map((c, i) => `
+    <details class="chain-card st-${esc(c.status)}"${i < 3 ? ' open' : ''}>
+      <summary>
+        <span class="chain-status st-${esc(c.status)}">${esc(STATUS_LABEL[c.status] || c.status)}</span>
+        <span class="sev ${sevClass(c.chain_severity)}">${esc(c.chain_severity)}</span>
+        ${c.potential_severity ? `<span class="chain-pot" title="Severity once every step is validated">→ ${esc(c.potential_severity)} once validated</span>` : ''}
+        <span class="chain-title">${esc(c.title)}</span>
+        <span class="chain-meta">conf ${Number(c.confidence || 0).toFixed(2)} · blast ${c.blast_radius} · ${esc(c.exploitability)}</span>
+      </summary>
+      <div class="chain-body">
+        <div class="chain-impact"><b>Impact:</b> ${esc(c.impact)}</div>
+        <ol class="chain-steps">${(c.step_text || []).map((s, j) => `<li class="step st-${esc(c.steps?.[j]?.status || '')}">${esc(s)}</li>`).join('')}</ol>
+        ${block('Findings involved', (c.findings || []).map((f) => `${f.title} — ${f.severity} (${f.status})`))}
+        ${block('Evidence references', c.evidence, 'none recorded — this chain is unproven')}
+        ${block('Required assumptions', c.assumptions, 'none — every step is evidenced')}
+        ${block('Recommended validation', c.validation, 'none needed — confirmed end to end')}
+        ${block('Recommended remediation', c.remediation)}
+      </div>
+    </details>`).join('');
+}
+
+function block(title, items, emptyText) {
+  const arr = items || [];
+  if (!arr.length && !emptyText) return '';
+  return `<div class="chain-block"><div class="chain-block-h">${esc(title)}</div><ul>${arr.length ? arr.map((v) => `<li>${esc(v)}</li>`).join('') : `<li class="muted">${esc(emptyText)}</li>`}</ul></div>`;
+}
+
+// ---- dependency todolist ---------------------------------------------------
+
+function renderTodo(x, g) {
+  const todo = g?.todo || [];
+  show(x.q('todo-empty'), todo.length === 0);
+  const groups = new Map();
+  for (const t of todo) { if (!groups.has(t.chain)) groups.set(t.chain, []); groups.get(t.chain).push(t); }
+  x.q('todo').innerHTML = [...groups.entries()].map(([chain, steps]) => {
+    const head = steps[0];
+    const done = steps.filter((s) => s.state === 'done').length;
+    return `<section class="todo-chain">
+      <header><span class="todo-title">${esc(chain)}</span>
+        <span class="sev ${sevClass(head.chain_severity)}">${esc(head.chain_severity)}</span>
+        ${head.potential ? `<span class="chain-pot">→ ${esc(head.potential)} once validated</span>` : ''}
+        <span class="todo-progress"><span style="width:${Math.round((done / steps.length) * 100)}%"></span></span>
+        <span class="muted">${done}/${steps.length}</span></header>
+      <ol class="todo-steps">${steps.map((s) => `
+        <li class="todo-step ts-${esc(s.state)}">
+          <span class="ts-badge">${s.state === 'done' ? '✓ done' : s.state === 'ready' ? '▶ ready' : `⏸ after step ${s.blocked_by}`}</span>
+          <div><div class="ts-step">${esc(s.step)}</div>${s.state !== 'done' ? `<div class="ts-action">${esc(s.action)}</div>` : ''}</div>
+        </li>`).join('')}</ol>
+    </section>`;
+  }).join('');
+}
+
+// ---- graph (web + internal network) ----------------------------------------
+
+const GM_COL = {
+  Target: 0, Domain: 0, IPAddress: 0, Host: 0,
+  Service: 1, Technology: 1, Endpoint: 1,
+  Vulnerability: 2, Finding: 2, Evidence: 2, ValidationResult: 2,
+  AttackStep: 3, ExploitAttempt: 3, Credential: 3, Secret: 3, Identity: 3,
+  Role: 4, Permission: 4, Asset: 4, Control: 4,
+  BusinessImpact: 5, Mitigation: 5, AttackPath: 5,
+};
+const GM_KIND = {
+  Target: 'asset', Domain: 'asset', IPAddress: 'asset', Host: 'asset', Asset: 'asset',
+  Service: 'surface', Technology: 'surface', Endpoint: 'surface',
+  Vulnerability: 'weak', Finding: 'weak',
+  AttackStep: 'step', ExploitAttempt: 'step',
+  Credential: 'cred', Secret: 'cred', Identity: 'cred', Role: 'cred', Permission: 'cred',
+  BusinessImpact: 'impact',
+  Evidence: 'meta', ValidationResult: 'meta', Mitigation: 'meta', AttackPath: 'meta', Control: 'meta',
+};
+// Attack progression (mirrors knowledge_graph::STAGES): within a column,
+// findings and attack steps read in the order an attacker meets them.
+const KILL_CHAIN_STAGES = [
+  'recon', 'discovery', 'initial-access', 'execution', 'persistence',
+  'privesc', 'credential-access', 'lateral', 'collection', 'exfil', 'impact',
+];
+const stageRank = (s) => {
+  const i = KILL_CHAIN_STAGES.indexOf(s);
+  return i === -1 ? KILL_CHAIN_STAGES.length : i;
+};
+const GM_HIDDEN = new Set(['Evidence', 'ValidationResult', 'Mitigation', 'AttackPath', 'Domain', 'IPAddress']);
+const GM_TRAVERSAL = new Set(['ENABLES', 'YIELDS', 'CAN_ACCESS', 'HAS_PERMISSION', 'ESCALATES_TO', 'PIVOTS_TO', 'IMPACTS']);
+
+function gmName(n) {
+  const p = n.props || {};
+  return p.title || p.name || p.category || p.path || p.type || p.address || n.key;
+}
+
+function renderGraphMemory(x) {
+  const data = x.graphData?.graph;
+  const stage = x.q('stage');
+  const has = !!(data && (data.nodes || []).length);
+  show(x.q('graph-empty'), !has);
+  show(x.q('wrap'), has);
+  x.q('legend').innerHTML = [['asset', 'asset / host'], ['surface', 'service / endpoint'], ['weak', 'vulnerability / finding'], ['step', 'attack step'], ['cred', 'credential / identity'], ['impact', 'impact']]
+    .map(([k, l]) => `<span class="gm-leg gk-${k}">${esc(l)}</span>`).join('') +
+    '<span class="gm-leg-sep"></span><span class="gm-edge-leg es-confirmed">confirmed</span><span class="gm-edge-leg es-needs_validation">needs validation</span><span class="gm-edge-leg es-hypothesis">hypothesis</span>';
+  if (!has) { stage.innerHTML = ''; return; }
+
+  const full = x.q('full').checked;
+  const id = (n) => `${n.label}|${n.key}`;
+  const eid = (e) => `${e.label}|${e.key}`;
+  let nodes = data.nodes.filter((n) => full || !GM_HIDDEN.has(n.label));
+  let keep = new Set(nodes.map(id));
+  let edges = (data.edges || []).filter((e) => keep.has(eid(e.from)) && keep.has(eid(e.to)));
+  if (!full) {
+    // Attack view: what an attacker moves through, plus the host each finding
+    // was proven on (the vulnerability / service / endpoint hops stay in the
+    // full graph).
+    const trav = (data.edges || []).filter((e) => GM_TRAVERSAL.has(e.type));
+    const outTrav = new Set(trav.map((e) => eid(e.from)));
+    const onPath = new Set();
+    for (const e of trav) for (const end of [e.from, e.to]) {
+      if (end.label === 'AttackStep' && !outTrav.has(eid(end))) continue;
+      onPath.add(eid(end));
+    }
+    const parent = {};
+    for (const e of data.edges || []) {
+      if (['HAS_FINDING', 'HAS_VULNERABILITY', 'HAS_ENDPOINT', 'EXPOSES'].includes(e.type)) (parent[e.type] = parent[e.type] || new Map()).set(eid(e.to), eid(e.from));
+    }
+    const hostOf = (fid) => {
+      const v = parent.HAS_FINDING?.get(fid); const ep = v && parent.HAS_VULNERABILITY?.get(v);
+      const sv = ep && parent.HAS_ENDPOINT?.get(ep); return sv && parent.EXPOSES?.get(sv);
+    };
+    const virtual = [];
+    for (const nid of [...onPath]) {
+      if (!nid.startsWith('Finding|')) continue;
+      const h = hostOf(nid);
+      if (h) { onPath.add(h); virtual.push({ type: 'PROVEN_ON', from: { label: 'Host', key: h.slice(5) }, to: { label: 'Finding', key: nid.slice(8) }, status: 'confirmed', confidence: 1 }); }
+    }
+    if (onPath.size) {
+      nodes = data.nodes.filter((n) => onPath.has(id(n)));
+      keep = new Set(nodes.map(id));
+      edges = trav.filter((e) => keep.has(eid(e.from)) && keep.has(eid(e.to))).concat(virtual);
+    }
+  }
+
+  // Columns by entity kind; a long column wraps into sub-columns.
+  const W = 220, H = 54, GX = 90, GY = 12, PER = 12;
+  const cols = new Map();
+  for (const n of nodes) {
+    const c = GM_COL[n.label] ?? 3;
+    if (!cols.has(c)) cols.set(c, []);
+    cols.get(c).push(n);
+  }
+  const pos = new Map();
+  let maxH = 0;
+  let col = 0;
+  [...cols.keys()].sort((a, b) => a - b).forEach((c) => {
+    const list = cols.get(c).sort((a, b) =>
+      stageRank(a.props?.stage) - stageRank(b.props?.stage)
+      || sevRank(a.props?.local_severity) - sevRank(b.props?.local_severity)
+      || (a.label + gmName(a)).localeCompare(b.label + gmName(b)));
+    const sub = Math.ceil(list.length / PER);
+    list.forEach((n, i) => pos.set(id(n), { x: (col + Math.floor(i / PER)) * (W + GX) - Math.floor(i / PER) * (GX - 24), y: (i % PER) * (H + GY) }));
+    maxH = Math.max(maxH, Math.min(list.length, PER) * (H + GY));
+    col += sub;
+  });
+  const width = col * (W + GX);
+  const path = (a, b) => {
+    const x1 = a.x + W, y1 = a.y + H / 2, x2 = b.x, y2 = b.y + H / 2;
+    if (x2 > x1) { const m = (x1 + x2) / 2; return `M${x1},${y1} C${m},${y1} ${m},${y2} ${x2},${y2}`; }
+    const r = Math.max(a.x, b.x) + W + 40;
+    return `M${x1},${y1} C${r},${y1} ${r},${y2} ${b.x + W},${y2}`;
+  };
+  const svg = edges.map((e) => {
+    const a = pos.get(eid(e.from)), b = pos.get(eid(e.to));
+    if (!a || !b) return '';
+    const st = e.status || 'needs_validation';
+    return `<path class="gm-e es-${esc(st)}${GM_TRAVERSAL.has(e.type) ? ' gm-trav' : ''}" data-from="${esc(eid(e.from))}" data-to="${esc(eid(e.to))}" d="${path(a, b)}"><title>${esc(e.type)} · ${esc(st)} · conf ${Number(e.confidence || 0).toFixed(2)}</title></path>`;
+  }).join('');
+  const cards = nodes.map((n) => {
+    const p = pos.get(id(n));
+    const props = n.props || {};
+    const badge = props.status ? `<span class="gm-st st-${esc(props.status)}">${esc(STATUS_LABEL[props.status] || props.status)}</span>` : '';
+    const sev = props.local_severity ? `<span class="sev ${sevClass(props.local_severity)}">${esc(props.local_severity)}</span>` : '';
+    const crit = props.critical === true || props.privileged === true ? '<span class="gm-crit" title="crown jewel / privileged">★</span>' : '';
+    return `<div class="gm-node gk-${GM_KIND[n.label] || 'meta'}" style="left:${p.x}px;top:${p.y}px;width:${W}px;height:${H}px" data-id="${esc(id(n))}">
+      <div class="gm-node-h"><span class="gm-lbl">${esc(n.label)}${props.stage ? ` · ${esc(props.stage)}` : ''}</span>${crit}${sev}${badge}</div>
+      <div class="gm-node-t" title="${esc(gmName(n))}">${esc(gmName(n))}</div></div>`;
+  }).join('');
+  stage.innerHTML = `<svg class="gm-svg" width="${width + 80}" height="${maxH + 40}">${svg}</svg>${cards}`;
+  stage.style.width = `${width + 80}px`;
+  stage.style.height = `${maxH + 40}px`;
+  gmApply(x);
+
+  const byId = new Map(nodes.map((n) => [id(n), n]));
+  $$('.gm-node', stage).forEach((el) => el.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    const nid = el.dataset.id;
+    x.view.sel = x.view.sel === nid ? null : nid;
+    $$('.gm-node', stage).forEach((o) => o.classList.toggle('sel', o.dataset.id === x.view.sel));
+    $$('.gm-e', stage).forEach((p) => p.classList.toggle('hl', !!x.view.sel && (p.dataset.from === x.view.sel || p.dataset.to === x.view.sel)));
+    stage.classList.toggle('focusing', !!x.view.sel);
+    const n = byId.get(nid);
+    const box = x.q('node');
+    if (!x.view.sel || !n) { show(box, false); return; }
+    const rel = (dir) => edges.filter((e) => eid(dir === 'out' ? e.from : e.to) === nid)
+      .map((e) => { const o = dir === 'out' ? e.to : e.from; const on = byId.get(eid(o)); return `${dir === 'out' ? '→' : '←'} ${e.type} ${o.label} “${on ? gmName(on) : o.key}” (${e.status})`; });
+    const finding = n.label === 'Finding' ? gmFinding(x, n.props?.finding_id) : null;
+    box.innerHTML = `<header><b>${esc(n.label)}</b> ${esc(gmName(n))}${finding ? '<button class="btn btn-sm" data-open>Open finding</button>' : ''}<button class="btn btn-sm" data-close>×</button></header>
+      <table class="kv">${Object.entries(n.props || {}).map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(Array.isArray(v) ? v.join(', ') : v)}</td></tr>`).join('')}</table>
+      ${block('Relationships', rel('out').concat(rel('in')), 'none')}`;
+    show(box, true);
+    $('[data-close]', box).addEventListener('click', () => show(box, false));
+    $('[data-open]', box)?.addEventListener('click', () => openFindingModal(finding.f, finding.pocs, finding.runId));
+  }));
+}
+
+/// The finding behind a graph node, with what the finding modal needs.
+function gmFinding(x, fid) {
+  if (fid === undefined || fid === null || fid === '') return null;
+  const live = x.root.id === 'liveView';
+  const list = live ? (state.currentJob?.findings || []) : (state.detailFindings || []);
+  const f = list.find((o) => o.id === fid);
+  if (!f) return null;
+  return { f, pocs: live ? (state.currentJob?.pocs || []) : (state.detailPocs || []), runId: live ? state.currentJob?.runId : state.currentDetailId };
+}
+
+function gmApply(x) {
+  const st = x.q('stage');
+  if (st) st.style.transform = `translate(${x.view.tx}px,${x.view.ty}px) scale(${x.view.k})`;
+}
+
+function bindGraphInteractions(x) {
+  const wrap = x.q('wrap');
+  let drag = null;
+  wrap.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const r = wrap.getBoundingClientRect();
+    const mx = e.clientX - r.left, my = e.clientY - r.top;
+    const k2 = Math.min(2.5, Math.max(0.2, x.view.k * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+    x.view.tx = mx - ((mx - x.view.tx) * k2) / x.view.k;
+    x.view.ty = my - ((my - x.view.ty) * k2) / x.view.k;
+    x.view.k = k2;
+    gmApply(x);
+  }, { passive: false });
+  wrap.addEventListener('pointerdown', (e) => { if (e.target.closest('.gm-node, .gm-zoom')) return; drag = { x: e.clientX - x.view.tx, y: e.clientY - x.view.ty }; wrap.classList.add('dragging'); });
+  window.addEventListener('pointermove', (e) => { if (!drag) return; x.view.tx = e.clientX - drag.x; x.view.ty = e.clientY - drag.y; gmApply(x); });
+  window.addEventListener('pointerup', () => { drag = null; wrap.classList.remove('dragging'); });
+  $$('.gm-zoom [data-z]', wrap).forEach((b) => b.addEventListener('click', () => {
+    const z = b.dataset.z;
+    if (z === 'fit') {
+      const st = x.q('stage');
+      const sw = parseFloat(st.style.width) || 1, sh = parseFloat(st.style.height) || 1;
+      x.view.k = Math.min(1.2, Math.max(0.2, Math.min(wrap.clientWidth / sw, wrap.clientHeight / sh) * 0.95));
+      x.view.tx = 10; x.view.ty = 10;
+    } else x.view.k = Math.min(2.5, Math.max(0.2, x.view.k * (z === 'in' ? 1.2 : 1 / 1.2)));
+    gmApply(x);
+  }));
+}
+
+// ---- traffic ---------------------------------------------------------------
+
+async function extrasTraffic(x) {
+  const id = x.getRunId();
+  if (!id) return;
+  const q = new URLSearchParams({ host: x.q('t-host').value, method: x.q('t-method').value, q: x.q('t-q').value, limit: '200' });
+  const t = await api(`/api/runs/${encodeURIComponent(id)}/traffic?${q}`);
+  x.q('t-hosts').innerHTML = (t.hosts || []).map((h) => `<option value="${esc(h)}">`).join('');
+  x.q('t-count').textContent = t.total ? `${Math.min(t.total, t.limit)} of ${t.total} flow(s)` : '';
+  show(x.q('t-empty'), !t.total && !x.q('t-q').value && !x.q('t-host').value && !x.q('t-method').value);
+  const stCls = (s) => (s >= 500 ? 'tf-5' : s >= 400 ? 'tf-4' : s >= 300 ? 'tf-3' : s >= 200 ? 'tf-2' : 'tf-0');
+  const size = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : n > 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n || 0} B`);
+  x.q('t-body').innerHTML = (t.rows || []).map((r) => {
+    let host = ''; try { host = new URL(r.url).host; } catch { host = String(r.url || '').split('/')[0]; }
+    return `<tr><td class="col-cwe">${r.at ? new Date(r.at * 1000).toLocaleTimeString() : '—'}</td><td>${esc(host)}</td>
+      <td><span class="method">${esc(r.method)}</span></td><td class="col-endpoint" title="${esc(r.url)}">${esc(r.url)}</td>
+      <td><span class="tf ${stCls(r.status)}">${r.tunnelled ? 'TLS' : r.status || '—'}</span></td><td class="col-cwe">${esc(r.content_type || '')}</td><td class="col-conf">${size(r.resp_bytes)}</td></tr>`;
+  }).join('');
+}
+
+// ---- traces ----------------------------------------------------------------
+
+async function extrasTraces(x) {
+  const id = x.getRunId();
+  if (!id) return;
+  const qv = x.q('tr-q').value.trim();
+  const r = await api(`/api/runs/${encodeURIComponent(id)}/traces?q=${encodeURIComponent(qv)}`);
+  x.count('traces', (r.traces || []).length);
+  show(x.q('tr-empty'), !(r.traces || []).length);
+  const base = `/api/runs/${encodeURIComponent(id)}/asset/`;
+  x.q('tr-files').innerHTML = (r.traces || []).map((t) => `<li><a href="${base}${encodeURI(t.file)}" target="_blank">${esc(t.agent)}</a><span class="muted">${(t.bytes / 1024).toFixed(1)} KB</span></li>`).join('');
+  x.q('tr-note').textContent = qv ? `${r.hits.length}${r.hits.length >= 200 ? '+' : ''} hit(s) for “${qv}”` : `${(r.traces || []).length} agent trace(s) — search across all of them`;
+  const re = qv ? new RegExp(qv.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'ig') : null;
+  x.q('tr-hits').innerHTML = qv
+    ? (r.hits.length ? r.hits.map((h) => `<div class="trace-hit"><a href="${base}${encodeURI(h.file)}" target="_blank">${esc(h.agent)}</a><span class="muted">:${h.line}</span><code>${esc(h.snippet).replace(re, (m) => `<mark>${m}</mark>`)}</code></div>`).join('') : '<div class="muted">No agent saw that.</div>')
+    : '<div class="muted">Type a keyword — an error string, a parameter, a version — to see which agents already observed it.</div>';
+}
+
+// ---- deliverables ----------------------------------------------------------
+
+const DELIV_INFO = {
+  'differential-proof.md': ['Differential proof', 'Is it real? Attack vs negative control, computed diff, repeat distribution.'],
+  'evidence-custody.md': ['Chain of custody', 'Observed vs derived vs inferred, hash-chained.'],
+  'evidence-custody.json': ['Chain of custody (JSON)', 'Machine-readable custody chain.'],
+  'Makefile': ['Regression tests', '`make verify-<id>` — fails while open, passes once fixed.'],
+  'README.md': ['Deliverables index', 'What each artifact answers.'],
+  'persona-dev.md': ['For developers', 'One ticket per finding: where, how to prove it, the fix.'],
+  'persona-appsec.md': ['For AppSec', 'Verdicts, CVSS, differential proof, chains.'],
+  'persona-executive.md': ['Executive summary', 'Impact in business terms.'],
+  'detection/modsecurity.conf': ['ModSecurity rules', 'WAF rules derived from the exploits.'],
+  'detection/siem-queries.md': ['SIEM queries', 'Splunk / Elastic queries to check the SOC saw it.'],
+};
+
+function renderDeliverables(x) {
+  const id = x.getRunId();
+  const files = x.extras.deliverables || [];
+  show(x.q('deliv-empty'), files.length === 0);
+  const base = `/api/runs/${encodeURIComponent(id)}/asset/`;
+  const rel = (f) => f.replace(/^deliverables\//, '');
+  const groups = [['tests/', 'Exploit-as-test (pytest)'], ['nuclei/', 'Nuclei templates'], ['detection/', 'Sigma rules']];
+  x.q('deliv').innerHTML = files.filter((f) => DELIV_INFO[rel(f)]).map((f) => {
+    const [t, d] = DELIV_INFO[rel(f)];
+    return `<a class="deliv-card" href="${base}${encodeURI(f)}" target="_blank"><b>${esc(t)}</b><span>${esc(d)}</span><code>${esc(f)}</code></a>`;
+  }).join('') + groups.map(([dir, title]) => {
+    const list = files.filter((f) => f.startsWith(`deliverables/${dir}`) && !DELIV_INFO[rel(f)]);
+    return list.length ? `<div class="deliv-card deliv-group"><b>${esc(title)}</b><span>${list.length} file(s)</span><ul>${list.slice(0, 40).map((f) => `<li><a href="${base}${encodeURI(f)}" target="_blank">${esc(f.split('/').pop())}</a></li>`).join('')}</ul></div>` : '';
+  }).join('');
+}
+
+// ---- mounts ----------------------------------------------------------------
+
+const detailExtras = makeExtras('#detailView', 'dx', () => state.detailLoadedId);
+const liveExtras = makeExtras('#liveView', 'lx', () => state.currentJob?.runId);
+
+// Detail view: called by loadDetail after every (re)load.
+function afterDetailLoaded(id, detail) {
+  extrasRefresh(detailExtras, detail.extras || {});
+}
+
+// Live view: the run directory fills in as the harness works (graph
+// checkpoints, traces, recorded traffic). Re-read it every few seconds while a
+// job is open, from the same files the CLI writes.
+setInterval(async () => {
+  const id = state.currentJob?.runId;
+  if (!id || !liveExtras || $('#liveView').hidden) return;
+  try {
+    const d = await api(`/api/runs/${encodeURIComponent(id)}`);
+    await extrasRefresh(liveExtras, d.extras || {}, true);
+  } catch { /* run dir not there yet */ }
+}, 5000);
+
+// ---- actions through the CLI -----------------------------------------------
+
+async function cliAction(btn, label, url, body, after) {
+  const id = state.detailLoadedId;
+  if (!id) return;
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = `${label}…`;
+  try {
+    const r = await api(`/api/runs/${encodeURIComponent(id)}${url}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+    if (after) await after(r);
+    if (r.output) showOutput(label, r.output);
+    else toast(`${label}: done`, 'ok');
+  } catch (e) {
+    showOutput(`${label} failed`, e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+const adoptGraph = (r) => {
+  detailExtras.graphData = { id: state.detailLoadedId, chains: r.chains, todo: r.todo, graph: r.graph };
+  detailExtras.drawnSig = null;
+  extrasCounts(detailExtras);
+  const tab = detailExtras.active();
+  if (EXTRAS_TABS.some(([k]) => k === tab)) extrasLoad(detailExtras, tab);
+};
+$('#btnGraphRecompute')?.addEventListener('click', (e) => cliAction(e.currentTarget, 'Recompute graph', '/graph', {}, adoptGraph));
+$('#btnGraphPush')?.addEventListener('click', (e) => cliAction(e.currentTarget, 'Push to Neo4j', '/graph', { push: true }, adoptGraph));
+$('#btnRetest')?.addEventListener('click', (e) => cliAction(e.currentTarget, 'Re-test PoCs', '/retest', {}));

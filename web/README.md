@@ -14,9 +14,10 @@ CLI binary, never a reimplementation of harness logic.
 - **Auth & Keys** (one menu, 🔑 in the sidebar) — target auth header + named roles for
   IDOR/BOLA/BFLA testing, per-provider API keys (kept in server memory only, never on disk), and
   an explicit `creds.yaml` path override.
-- **Generative Attack Path Chaining** — findings are grouped into kill-chain columns
-  (recon → initial-access → execution → privesc → lateral → exfil → impact) with chained findings
-  linked back to their parent, built live as findings stream in.
+- **Attack graph** — the run's graph memory (web + internal network): host → service → finding →
+  credential → impact, every edge marked confirmed / needs validation / hypothesis, findings ordered
+  by kill-chain stage. Refreshed live at each graph checkpoint; click a finding to open it. Chains
+  and Dependencies list the same paths as text and as the step-by-step todolist.
 - **Terminal dock (xterm.js)** — `❭_` in the sidebar, the topbar button, or `Ctrl+\`` opens a
   docked terminal running a real `neurosploit` REPL session. Its stdout is streamed **unstripped**,
   so the harness's own colour and box-drawn panels render as they do in a local shell. Line

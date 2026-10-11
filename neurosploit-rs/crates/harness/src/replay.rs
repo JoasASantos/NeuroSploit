@@ -164,6 +164,7 @@ impl ReplayEngine {
             identity: req.identity.clone(),
             headers,
             request_headers: req.headers.clone(),
+            provenance: "wire:replay".into(),
         })
     }
 

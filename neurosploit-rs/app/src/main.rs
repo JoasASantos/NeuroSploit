@@ -83,6 +83,14 @@ struct Cli {
     /// exact same pipeline without it, so runs can be compared with/without.
     #[arg(long = "typesafe", global = true)]
     typesafe: Option<String>,
+    /// Authorization matrix engine: on|off|auto (auto runs when --creds carries
+    /// >=2 identities across >=2 privilege tiers). Deterministic, no model calls.
+    #[arg(long = "authz-matrix", global = true)]
+    authz_matrix: Option<String>,
+    /// Neo4j for the attack graph (bolt://host:7687 or http://host:7474).
+    /// Falls back to NEO4J_URI; credentials only via NEO4J_USER / NEO4J_PASSWORD.
+    #[arg(long = "neo4j", global = true)]
+    neo4j: Option<String>,
     /// Decision backend for the calibrated System One layer:
     /// typesafe (hosted API, needs TYPESAFE_API_KEY) or laya (local, free,
     /// open-source — downloads the model on first use and keeps evidence on the
@@ -178,7 +186,7 @@ enum Cmd {
         #[arg(long = "revalidate-poc")]
         revalidate_poc: bool,
         /// Map findings onto compliance controls in the report: pci-dss, hipaa,
-        /// soc2 (repeatable or comma-separated).
+        /// soc2, gdpr (repeatable or comma-separated).
         #[arg(long = "compliance")]
         compliance: Vec<String>,
         /// Open a Jira card per finding (needs the jira integration enabled).
@@ -216,6 +224,24 @@ enum Cmd {
         /// Write to this path instead of the run's `report.sarif`.
         #[arg(long = "out")]
         out: Option<String>,
+    },
+    /// Attack graph for a finished run (web + internal network): attack chains
+    /// with local vs chain severity, next moves, a Cypher export — and, with
+    /// --push (or NEO4J_URI set), MERGE into Neo4j and reason over paths
+    /// accumulated across runs
+    Graph {
+        /// Run id (`ns-…`) or a path to the run directory.
+        run: String,
+        /// Internal-network graph JSON to merge (as saved by `internal --save`);
+        /// defaults to `<run>/internal-graph.json` when present.
+        #[arg(long = "internal")]
+        internal: Option<String>,
+        /// Push to Neo4j and read accumulated paths back.
+        #[arg(long = "push")]
+        push: bool,
+        /// How many chains to print.
+        #[arg(long = "top", default_value_t = 5)]
+        top: usize,
     },
     /// Verify a finished run's audit trail — the hash chain and, with --anchor,
     /// the signed anchors that catch truncation and silent rebuilds.
@@ -835,6 +861,7 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Audit { run, anchor } => handle_audit(&base, &run, anchor)?,
         Cmd::Traffic { run } => handle_traffic(&base, &run)?,
         Cmd::Sarif { run, out } => handle_sarif(&base, &run, out.as_deref())?,
+        Cmd::Graph { run, internal, push, top } => handle_graph(&base, &run, internal.as_deref(), push, top, cli.neo4j.as_deref()).await?,
         Cmd::Assurance { run, verify } => handle_assurance(&base, &run, verify)?,
         Cmd::Compliance { run, framework, include_leads } => handle_compliance(&base, &run, &framework, include_leads)?,
         Cmd::Poc { run, repeats, apply } => handle_poc(&base, &run, repeats, apply).await?,
@@ -888,6 +915,9 @@ async fn main() -> anyhow::Result<()> {
             cfg.sandbox = cli.sandbox.clone();
             cfg.revalidate_poc = revalidate_poc;
             cfg.compliance = revalidate_split(&compliance);
+            cfg.authz_matrix = cli.authz_matrix.clone();
+            cfg.creds_file = creds.clone();
+            cfg.neo4j = cli.neo4j.clone();
             if !models.is_empty() {
                 cfg.models = models;
             }
@@ -1787,6 +1817,82 @@ fn handle_traffic(base: &std::path::Path, run: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn handle_graph(base: &std::path::Path, run: &str, internal: Option<&str>, push: bool, top: usize, neo4j: Option<&str>) -> anyhow::Result<()> {
+    use harness::graph_memory as gm;
+    let dir = resolve_run(base, run)?;
+    let findings = load_findings(&dir)?;
+    let target = std::fs::read_to_string(dir.join("meta.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("target").and_then(|x| x.as_str()).map(String::from))
+        .unwrap_or_else(|| run.to_string());
+    let run_id = dir.file_name().and_then(|s| s.to_str()).unwrap_or("run").to_string();
+    let ipath = internal.map(std::path::PathBuf::from).unwrap_or_else(|| dir.join("internal-graph.json"));
+    let ig: Option<harness::internal::InternalGraph> = std::fs::read_to_string(&ipath).ok().and_then(|t| serde_json::from_str(&t).ok());
+    if internal.is_some() && ig.is_none() {
+        anyhow::bail!("{} is not a readable internal graph", ipath.display());
+    }
+    let mut b = gm::build(&target, &run_id, &findings, ig.as_ref(), None);
+    let neo = gm::Neo4j::resolve(neo4j).filter(|_| push || neo4j.is_some() || std::env::var("NEO4J_URI").is_ok());
+    if let Some(n) = &neo {
+        let mut pushed = b.clone();
+        let local = gm::chains(&pushed, 8, 50);
+        gm::record_paths(&mut pushed, &local, &run_id);
+        match n.push(&pushed, &run_id).await {
+            Ok((nn, ne)) => println!("  neo4j: merged {nn} node(s), {ne} relationship(s) → {}", n.label()),
+            Err(e) => println!("  neo4j: push failed ({e}) — continuing offline"),
+        }
+        match n.fetch_paths(&b.target_id, 500).await {
+            Ok(remote) => {
+                let before = b.edges.len();
+                b.absorb(remote);
+                println!("  neo4j: read back accumulated paths (+{} relationship(s))", b.edges.len().saturating_sub(before));
+            }
+            Err(e) => println!("  neo4j: read failed ({e})"),
+        }
+    }
+    let cs = gm::chains(&b, 8, 50);
+    let moves = gm::next_moves(&b, &cs, 12);
+    gm::record_paths(&mut b, &cs, &run_id);
+    let out = dir.join("graph");
+    std::fs::create_dir_all(&out)?;
+    std::fs::write(out.join("attack-chains.md"), gm::chains_markdown(&target, &cs, &moves))?;
+    std::fs::write(out.join("chains.json"), gm::chains_json(&cs, &moves))?;
+    let td = gm::todo(&b, &cs);
+    std::fs::write(out.join("todo.md"), gm::todo_markdown(&target, &td))?;
+    std::fs::write(out.join("todo.json"), gm::todo_json(&td))?;
+    std::fs::write(out.join("graph.cypher"), gm::export_cypher(&b, &run_id))?;
+    std::fs::write(out.join("graph.json"), gm::export_json(&b))?;
+    let confirmed = cs.iter().filter(|c| c.status == gm::Status::Confirmed).count();
+    println!(
+        "  graph: {} node(s), {} relationship(s) · {} chain(s), {} confirmed{}",
+        b.nodes.len(),
+        b.edges.len(),
+        cs.len(),
+        confirmed,
+        if ig.is_some() { " · internal network merged" } else { "" }
+    );
+    for (i, c) in cs.iter().take(top).enumerate() {
+        println!(
+            "  {}. [{}] {} — chain {}{} · conf {:.2}",
+            i + 1,
+            c.status.as_str(),
+            c.title,
+            c.chain_severity,
+            c.potential_severity.as_deref().map(|p| format!(" (→{p} if validated)")).unwrap_or_default(),
+            c.confidence
+        );
+    }
+    if !moves.is_empty() {
+        println!("  next moves:");
+        for m in moves.iter().take(top) {
+            println!("   - {m}");
+        }
+    }
+    println!("  → {}/attack-chains.md · graph.cypher · graph.json", out.display());
+    Ok(())
+}
+
 fn handle_sarif(base: &std::path::Path, run: &str, out: Option<&str>) -> anyhow::Result<()> {
     let dir = resolve_run(base, run)?;
     let findings = load_findings(&dir)?;
@@ -1795,7 +1901,7 @@ fn handle_sarif(base: &std::path::Path, run: &str, out: Option<&str>) -> anyhow:
         .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
         .and_then(|v| v.get("target").and_then(|x| x.as_str()).map(String::from))
         .unwrap_or_else(|| run.to_string());
-    let doc = harness::sarif::to_string(&target, &findings);
+    let doc = harness::sarif::to_string(&target, &harness::redact::for_people(&findings));
     let dest = out.map(std::path::PathBuf::from).unwrap_or_else(|| dir.join("report.sarif"));
     std::fs::write(&dest, doc)?;
     println!("  {} finding(s) -> SARIF 2.1.0 at {}", findings.len(), dest.display());

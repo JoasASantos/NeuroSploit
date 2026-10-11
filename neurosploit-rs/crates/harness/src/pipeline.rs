@@ -187,6 +187,13 @@ fn operator_directives(cfg: &RunConfig) -> String {
     if !recalled.is_empty() {
         s.push_str(&recalled);
     }
+    // The live attack graph — refreshed at every graph checkpoint of the test.
+    let graph = crate::graph_memory::live_context(&run_id(cfg));
+    if !graph.is_empty() {
+        s.push_str(&graph);
+    }
+    // What the other agents already observed (structured digest + where to grep).
+    s.push_str(&crate::traces::prompt_block(cfg.workdir.as_deref(), None));
     if !s.is_empty() {
         s.push('\n');
     }
@@ -836,6 +843,87 @@ fn write_meta(cfg: &RunConfig, p: &crate::probe::Probe, asset: &str) {
 }
 
 /// Black-box web engagement: recon → parallel exploit → N-model vote → report.
+/// Extract `(method, absolute_url)` pairs from the recon JSON the model
+/// returned (keys `endpoints` and `apis`). Tolerant: an item may be a bare path,
+/// a full URL, a `"METHOD /path"` string, or an object with `method`+`path/url`.
+fn endpoints_from_recon(recon: &str, target: &str) -> Vec<(String, String)> {
+    let base = target.trim_end_matches('/').to_string();
+    let abs = |p: &str| -> String {
+        let p = p.trim();
+        if p.starts_with("http://") || p.starts_with("https://") {
+            p.to_string()
+        } else if p.starts_with('/') {
+            format!("{base}{p}")
+        } else {
+            format!("{base}/{p}")
+        }
+    };
+    // Pull the JSON object out of whatever the model wrapped it in.
+    let (Some(s), Some(e)) = (recon.find('{'), recon.rfind('}')) else { return Vec::new() };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&recon[s..=e]) else { return Vec::new() };
+
+    let mut out: Vec<(String, String)> = Vec::new();
+    for key in ["endpoints", "apis"] {
+        let Some(arr) = v.get(key).and_then(|x| x.as_array()) else { continue };
+        for item in arr {
+            if let Some(str_item) = item.as_str() {
+                // "METHOD /path" or just a path/url.
+                let (method, path) = match str_item.split_once(char::is_whitespace) {
+                    Some((m, p)) if m.chars().all(|c| c.is_ascii_alphabetic()) && m.len() <= 7 => (m.to_uppercase(), p.trim().to_string()),
+                    _ => ("GET".to_string(), str_item.to_string()),
+                };
+                out.push((method, abs(&path)));
+            } else if let Some(obj) = item.as_object() {
+                let method = obj.get("method").and_then(|x| x.as_str()).unwrap_or("GET").to_uppercase();
+                let path = obj.get("url").or_else(|| obj.get("path")).or_else(|| obj.get("endpoint")).and_then(|x| x.as_str()).unwrap_or("");
+                if !path.is_empty() {
+                    out.push((method, abs(path)));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The authorization-matrix pass: load the multi-identity creds, build the route
+/// inventory from recon, sweep every route against every identity, and return
+/// the confirmed/needs-review findings. Deterministic; no model calls.
+async fn authz_matrix_pass(cfg: &RunConfig, recon: &str, tx: &Sender<String>) -> Vec<Finding> {
+    let mode = cfg.authz_matrix.as_deref().unwrap_or("auto").to_lowercase();
+    if mode == "off" {
+        return Vec::new();
+    }
+    let Some(path) = cfg.creds_file.as_deref() else { return Vec::new() };
+    let Some(creds) = crate::creds::Creds::load(std::path::Path::new(path)) else { return Vec::new() };
+    if !creds.authz_matrix_ready() {
+        if mode == "on" {
+            let _ = tx.send("authz-matrix: creds have fewer than 2 identity tiers — nothing to differentiate".into()).await;
+        }
+        return Vec::new();
+    }
+    let eps = endpoints_from_recon(recon, &cfg.target);
+    if eps.is_empty() {
+        return Vec::new();
+    }
+    let inv = crate::authz_matrix::RouteInventory::from_endpoints(&eps);
+    let _ = tx.send(format!(
+        "🔐 authz-matrix: sweeping {} route(s) across {} identities",
+        inv.routes.len(),
+        creds.roles.len()
+    )).await;
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent(cfg.user_agent.clone().unwrap_or_else(default_user_agent))
+        .build()
+        .unwrap_or_default();
+    const CAP: usize = 400;
+    crate::authz_matrix::run_pass(&inv, &creds, &cfg.scope, CAP, |m, u, h, b| {
+        crate::authz_matrix::send_via(&client, m, u, h, b)
+    })
+    .await
+}
+
 pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<String>) -> RunOutput {
     pool.set_progress(tx.clone());
 
@@ -1133,6 +1221,10 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
         deep_recon(&cfg, pool, &probe_facts, &tx).await
     };
 
+    // ---- 1b. Graph checkpoint: seed the attack graph from recon ---------
+    let agent_names: Vec<String> = lib.vulns.iter().map(|a| a.name.clone()).collect();
+    let graph_agents = graph_checkpoint(&cfg, &recon, &[], "recon", &agent_names, &tx).await.agents;
+
     // ---- 2. Intelligent, RL-ranked agent selection ---------------------
     let mut rl = cfg.rl_path.as_ref().map(|p| RlState::load(Path::new(p))).unwrap_or_default();
     let mut ranked: Vec<Agent> = lib.vulns.clone();
@@ -1203,6 +1295,19 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
             }
         }
     }
+    // Graph-directed agents: the specialists that would complete or extend an
+    // open path in the attack graph (never when the operator pinned a set).
+    if cfg.pinned.is_empty() {
+        for (name, why) in &graph_agents {
+            if selected.iter().any(|a| &a.name == name) {
+                continue;
+            }
+            if let Some(a) = lib.vulns.iter().find(|a| &a.name == name) {
+                let _ = tx.send(format!("🕸 graph-directed: {name} — {why}")).await;
+                selected.push(a.clone());
+            }
+        }
+    }
     let _ = tx
         .send(format!("intelligently selected {} agent(s) matching recon: {}", selected.len(),
             selected.iter().map(|a| a.name.clone()).collect::<Vec<_>>().join(", ")))
@@ -1237,6 +1342,7 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
             let ops = ops.clone();
             let shots = shots.clone();
             let txc = tx.clone();
+            let wd = cfg.workdir.clone();
             async move {
                 if pool.stop_exploiting() {
                     return (ag.name.clone(), String::new(), vec![]);
@@ -1303,6 +1409,7 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
                             let _ = txc.send(format!("finding: [{}] {} @ {}", c.severity, c.title, c.endpoint)).await;
                             if let Ok(j) = serde_json::to_string(c) { let _ = txc.send(format!("finding_json: {j}")).await; }
                         }
+                        crate::traces::record(wd.as_deref(), &ag.name, &text);
                         (ag.name.clone(), text, f)
                     }
                     Err(e) => {
@@ -1321,6 +1428,7 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
         .collect()
         .await;
 
+    crate::traces::record_all(cfg.workdir.as_deref(), &raw);
     let transcript = transcript_of(&raw);
     let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
     let _ = tx.send(format!("{} candidate finding(s) (deduped) — validating by {}-model vote", candidates.len(), cfg.vote_n)).await;
@@ -1330,6 +1438,17 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
 
     // ---- 4. Validate by N-model voting ---------------------------------
     let mut findings = validate_with_persist(candidates, pool, VOTE_SYS, effective_vote_n(&cfg), &tx, cfg.workdir.as_deref()).await;
+
+    // ---- 4b. Authorization matrix: deterministic multi-identity sweep --
+    let mx = authz_matrix_pass(&cfg, &recon, &tx).await;
+    if !mx.is_empty() {
+        let _ = tx.send(format!("🔐 authz-matrix: {} finding(s) from the multi-identity sweep", mx.len())).await;
+        findings.extend(mx);
+        findings = dedup_findings(findings);
+    }
+
+    // ---- 4c. Graph checkpoint: validated findings into the graph -------
+    let _ = graph_checkpoint(&cfg, &recon, &findings, "validated", &[], &tx).await;
 
     // ---- 5. Attack chaining: multi-round post-exploitation pivots ------
     let chained = attack_chain(pool, &cfg, &recon, &findings, &lib.chains, &tx).await;
@@ -1421,6 +1540,7 @@ pub async fn run_whitebox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: S
         .collect()
         .await;
 
+    crate::traces::record_all(cfg.workdir.as_deref(), &raw);
     let transcript = transcript_of(&raw);
     let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
     let _ = tx.send(format!("{} candidate finding(s) (deduped) — validating", candidates.len())).await;
@@ -1452,6 +1572,8 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
             Err(e) => { let _ = tx.send(format!("recon failed ({e}) — probe facts only")).await; facts }
         }
     };
+    // Graph checkpoint: seed the attack graph from recon.
+    let _ = graph_checkpoint(&cfg, &recon, &[], "recon", &[], &tx).await;
 
     // ---- 2. Review the source for leads -------------------------------
     let context = collect_repo_context(Path::new(&repo), 200, 90_000);
@@ -1571,6 +1693,7 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
         .buffer_unordered(cfg.concurrency)
         .collect::<Vec<_>>().await;
 
+    crate::traces::record_all(cfg.workdir.as_deref(), &raw);
     let transcript = format!("{}\n{}", code_leads, transcript_of(&raw));
     let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
     let _ = tx.send(format!("{} candidate finding(s) (deduped) — validating", candidates.len())).await;
@@ -1591,6 +1714,17 @@ const CHAIN_SYS: &str = "You are a post-exploitation & attack-chaining specialis
 fn finding_key(f: &Finding) -> String {
     format!("{}|{}|{}", f.cwe.to_lowercase(), f.endpoint.to_lowercase(),
         f.title.to_lowercase().chars().take(40).collect::<String>())
+}
+
+/// Order footholds by attack-graph chain value, then severity.
+fn sort_frontier(frontier: &mut [Finding], prio: &std::collections::HashMap<String, f64>) {
+    frontier.sort_by(|a, b| {
+        let pa = prio.get(&a.id).copied().unwrap_or(0.0);
+        let pb = prio.get(&b.id).copied().unwrap_or(0.0);
+        pb.partial_cmp(&pa)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(sev_rank(&b.severity).cmp(&sev_rank(&a.severity)))
+    });
 }
 
 fn sev_rank(sev: &str) -> u8 {
@@ -1615,6 +1749,106 @@ const CHAIN_SEEDS_PER_ROUND: usize = 6;
 /// round's footholds; the loop stops at `chain_depth` rounds or when a round
 /// yields nothing new (loop-until-dry). Findings are validated each round so we
 /// never pivot off a false positive.
+/// A graph checkpoint — the attack graph as a phase of the test.
+///
+/// Projects everything known so far (the recon surface, findings, the saved
+/// internal-network graph, the project's cross-run memory and, when configured,
+/// paths read back from Neo4j), reasons over it, and then:
+/// - publishes the live context every agent prompt reads (via
+///   `operator_directives`), so the next agents test toward the open paths;
+/// - writes `graph/live-chains.md` + `graph/live.json` for the operator;
+/// - MERGEs the run's slice into Neo4j.
+///
+/// Returns the graph-directed agent suggestions and a priority per finding id.
+/// What a graph checkpoint hands back to the phase that called it.
+struct GraphOutcome {
+    /// Agents that would complete or extend an open path (name, why).
+    agents: Vec<(String, String)>,
+    /// Chain value per finding id, for ordering footholds.
+    prio: std::collections::HashMap<String, f64>,
+    /// Dependency-ready steps: (seed finding id, action, chain title).
+    ready: Vec<(String, String, String)>,
+}
+
+async fn graph_checkpoint(
+    cfg: &RunConfig,
+    recon: &str,
+    findings: &[Finding],
+    phase: &str,
+    available: &[String],
+    tx: &Sender<String>,
+) -> GraphOutcome {
+    use crate::graph_memory as gm;
+    let rid = run_id(cfg);
+    let scope = effective_scope(cfg);
+    let in_scope = |u: &str| scope.in_hard_scope(u);
+    let history = crate::knowledge_graph::KnowledgeGraph::load(proj_store(cfg).join("graph.json"));
+    let internal: Option<crate::internal::InternalGraph> = cfg
+        .workdir
+        .as_deref()
+        .and_then(|d| std::fs::read_to_string(Path::new(d).join("internal-graph.json")).ok())
+        .and_then(|t| serde_json::from_str(&t).ok());
+
+    let mut gb = gm::build(&cfg.target, &rid, findings, internal.as_ref(), Some(&history));
+    gm::project_recon(&mut gb, &cfg.target, recon, &in_scope);
+    let neo = gm::Neo4j::resolve(cfg.neo4j.as_deref());
+    if let Some(n) = &neo {
+        match n.fetch_paths(&gb.target_id, 300).await {
+            Ok(remote) => gb.absorb(remote),
+            Err(e) => {
+                let _ = tx.send(format!("🕸 graph [{phase}]: neo4j read skipped ({e})")).await;
+            }
+        }
+    }
+    let cs = gm::chains(&gb, 8, 30);
+    let moves = gm::next_moves(&gb, &cs, 10);
+    let todo = gm::todo(&gb, &cs);
+    gm::set_live_context(&rid, gm::context_block(&gb, &cs, &moves));
+
+    if let Some(d) = cfg.workdir.as_deref() {
+        let out = Path::new(d).join("graph");
+        if std::fs::create_dir_all(&out).is_ok() {
+            let _ = std::fs::write(out.join("live-chains.md"), gm::chains_markdown(&cfg.target, &cs, &moves));
+            let _ = std::fs::write(out.join("live.json"), gm::export_json(&gb));
+            let _ = std::fs::write(out.join("todo.md"), gm::todo_markdown(&cfg.target, &todo));
+            let _ = std::fs::write(out.join("todo.json"), gm::todo_json(&todo));
+            let _ = std::fs::write(out.join("live-chains.json"), gm::chains_json(&cs, &moves));
+        }
+    }
+    let ready: Vec<(String, String, String)> = gm::ready_steps(&todo)
+        .into_iter()
+        .filter_map(|t| t.seed_finding.clone().map(|fid| (fid, t.action.clone(), t.chain.clone())))
+        .collect();
+
+    let mut synced = String::new();
+    if let Some(n) = &neo {
+        // Push this run's slice (not the history copy — it was pushed by the
+        // runs it came from).
+        let mut pb = gm::build(&cfg.target, &rid, findings, internal.as_ref(), None);
+        gm::project_recon(&mut pb, &cfg.target, recon, &in_scope);
+        gm::record_paths(&mut pb, &cs, &rid);
+        match n.push(&pb, &rid).await {
+            Ok(_) => synced = " · neo4j synced".into(),
+            Err(e) => synced = format!(" · neo4j push skipped ({e})"),
+        }
+    }
+    let (h, sv, ep, sec) = gm::surface_counts(&gb);
+    let confirmed = cs.iter().filter(|c| c.status == gm::Status::Confirmed).count();
+    let _ = tx
+        .send(format!(
+            "🕸 graph [{phase}]: {h} host(s) · {sv} service(s) · {ep} endpoint(s) · {sec} secret fp · {} chain(s) ({confirmed} confirmed) · {} next move(s){synced}",
+            cs.len(),
+            moves.len()
+        ))
+        .await;
+    if let Some((_, action, chain)) = ready.first() {
+        let _ = tx.send(format!("🕸 next step ({} ready): {} — {}", ready.len(), chain, action)).await;
+    } else if let Some(m) = moves.first() {
+        let _ = tx.send(format!("🕸 next move: {m}")).await;
+    }
+    GraphOutcome { agents: gm::directed_agents(&gb, available), prio: gm::seed_priority(&cs), ready }
+}
+
 async fn attack_chain(pool: &ModelPool, cfg: &RunConfig, recon: &str,
                       confirmed: &[Finding], chains: &[Agent], tx: &Sender<String>) -> Vec<Finding> {
     let max_rounds = cfg.chain_depth;
@@ -1624,28 +1858,69 @@ async fn attack_chain(pool: &ModelPool, cfg: &RunConfig, recon: &str,
     let recipes: String = chains.iter().map(|a| format!("- {}", a.title.replace(" Agent", ""))).collect::<Vec<_>>().join("\n");
     let recipe_block = if recipes.is_empty() { String::new() } else { format!("KNOWN CHAIN RECIPES (apply any that fit):\n{recipes}\n\n") };
     let recon_ctx: String = recon.chars().take(2000).collect();
-    let directives = operator_directives(cfg);
 
     let mut all_new: Vec<Finding> = Vec::new();
     let mut loot: Vec<String> = Vec::new();
     let mut round_summaries: Vec<String> = Vec::new();
     let mut seen: std::collections::HashSet<String> = confirmed.iter().map(finding_key).collect();
 
-    // Frontier = footholds to expand this round; start with confirmed, best-first.
+    // Frontier = footholds to expand this round; start with confirmed. Order:
+    // findings on the most valuable attack-graph chains first, then severity.
+    let mut known: Vec<Finding> = confirmed.to_vec();
+    let start = graph_checkpoint(cfg, recon, &known, "chain start", &[], tx).await;
+    let mut prio = start.prio;
+    let mut ready = start.ready;
+    // Steps already dispatched — a step the agent could not prove is not
+    // re-sent every round.
+    let mut attempted: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut frontier: Vec<Finding> = confirmed.to_vec();
-    frontier.sort_by_key(|f| std::cmp::Reverse(sev_rank(&f.severity)));
+    sort_frontier(&mut frontier, &prio);
 
     for round in 1..=max_rounds {
-        if pool.stop_exploiting() || frontier.is_empty() {
+        // Seeds: dependency-ready steps first (each with its exact step), then
+        // the freshest footholds by chain value.
+        let mut seeds: Vec<(Finding, String)> = Vec::new();
+        let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (fid, action, chain) in &ready {
+            if seeds.len() >= CHAIN_SEEDS_PER_ROUND {
+                break;
+            }
+            if attempted.contains(action) {
+                continue;
+            }
+            if let Some(f) = known.iter().find(|f| &f.id == fid) {
+                if used.insert(f.id.clone()) {
+                    attempted.insert(action.clone());
+                    seeds.push((
+                        f.clone(),
+                        format!(
+                            "DEPENDENCY STEP for this foothold (chain `{chain}`): {action}\nDo this step only — the later steps of the chain depend on the fact it yields. Report it as a finding with evidence; put any credential/session obtained in `secret`/`account`; set `chains_from` to [\"{fid}\"].\n\n"
+                        ),
+                    ));
+                }
+            }
+        }
+        for f in frontier.iter() {
+            if seeds.len() >= CHAIN_SEEDS_PER_ROUND {
+                break;
+            }
+            if used.insert(f.id.clone()) {
+                seeds.push((f.clone(), String::new()));
+            }
+        }
+        if pool.stop_exploiting() || seeds.is_empty() {
             break;
         }
-        let seeds: Vec<Finding> = frontier.iter().take(CHAIN_SEEDS_PER_ROUND).cloned().collect();
-        let _ = tx.send(format!("⛓ attack-chain round {round}/{max_rounds} — expanding {} foothold(s), {} loot item(s)", seeds.len(), loot.len())).await;
+        let stepped = seeds.iter().filter(|(_, h)| !h.is_empty()).count();
+        let _ = tx.send(format!("⛓ attack-chain round {round}/{max_rounds} — expanding {} foothold(s) ({stepped} dependency step(s)), {} loot item(s)", seeds.len(), loot.len())).await;
 
         let loot_snapshot = loot.clone();
+        // Directives re-read every round: they carry the live attack-graph
+        // context the last checkpoint published.
+        let round_directives = operator_directives(cfg);
         let results: Vec<(Vec<Finding>, Vec<String>)> = stream::iter(seeds)
-            .map(|seed| {
-                let (dir, rc, rb, ls, txc) = (directives.clone(), recon_ctx.clone(), recipe_block.clone(), loot_snapshot.clone(), tx.clone());
+            .map(|(seed, step)| {
+                let (dir, rc, rb, ls, txc) = (round_directives.clone(), recon_ctx.clone(), format!("{recipe_block}{step}"), loot_snapshot.clone(), tx.clone());
                 async move { chain_from_seed(pool, &cfg.target, &dir, &rc, &rb, &seed, &ls, round, max_rounds, &txc).await }
             })
             .buffer_unordered(4)
@@ -1695,9 +1970,14 @@ async fn attack_chain(pool: &ModelPool, cfg: &RunConfig, recon: &str,
                 }
             }
         }
-        // Next round expands the freshly-validated footholds, best-first.
+        // Next round expands the freshly-validated footholds, best-first —
+        // re-reasoning over the graph with what was just proven.
+        known.extend(validated.iter().cloned());
+        let next = graph_checkpoint(cfg, recon, &known, &format!("chain round {round}"), &[], tx).await;
+        prio = next.prio;
+        ready = next.ready;
         frontier = validated;
-        frontier.sort_by_key(|f| std::cmp::Reverse(sev_rank(&f.severity)));
+        sort_frontier(&mut frontier, &prio);
     }
     if !all_new.is_empty() {
         let _ = tx.send(format!("⛓ attack-chaining added {} finding(s) across pivots", all_new.len())).await;
@@ -2126,6 +2406,26 @@ fn effective_vote_n(cfg: &RunConfig) -> usize {
     }
 }
 
+/// Bind every finding's evidence to the wire before it is judged (see
+/// `crate::wire`). Always on; replay is skipped only in offline mode.
+async fn wire_pass(cfg: &RunConfig, mut findings: Vec<Finding>, tx: &Sender<String>) -> Vec<Finding> {
+    let engine = crate::replay::ReplayEngine::new(effective_scope(cfg));
+    let flows = crate::wire::load_flows(cfg.workdir.as_deref());
+    let replay = !cfg.offline;
+    let mut checks = Vec::new();
+    for f in findings.iter_mut() {
+        if let Some(ev) = f.evidence_data.as_mut() {
+            let wc = crate::wire::verify(ev, &engine, &flows, replay).await;
+            checks.push(wc.clone());
+            ev.wire = Some(wc);
+        }
+    }
+    if !checks.is_empty() {
+        let _ = tx.send(format!("🔌 {}", crate::wire::summary(&checks))).await;
+    }
+    findings
+}
+
 async fn close_evidence_gaps(cfg: &RunConfig, findings: Vec<Finding>, tx: &Sender<String>) -> Vec<Finding> {
     if std::env::var("NEUROSPLOIT_UNCERTAINTY").unwrap_or_default() == "off" {
         return findings;
@@ -2405,6 +2705,10 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
     // White-box/skills are symbolic → deterministic belief; grey-box carries source too.
     let whitebox = matches!(gmode, GroundMode::Symbolic | GroundMode::Either);
 
+    // Final graph checkpoint (and Neo4j sync when configured). Before the vault
+    // masks secrets, so equal secrets correlate; only salted fingerprints leave.
+    let _ = graph_checkpoint(&cfg, &recon, &findings, "final", &[], &tx).await;
+
     // --- Credential vault & test-account cleanup ---------------------------
     // Consolidate every test account created this run (from the agent-appended
     // vault.jsonl AND any finding that carried a generated `secret`) into a single
@@ -2609,6 +2913,10 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
     // reason the harness can still fix. A `needs-review` verdict hands a human
     // the same thin evidence and asks them to do the collecting — the wrong
     // party, since the harness still has the target and the tooling.
+    // Wire binding: every claimed exchange is checked against recorded traffic
+    // and re-observed by the harness itself before anything is judged, so the
+    // validators below rule on what the wire showed, not on the agent's account.
+    findings = wire_pass(&cfg, findings, &tx).await;
     findings = close_evidence_gaps(&cfg, findings, &tx).await;
 
     // Deterministic validation. The votes above are models checking models; this
@@ -2927,6 +3235,9 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
         }
     }
 
+    // The run is over: drop its live attack-graph context.
+    crate::graph_memory::clear_live(&run_id(&cfg));
+
     RunOutput {
         target: cfg.target.clone(),
         workdir: cfg.workdir.clone().unwrap_or_default(),
@@ -3145,6 +3456,9 @@ fn persist(cfg: &RunConfig, recon: &str, transcript: &str, findings: &[Finding])
         None => bundle,
     };
     put("assurance.json", serde_json::to_string_pretty(&bundle).unwrap_or_default());
+    // Everything below is read by people: credentials become `$SECRET_n`.
+    let shown = crate::redact::for_people(findings);
+    let findings = &shown[..];
     put("findings.md", findings_md(&cfg.target, findings));
     // Compliance mapping, one file per requested framework. Confirmed findings
     // only — a lead is not a control gap.
@@ -3880,6 +4194,8 @@ pub async fn run_container(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: 
             Err(e) => { let _ = tx.send(format!("recon failed ({e})")).await; "{}".to_string() }
         }
     };
+    // Graph checkpoint: seed the attack graph from recon.
+    let _ = graph_checkpoint(&cfg, &recon, &[], "recon", &[], &tx).await;
 
     let mut rl = cfg.rl_path.as_ref().map(|p| RlState::load(Path::new(p))).unwrap_or_default();
     let mut ranked: Vec<Agent> = lib.container.clone();
@@ -3933,6 +4249,7 @@ pub async fn run_container(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: 
         .buffer_unordered(cfg.concurrency)
         .collect::<Vec<_>>().await;
 
+    crate::traces::record_all(cfg.workdir.as_deref(), &raw);
     let transcript = transcript_of(&raw);
     let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
     let _ = tx.send(format!("{} finding(s) (deduped) - validating", candidates.len())).await;
@@ -3962,6 +4279,8 @@ pub async fn run_mobile(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sen
             Err(e) => { let _ = tx.send(format!("recon failed ({e})")).await; "{}".to_string() }
         }
     };
+    // Graph checkpoint: seed the attack graph from recon.
+    let _ = graph_checkpoint(&cfg, &recon, &[], "recon", &[], &tx).await;
 
     let mut rl = cfg.rl_path.as_ref().map(|p| RlState::load(Path::new(p))).unwrap_or_default();
     let mut ranked: Vec<Agent> = lib.mobile.clone();
@@ -4021,6 +4340,7 @@ pub async fn run_mobile(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sen
         .buffer_unordered(cfg.concurrency)
         .collect::<Vec<_>>().await;
 
+    crate::traces::record_all(cfg.workdir.as_deref(), &raw);
     let transcript = transcript_of(&raw);
     let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
     let _ = tx.send(format!("{} candidate finding(s) (deduped) - validating", candidates.len())).await;
@@ -4049,6 +4369,8 @@ pub async fn run_host(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sende
             Err(e) => { let _ = tx.send(format!("recon failed ({e})")).await; "{}".to_string() }
         }
     };
+    // Graph checkpoint: seed the attack graph from recon.
+    let _ = graph_checkpoint(&cfg, &recon, &[], "recon", &[], &tx).await;
 
     let mut rl = cfg.rl_path.as_ref().map(|p| RlState::load(Path::new(p))).unwrap_or_default();
     let mut ranked: Vec<Agent> = lib.infra.clone();
@@ -4114,6 +4436,7 @@ pub async fn run_host(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sende
         .buffer_unordered(cfg.concurrency)
         .collect::<Vec<_>>().await;
 
+    crate::traces::record_all(cfg.workdir.as_deref(), &raw);
     let transcript = transcript_of(&raw);
     let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
     let _ = tx.send(format!("{} candidate finding(s) (deduped) — validating", candidates.len())).await;
@@ -4583,6 +4906,8 @@ pub async fn run_ai(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<
             Err(e) => { let _ = tx.send(format!("ai-recon failed ({e}) — probe facts only")).await; facts }
         }
     };
+    // Graph checkpoint: seed the attack graph from recon.
+    let _ = graph_checkpoint(&cfg, &recon, &[], "recon", &[], &tx).await;
     let mut rl = cfg.rl_path.as_ref().map(|p| RlState::load(Path::new(p))).unwrap_or_default();
     if cfg.offline {
         let _ = tx.send("offline: no AI exploitation performed".into()).await;
@@ -4625,6 +4950,7 @@ pub async fn run_ai(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<
         .collect()
         .await;
 
+    crate::traces::record_all(cfg.workdir.as_deref(), &raw);
     let transcript = transcript_of(&raw);
     let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
     let _ = tx.send(format!("{} AI candidate(s) — validating", candidates.len())).await;
@@ -4680,6 +5006,7 @@ pub async fn run_skills_audit(cfg: RunConfig, lib: &Library, pool: &ModelPool, t
         .buffer_unordered(cfg.concurrency)
         .collect()
         .await;
+    crate::traces::record_all(cfg.workdir.as_deref(), &raw);
     let transcript = transcript_of(&raw);
     let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
     let findings = validate(candidates, pool, CODE_VOTE_SYS, effective_vote_n(&cfg), &tx).await;
