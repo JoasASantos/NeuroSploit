@@ -1120,6 +1120,16 @@ function buildReplScript(body) {
   if (body.outOfScope) lines.push(`/scope-out ${body.outOfScope}`);
   if (body.creds) lines.push(`/creds ${body.creds}`);
   if (body.research) lines.push(`/research on`);
+  // Settings the wizard collects that are NOT already applied as launch flags
+  // (authArgs) or the scope file. Emitted via the REPL's own commands so a web
+  // run enforces exactly what a typed session would. Capability, in-scope,
+  // intercept, sandbox, OOB, environment, policy and the scope allowlist are
+  // handled at launch in authArgs()/materializeScope() — do not re-emit them here.
+  if (body.classes) lines.push(`/class ${Array.isArray(body.classes) ? body.classes.join(',') : body.classes}`);
+  if (body.revalidatePoc) lines.push('/revalidate on');
+  if (body.budget && body.budget !== 'unlimited') lines.push(`/budget ${body.budget}`);
+  if (body.tokenLimit) lines.push(`/budget token ${body.tokenLimit}`);
+  for (const fw of body.compliance || []) lines.push(`/compliance ${fw}`);
   lines.push((body.agents || []).length ? `/only ${body.agents.join(',')}` : '/only clear');
   // Economy preset last, so it wins over the per-knob settings above.
   if (body.quick) lines.push('/quick');

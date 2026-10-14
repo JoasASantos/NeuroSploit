@@ -398,6 +398,8 @@ A context bar shows `model auth · cwd · mode▸target`. Key commands:
 @path  @dir  @f:1-20   attach a file/folder/line-range to context (Tab → menu)
 /mcp on|off   /offline on|off   /votes <n>   /agents <n>   /theme color|mono
 /quick              economy preset (1 voter · 1 chain round · light recon · ≤6 agents)
+/compliance <f,…>   map findings onto frameworks (pci-dss, hipaa, soc2, gdpr); /compliance none clears
+/budget <mode>      reasoning budget: eco|balanced|aggressive|unlimited; /budget token <N> caps tokens
 /research on|off    whitebox/greybox: hunt a NOVEL, CVE-reportable bug (dedup + patch-diff)
 /tempmail on|off    opt-in disposable inbox (mail.tm) for a register confirmation code
 ── scope & authorization ──

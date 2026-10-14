@@ -593,6 +593,7 @@ async function startExploitation() {
     agents: [...state.selected],
     focus: focusParts.join('; ') || undefined,
     objective: $('#fieldObjective').value.trim() || undefined,
+    classes: $('#fieldClasses') ? ($('#fieldClasses').value.trim() || undefined) : undefined,
     outOfScope: $('#fieldOutOfScope').value.trim() || undefined,
     // Budget is opt-in: 'unlimited' sends nothing, so a run nobody budgeted is
     // the same full run it was before this control existed.

@@ -152,7 +152,7 @@ pub(crate) const ACCEPTED: &[&str] = &[
     "/history", "/idle", "/inscope", "/instructions", "/integration", "/integrations", "/key", "/log",
     "/authorize", "/grant", "/inscope-set", "/scope-file", "/scopefile", "/import-scope", "/authorization", "/authz", "/program", "/logs", "/mcp", "/memory", "/model", "/models", "/objective", "/objectives", "/observe",
     "/observe-only", "/offline",
-    "/onboard", "/only", "/oos", "/outofscope", "/policy", "/providers", "/proxy", "/class", "/classes", "/focus-class", "/research", "/quick", "/economy", "/eco", "/q", "/quit", "/recon",
+    "/onboard", "/only", "/oos", "/outofscope", "/policy", "/providers", "/proxy", "/class", "/classes", "/focus-class", "/compliance", "/comply", "/budget", "/research", "/quick", "/economy", "/eco", "/q", "/quit", "/recon",
     "/pause", "/repo", "/report", "/results", "/resume", "/retest", "/revalidate", "/run", "/runs",
     "/scope", "/scope-out", "/show", "/status", "/stop", "/sub", "/subscription", "/target",
     "/temp-email", "/tempmail", "/theme", "/timeout", "/ua", "/url", "/useragent", "/validate",
@@ -166,7 +166,7 @@ const COMMANDS: &[&str] = &[
     "/class", "/research", "/quick", "/economy", "/eco", "/sandbox", "/votes", "/chain", "/recon", "/tempmail", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/only", "/theme", "/clear", "/run", "/stop", "/pause", "/continue", "/runs", "/results", "/report",
     "/status", "/logs", "/diff", "/retest", "/validate", "/finding", "/pocs", "/expand", "/integrations",
     "/memory", "/forget", "/graph", "/inscope", "/observe", "/guardrail", "/policy",
-    "/capability", "/audit", "/quit",
+    "/compliance", "/budget", "/capability", "/audit", "/quit",
 ];
 
 /// rustyline helper: Tab-completes `/commands` and `@filesystem-paths`,
@@ -313,6 +313,14 @@ struct Session {
     /// /run tests EXACTLY these agents and skips recon-based selection, same as
     /// the CLI's `--only` flag. Empty = normal recon-driven auto-selection.
     pinned: Vec<String>,
+    /// Compliance frameworks to map confirmed findings onto (`/compliance pci-dss,gdpr`).
+    /// Same as the CLI `--compliance` flag. Empty = no compliance mapping.
+    compliance: Vec<String>,
+    /// Reasoning-budget mode (`/budget eco|balanced|aggressive|unlimited`), and an
+    /// optional hard token ceiling (`/budget token <N>`). None = unlimited, the
+    /// default full run.
+    budget_mode: Option<String>,
+    token_limit: Option<u64>,
 }
 
 impl Default for Session {
@@ -354,6 +362,9 @@ impl Default for Session {
             scope: "web",
             sandbox: None,
             pinned: Vec::new(),
+            compliance: Vec::new(),
+            budget_mode: None,
+            token_limit: None,
         }
     }
 }
@@ -1066,6 +1077,56 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
                     }
                 }
             }
+            "/compliance" | "/comply" => {
+                // Map confirmed findings onto control frameworks in the report —
+                // same as the CLI --compliance flag.
+                let a = arg.trim().to_lowercase();
+                if a.is_empty() {
+                    println!("  compliance mapping: {}", if s.compliance.is_empty() { "(none)".into() } else { s.compliance.join(", ") });
+                    println!("  /compliance pci-dss,hipaa,soc2,gdpr   ·  /compliance none to clear");
+                } else if a == "none" || a == "clear" || a == "off" {
+                    s.compliance.clear();
+                    println!("  compliance mapping cleared");
+                } else {
+                    let known = ["pci-dss", "hipaa", "soc2", "gdpr"];
+                    let picked: Vec<String> = a.split([',', ';', ' ']).map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect();
+                    let unknown: Vec<&String> = picked.iter().filter(|p| !known.contains(&p.as_str())).collect();
+                    s.compliance = picked.iter().filter(|p| known.contains(&p.as_str())).cloned().collect();
+                    println!("  \x1b[36mcompliance:\x1b[0m {}", if s.compliance.is_empty() { "(none)".into() } else { s.compliance.join(", ") });
+                    if !unknown.is_empty() { println!("  \x1b[33m⚠ unknown framework(s):\x1b[0m {} — known: pci-dss, hipaa, soc2, gdpr", unknown.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")); }
+                }
+            }
+            "/budget" => {
+                // Reasoning-budget mode + optional token ceiling — same as the CLI
+                // --budget / --token-limit flags. `/budget token <N>` sets the cap.
+                let parts: Vec<&str> = arg.split_whitespace().collect();
+                match parts.as_slice() {
+                    [] => {
+                        println!("  budget: {}{}",
+                            s.budget_mode.clone().unwrap_or_else(|| "unlimited".into()),
+                            s.token_limit.map(|t| format!(" · token limit {t}")).unwrap_or_default());
+                        println!("  /budget eco|balanced|aggressive|unlimited   ·  /budget token <N>");
+                    }
+                    ["token", n] | ["tokens", n] => match n.replace(['_', ','], "").parse::<u64>() {
+                        Ok(0) => { s.token_limit = None; println!("  token limit cleared"); }
+                        Ok(v) => { s.token_limit = Some(v); println!("  \x1b[36mtoken limit:\x1b[0m {v}"); }
+                        Err(_) => println!("  \x1b[33mnot a number:\x1b[0m {n}"),
+                    },
+                    [mode] => {
+                        let m = mode.to_lowercase();
+                        if m == "unlimited" || m == "off" || m == "none" {
+                            s.budget_mode = None;
+                            println!("  budget: unlimited (full run)");
+                        } else if harness::budget::Mode::parse(&m).is_some() {
+                            s.budget_mode = Some(m.clone());
+                            println!("  \x1b[36mbudget:\x1b[0m {m}");
+                        } else {
+                            println!("  \x1b[33munknown budget '{m}'\x1b[0m — use eco, balanced, aggressive or unlimited");
+                        }
+                    }
+                    _ => println!("  /budget eco|balanced|aggressive|unlimited   ·  /budget token <N>"),
+                }
+            }
             "/research" => {
                 match arg.trim() {
                     "on" | "true" | "1" => { s.research = true; println!("  \x1b[1;36m🔬 research mode ON\x1b[0m — whitebox/greybox will hunt a NOVEL, CVE-reportable bug (known-CVE dedup + patch-diff variant analysis)"); }
@@ -1723,6 +1784,24 @@ fn set_key(prov: &str, key: &str, s: &mut Session) {
     }
 }
 
+/// Apply the session's compliance + reasoning-budget settings onto a RunConfig,
+/// mirroring the CLI's `--compliance` / `--budget` / `--token-limit`. No mode and
+/// no token limit leaves the default (unlimited) budget untouched.
+fn apply_session_budget(cfg: &mut RunConfig, s: &Session) {
+    cfg.compliance = s.compliance.clone();
+    if s.budget_mode.is_none() && s.token_limit.is_none() {
+        return;
+    }
+    use harness::budget::{Budget, Mode};
+    let mode = s.budget_mode.as_deref().and_then(Mode::parse).unwrap_or(Mode::Balanced);
+    let mut b = Budget::with_mode(mode);
+    if let Some(t) = s.token_limit {
+        b.token_limit = t;
+    }
+    b.sample_per_route = cfg.budget.sample_per_route.max(1);
+    cfg.budget = b;
+}
+
 async fn run(base: &Path, s: &Session, history: &mut Vec<RunRecord>) {
     enum M { Black(String), White(String), Grey { url: String, repo: String } }
     let m = match (&s.repo, &s.target) {
@@ -1770,6 +1849,7 @@ async fn run(base: &Path, s: &Session, history: &mut Vec<RunRecord>) {
     cfg.auth = s.auth.clone();
     cfg.sandbox = s.sandbox.clone();
     cfg.pinned = s.pinned.clone();
+    apply_session_budget(&mut cfg, s);
     // Multiple /auth identities → prepend the access-control (IDOR/BOLA/BFLA) directive.
     if let Some(rd) = roles_directive(&s.roles) {
         let base = cfg.instructions.clone().unwrap_or_default();
@@ -1856,6 +1936,7 @@ async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
     cfg.auth = s.auth.clone();
     cfg.sandbox = s.sandbox.clone();
     cfg.pinned = s.pinned.clone();
+    apply_session_budget(&mut cfg, s);
     if matches!(mode_e, crate::Mode::Grey) { cfg.repo = s.repo.clone(); }
     crate::apply_creds(&mut cfg, s.creds.as_deref()).await;
     crate::subscription_preflight(&cfg).await; // warn early if the CLI isn't logged in
@@ -2675,6 +2756,8 @@ fn help() {
     h("/authorize <a b c>",  "direct engagement: declare the whole authorized scope in one line (hosts/*.domains/CIDRs/URLs) — no program needed");
     h("/scope-file <path>",  "import a ready scope config (hard allowlist + exclusions + guardrails) — e.g. examples/scopes/engagement.example.yaml");
     h("/authorization <url>", "declare the program/authorization (e.g. a bug-bounty URL) — recorded; does NOT widen scope");
+    h("/compliance <f,…>",  "map confirmed findings onto control frameworks (pci-dss, hipaa, soc2, gdpr)");
+    h("/budget <mode|token N>", "reasoning budget: eco|balanced|aggressive|unlimited, or a token ceiling");
     h("/research",          "whitebox/greybox: hunt a NOVEL, CVE-reportable bug (known-CVE dedup + patch-diff variant analysis)");
     h("/quick",             "economy preset: short, low-cost run (1 voter · 1 chain round · light recon · ≤6 agents)");
     h("/sandbox [img|off]", "run agent commands inside a Kali container (isolation + recon toolbox); auto-enables for wildcard scope");

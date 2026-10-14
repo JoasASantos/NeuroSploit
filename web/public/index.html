@@ -149,6 +149,11 @@
             <textarea id="fieldFocus" placeholder="e.g. Prioritize the paths most likely to cause data leakage."></textarea>
           </div>
           <div class="field-group">
+            <label class="field-label" for="fieldClasses">Focus vuln classes <span class="req">— optional</span></label>
+            <input id="fieldClasses" type="text" placeholder="idor, sqli, xss, ssrf — pins the matching agents, skips recon-driven selection" />
+            <div class="field-help">Same as the CLI <code>--class</code> / REPL <code>/class</code>. Leave empty for recon-driven selection.</div>
+          </div>
+          <div class="field-group">
             <label class="field-label" for="fieldOutOfScope">Out of scope</label>
             <textarea id="fieldOutOfScope" placeholder="Hosts, paths, or techniques the agents must not touch."></textarea>
           </div>
