@@ -363,8 +363,11 @@ a.btn:disabled, a.btn[aria-disabled="true"] { pointer-events: none; }
 .field-error::before { content: "⚠ "; }
 .field-group:has(.field-error:not([hidden])) input,
 .field-group:has(.field-error:not([hidden])) textarea { border-color: var(--sev-critical-fg); }
-.field-row { display: flex; gap: var(--sp-4); flex-wrap: wrap; }
+.field-row { display: flex; gap: var(--sp-4); flex-wrap: wrap; align-items: flex-start; }
 .field-row > * { flex: 1; min-width: 160px; }
+/* inside a row the groups sit side by side — the stacked-group top margin would
+   push every group after the first one down and misalign the controls */
+.field-row > .field-group + .field-group { margin-top: 0; }
 
 .section-title { font-size: var(--fs-base); font-weight: 600; }
 .section-desc { font-size: var(--fs-sm); color: var(--text-dim); margin-top: 2px; }
@@ -591,6 +594,11 @@ textarea { resize: vertical; min-height: 72px; }
 .provider-row input { flex: 1; font-family: var(--mono); font-size: var(--fs-sm); }
 .provider-row .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border-strong); flex: none; }
 .provider-row .dot.set { background: var(--sev-low-fg); }
+.key-verify { flex: none; font-size: var(--fs-2xs); font-weight: 700; min-width: 60px; }
+.key-verify.ok { color: var(--sev-low-fg); }
+.key-verify.bad { color: var(--sev-critical-fg); }
+.key-verify.unknown { color: var(--text-faint); font-weight: 500; }
+.key-verify.checking { color: var(--text-dim); font-weight: 500; }
 
 /* ============================================================ Terminal dock
 

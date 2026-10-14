@@ -14,7 +14,7 @@ function Ok ($m) { Write-Host "  + $m" -ForegroundColor Green }
 function Warn($m){ Write-Host "  ! $m" -ForegroundColor Yellow }
 
 Write-Host ""
-Write-Host "  NeuroSploit installer (Windows) — v3.6.9" -ForegroundColor Cyan
+Write-Host "  NeuroSploit installer (Windows) — v4.3.0" -ForegroundColor Cyan
 
 # arch → asset arch (only x64 prebuilt today; arm64 falls back to source)
 $rawArch = $env:PROCESSOR_ARCHITECTURE
@@ -29,7 +29,7 @@ $ref  = $env:NEUROSPLOIT_REF
 if (-not $ref) {
   try { $ref = (Invoke-RestMethod "https://api.github.com/repos/$slug/releases/latest").tag_name } catch { }
 }
-if (-not $ref) { $ref = "v3.6.9" }
+if (-not $ref) { $ref = "v4.3.0" }
 Say "Release: $ref"
 
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -104,9 +104,40 @@ Ok "Set NEUROSPLOIT_BASE=$dir (User)."
 $env:Path = "$dir;$env:Path"; $env:NEUROSPLOIT_BASE = $dir
 
 Ok ("Version: " + (& $exePath --version))
+
+# ---- dependencies: install what winget can (best-effort, never fatal) ----
+if ($env:NEUROSPLOIT_NO_DEPS -ne "1") {
+  Say "Checking dependencies..."
+  $have = { param($c) [bool](Get-Command $c -ErrorAction SilentlyContinue) }
+  $deps = @(
+    @{ cmd = "node";  id = "OpenJS.NodeJS";       why = "web console" },
+    @{ cmd = "nmap";  id = "Insecure.Nmap";       why = "recon (optional)" },
+    @{ cmd = "git";   id = "Git.Git";             why = "source build / updates" }
+  )
+  foreach ($d in $deps) {
+    if (& $have $d.cmd) { Ok ("{0} present" -f $d.cmd) }
+    elseif (Get-Command winget -ErrorAction SilentlyContinue) {
+      Say ("installing {0} ({1})..." -f $d.cmd, $d.why)
+      try { winget install -e --id $d.id --accept-source-agreements --accept-package-agreements | Out-Null; Ok ("{0} installed" -f $d.cmd) }
+      catch { Warn ("could not install {0} automatically — install it manually" -f $d.cmd) }
+    } else { Warn ("{0} missing (winget unavailable) — install manually for: {1}" -f $d.cmd, $d.why) }
+  }
+  if (& $have cargo) {
+    if (-not (& $have typst)) { Say "installing typst (cargo, PDF reports)..."; try { cargo install typst-cli | Out-Null; Ok "typst installed" } catch { Warn "typst optional — skipped" } }
+  }
+}
+
 Write-Host ""
 Ok "Installed. Open a NEW terminal, then from ANY folder:"
 Write-Host "      neurosploit                 # interactive session"
 Write-Host "      neurosploit run http://testphp.vulnweb.com/ --subscription --model anthropic:claude-opus-4-8 -v"
 Write-Host "      neurosploit --help"
 Warn "Update later: just re-run this script."
+
+# ---- optionally launch now (NEUROSPLOIT_RUN=1, or confirm when interactive) ----
+$runNow = $env:NEUROSPLOIT_RUN
+if (-not $runNow -and [Environment]::UserInteractive) {
+  $ans = Read-Host "`n  Launch the interactive session now? [y/N]"
+  if ($ans -match '^(y|yes)$') { $runNow = "1" }
+}
+if ($runNow -eq "1") { Say "Starting NeuroSploit..."; & $exePath }

@@ -28,10 +28,10 @@ cat <<'BANNER'
 
    ███╗   ██╗███████╗██╗   ██╗██████╗  ██████╗
    ████╗  ██║██╔════╝██║   ██║██╔══██╗██╔═══██╗   NeuroSploit installer
-   ██╔██╗ ██║█████╗  ██║   ██║██████╔╝██║   ██║   v3.6.9 — Rust harness
+   ██╔██╗ ██║█████╗  ██║   ██║██████╔╝██║   ██║   v4.3.0 — Rust harness
    ██║╚██╗██║██╔══╝  ██║   ██║██╔══██╗██║   ██║   by Joas A Santos
    ██║ ╚████║███████╗╚██████╔╝██║  ██║╚██████╔╝   & Red Team Leaders
-   ╚═╝  ╚═══╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝ ╚═════╝
+   ╚═╝  ╚═══╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝ ╚═════╝        v4.3.0
 BANNER
 
 # ---- platform detection (Linux / macOS / Windows-WSL · x64 / arm64) ----
@@ -63,7 +63,7 @@ if [ -z "$REF" ]; then
   REF="$(dl "https://api.github.com/repos/${REPO_SLUG}/releases/latest" /dev/stdout 2>/dev/null \
          | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name" *: *"([^"]+)".*/\1/' || true)"
 fi
-[ -z "$REF" ] && REF="v3.6.9"
+[ -z "$REF" ] && REF="v4.3.0"
 say "Release: $REF"
 
 installed=0
@@ -154,11 +154,59 @@ if [ -d "$HOME/.config/fish" ]; then
   fi
 fi
 
-# ---- optional tooling hints ----
-say "Recommended tools (optional): curl nmap rustscan ffuf node npx typst"
-for t in curl nmap rustscan ffuf node npx typst; do
-  command -v "$t" >/dev/null 2>&1 && ok "$t present" || warn "$t missing"
-done
+# ---- dependencies: detect, and install the ones a package manager can ----
+# Core recon/report tools. Rust is already handled above. Auto-install is
+# best-effort: it never fails the install, and is skipped with NEUROSPLOIT_NO_DEPS=1.
+PKG=""; SUDO=""
+if   command -v apt-get >/dev/null 2>&1; then PKG="apt"
+elif command -v brew    >/dev/null 2>&1; then PKG="brew"
+elif command -v dnf     >/dev/null 2>&1; then PKG="dnf"
+elif command -v pacman  >/dev/null 2>&1; then PKG="pacman"
+elif command -v apk     >/dev/null 2>&1; then PKG="apk"; fi
+[ "$(id -u)" = "0" ] || command -v sudo >/dev/null 2>&1 && [ "$(id -u)" != "0" ] && SUDO="sudo"
+
+pkg_install() { # pkg_install <name...>
+  [ -n "$PKG" ] || { warn "no supported package manager — install manually: $*"; return 0; }
+  case "$PKG" in
+    apt)    $SUDO apt-get update -qq >/dev/null 2>&1; $SUDO apt-get install -y "$@" >/dev/null 2>&1 ;;
+    brew)   brew install "$@" >/dev/null 2>&1 ;;
+    dnf)    $SUDO dnf install -y "$@" >/dev/null 2>&1 ;;
+    pacman) $SUDO pacman -Sy --noconfirm "$@" >/dev/null 2>&1 ;;
+    apk)    $SUDO apk add "$@" >/dev/null 2>&1 ;;
+  esac
+}
+
+# Map a required command to its package name on the detected manager.
+pkg_name() { # pkg_name <cmd>
+  case "$1" in
+    npx) echo "node" ;;   # npx ships with node
+    node) [ "$PKG" = "apt" ] && echo "nodejs" || echo "node" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+if [ "${NEUROSPLOIT_NO_DEPS:-0}" != "1" ]; then
+  say "Checking dependencies (install with the detected package manager: ${PKG:-none})…"
+  # Essential for the web console + recon; typst is for PDF reports (optional).
+  for t in curl git nmap node; do
+    if command -v "$t" >/dev/null 2>&1; then ok "$t present"; else
+      warn "$t missing — installing…"; pkg_install "$(pkg_name "$t")"
+      command -v "$t" >/dev/null 2>&1 && ok "$t installed" || warn "could not install $t automatically — install it manually"
+    fi
+  done
+  # Rust-cargo extras + report engine: install via cargo when present (no root).
+  if command -v cargo >/dev/null 2>&1; then
+    command -v rustscan >/dev/null 2>&1 || { say "installing rustscan (cargo)…"; cargo install rustscan >/dev/null 2>&1 && ok "rustscan installed" || warn "rustscan optional — skipped"; }
+    command -v typst    >/dev/null 2>&1 || { say "installing typst (cargo)…";    cargo install typst-cli >/dev/null 2>&1 && ok "typst installed"    || warn "typst optional (PDF reports) — skipped"; }
+  fi
+  # ffuf is Go; only hint it.
+  command -v ffuf >/dev/null 2>&1 && ok "ffuf present" || warn "ffuf optional (fuzzing) — install via your package manager or Go"
+else
+  say "Dependency auto-install skipped (NEUROSPLOIT_NO_DEPS=1)."
+  for t in curl git nmap node rustscan ffuf typst; do
+    command -v "$t" >/dev/null 2>&1 && ok "$t present" || warn "$t missing"
+  done
+fi
 
 echo
 ok "Installed. Open a NEW terminal — or activate now with:"
@@ -170,3 +218,16 @@ echo "      neurosploit run http://testphp.vulnweb.com/ --subscription --model a
 echo "      neurosploit --help"
 echo
 warn "Update later: just re-run this script.   Best runtime: Kali (docker run -it kalilinux/kali-rolling)."
+
+# ---- optionally launch right away ----
+# `curl | bash` has no TTY, so auto-run only when asked (NEUROSPLOIT_RUN=1) or
+# when a real terminal is attached and the operator confirms.
+RUN_NOW="${NEUROSPLOIT_RUN:-}"
+if [ -z "$RUN_NOW" ] && [ -t 0 ]; then
+  printf '\n  Launch the interactive session now? [y/N] '; read -r ans
+  case "$ans" in y|Y|yes) RUN_NOW=1 ;; esac
+fi
+if [ "$RUN_NOW" = "1" ]; then
+  say "Starting NeuroSploit…"
+  exec env NEUROSPLOIT_BASE="$DIR" "$DIR/neurosploit"
+fi

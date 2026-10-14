@@ -144,6 +144,45 @@ const PROVIDERS = [
 // In-memory only — never written to disk. Cleared on server restart.
 const apiKeys = new Map(); // provider key -> secret
 
+// A cheap authenticated endpoint per provider, to confirm a key works. GET a
+// models/account list — a 200 means the key authenticates, 401/403 means it does
+// not. Providers without a reachable check (local/proxy, or no public endpoint)
+// return ok:null — the key is saved, just not auto-verified.
+function keyProbe(provider, key) {
+  const bearer = { Authorization: `Bearer ${key}` };
+  switch (provider) {
+    case 'anthropic': return { url: 'https://api.anthropic.com/v1/models', headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' } };
+    case 'openai': return { url: 'https://api.openai.com/v1/models', headers: bearer };
+    case 'xai': return { url: 'https://api.x.ai/v1/models', headers: bearer };
+    case 'gemini': return { url: `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`, headers: {} };
+    case 'deepseek': return { url: 'https://api.deepseek.com/models', headers: bearer };
+    case 'mistral': return { url: 'https://api.mistral.ai/v1/models', headers: bearer };
+    case 'groq': return { url: 'https://api.groq.com/openai/v1/models', headers: bearer };
+    case 'together': return { url: 'https://api.together.xyz/v1/models', headers: bearer };
+    case 'openrouter': return { url: 'https://openrouter.ai/api/v1/key', headers: bearer };
+    case 'moonshot': return { url: 'https://api.moonshot.ai/v1/models', headers: bearer };
+    case 'qwen': return { url: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models', headers: bearer };
+    case 'nvidia_nim': return { url: 'https://integrate.api.nvidia.com/v1/models', headers: bearer };
+    default: return null; // opencode, nous, zai, litellm, azure, ollama, llamacpp — not auto-verifiable here
+  }
+}
+
+async function verifyKey(provider, key) {
+  const probe = keyProbe(provider, key);
+  if (!probe) return { ok: null, message: 'saved — this provider is not auto-verifiable here' };
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10000);
+    const r = await fetch(probe.url, { headers: probe.headers, signal: ctrl.signal }).finally(() => clearTimeout(timer));
+    if (r.ok) return { ok: true, message: 'key is valid' };
+    if (r.status === 401 || r.status === 403) return { ok: false, message: `key rejected (HTTP ${r.status})` };
+    if (r.status === 429) return { ok: true, message: 'key valid (rate-limited)' };
+    return { ok: null, message: `saved — provider returned HTTP ${r.status}` };
+  } catch (e) {
+    return { ok: null, message: `saved — could not reach provider (${e.name === 'AbortError' ? 'timeout' : e.message})` };
+  }
+}
+
 function envOverrides() {
   const env = {};
   for (const [key, secret] of apiKeys) {
@@ -1838,7 +1877,19 @@ const server = http.createServer(async (req, res) => {
       }
       if (body.key) apiKeys.set(body.provider, body.key);
       else apiKeys.delete(body.provider);
-      return sendJson(res, 200, { ok: true });
+      // Save also verifies the key with a cheap authenticated call, so the
+      // operator knows it works before a run depends on it. The key is saved
+      // either way (some providers can't be auto-verified from here).
+      let verify = { ok: null, message: 'saved' };
+      if (body.key && body.verify !== false) verify = await verifyKey(body.provider, body.key);
+      return sendJson(res, 200, { ok: true, verify });
+    }
+    if (req.method === 'POST' && p === '/api/keys/verify') {
+      const body = await readBody(req);
+      const key = body.key || apiKeys.get(body.provider);
+      if (!body.provider || !PROVIDERS.some((pr) => pr.key === body.provider)) return sendJson(res, 400, { error: 'unknown provider' });
+      if (!key) return sendJson(res, 400, { error: 'no key to verify' });
+      return sendJson(res, 200, await verifyKey(body.provider, key));
     }
     m = p.match(/^\/api\/keys\/([^/]+)$/);
     if (req.method === 'DELETE' && m) {

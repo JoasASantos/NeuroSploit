@@ -22,6 +22,7 @@ const state = {
   selected: new Set(),
   customLeads: [],
   filter: 'all',
+  catFilter: '',
   search: '',
   expandedCats: new Set(),
   providers: [],
@@ -212,6 +213,7 @@ async function loadAgents() {
 function renderBoard() {
   const root = $('#categories');
   root.innerHTML = '';
+  populateCatFilter();
   for (const group of state.categories) {
     const selCount = group.agents.filter((a) => state.selected.has(a.id)).length;
     const card = document.createElement('div');
@@ -297,7 +299,8 @@ function updateChips() {
 
 function applyFilters() {
   const q = state.search.trim().toLowerCase();
-  const narrowing = !!q || state.filter !== 'all';
+  const cat = state.catFilter || '';
+  const narrowing = !!q || state.filter !== 'all' || !!cat;
   $$('.agent-row').forEach((row) => {
     const isSel = state.selected.has(row.dataset.id);
     let visible = true;
@@ -308,6 +311,7 @@ function applyFilters() {
   });
   let anyCardVisible = false;
   $$('.cat-card').forEach((card) => {
+    if (cat && card.dataset.category !== cat) { card.style.display = 'none'; return; }
     const shown = $$('.agent-row', card).filter((r) => !r.classList.contains('hidden-by-search'));
     card.style.display = shown.length ? '' : 'none';
     if (shown.length) anyCardVisible = true;
@@ -323,6 +327,20 @@ function applyFilters() {
   });
   show($('#leadsEmpty'), !anyCardVisible);
 }
+
+// One place to pick a category: the select lists every category (with its
+// selected/total count); choosing one shows just that card, "All" resets.
+function populateCatFilter() {
+  const sel = $('#catFilter');
+  if (!sel) return;
+  const cur = state.catFilter || '';
+  sel.innerHTML = '<option value="">All categories</option>' + state.categories.map((g) => {
+    const n = g.agents.filter((a) => state.selected.has(a.id)).length;
+    return `<option value="${esc(g.category)}">${esc(g.category)} (${n}/${g.agents.length})</option>`;
+  }).join('');
+  sel.value = cur;
+}
+$('#catFilter')?.addEventListener('change', (e) => { state.catFilter = e.target.value; applyFilters(); });
 
 $$('.chip').forEach((chip) => chip.addEventListener('click', () => {
   $$('.chip').forEach((c) => c.classList.remove('chip-active'));
@@ -1748,17 +1766,41 @@ async function refreshKeyStatus() {
         <span class="p-kind">${p.kind === 'cli' ? 'cli+api' : 'api only'}</span>
         <input type="password" data-provider="${esc(p.key)}" placeholder="${set ? '•••••••• (set — enter to replace)' : 'paste API key'}" />
         <button class="btn btn-sm" data-save="${esc(p.key)}">Save</button>
+        <span class="key-verify" data-verify="${esc(p.key)}"></span>
       </div>
     `;
   }).join('');
-  $$('[data-save]', root).forEach((btn) => btn.addEventListener('click', async () => {
+  const doSave = async (btn) => {
     const provider = btn.dataset.save;
     const input = root.querySelector(`input[data-provider="${provider}"]`);
+    const vtag = root.querySelector(`[data-verify="${provider}"]`);
     const key = input.value.trim();
     if (!key) return;
-    await api('/api/keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, key }) });
-    input.value = '';
-    refreshKeyStatus();
+    btn.disabled = true; const label = btn.textContent; btn.textContent = 'Saving…';
+    if (vtag) { vtag.className = 'key-verify checking'; vtag.textContent = '· verifying…'; }
+    try {
+      // Save verifies the key server-side with a cheap authenticated call.
+      const r = await api('/api/keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, key }) });
+      input.value = '';
+      const v = r.verify || { ok: null, message: 'saved' };
+      if (vtag) {
+        vtag.className = `key-verify ${v.ok === true ? 'ok' : v.ok === false ? 'bad' : 'unknown'}`;
+        vtag.textContent = v.ok === true ? '✓ valid' : v.ok === false ? '✗ ' + v.message : '• ' + v.message;
+      }
+      toast(v.ok === true ? `${provider}: key valid` : v.ok === false ? `${provider}: ${v.message}` : `${provider}: ${v.message}`, v.ok === false ? 'error' : 'ok');
+      // Refresh the set-dots but keep the verify tag we just set.
+      state.keys = await api('/api/keys').catch(() => state.keys);
+      const dot = root.querySelector(`[data-save="${provider}"]`)?.closest('.provider-row')?.querySelector('.dot');
+      if (dot) dot.classList.add('set');
+    } catch (e) {
+      if (vtag) { vtag.className = 'key-verify bad'; vtag.textContent = '✗ ' + e.message; }
+    } finally {
+      btn.disabled = false; btn.textContent = label;
+    }
+  };
+  $$('[data-save]', root).forEach((btn) => btn.addEventListener('click', () => doSave(btn)));
+  $$('input[data-provider]', root).forEach((inp) => inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') root.querySelector(`[data-save="${inp.dataset.provider}"]`)?.click();
   }));
 }
 

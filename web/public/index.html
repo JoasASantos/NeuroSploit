@@ -170,6 +170,7 @@
             <div class="section-desc">Toggle specific leads to test, or leave everything off to let recon-driven auto-selection choose.</div>
           </div>
           <div class="lead-toolbar">
+            <select class="input-sm" id="catFilter" title="Show one category"><option value="">All categories</option></select>
             <div class="search-wrap">
               <span class="search-icon" aria-hidden="true">⌕</span>
               <input id="leadSearch" type="text" placeholder="Search leads by name or CWE" />
@@ -273,13 +274,13 @@
             <div class="field-group"><label class="field-label" for="fieldIntercept">Intercepting proxy</label>
               <select class="narrow" id="fieldIntercept">
                 <option value="off" selected>off · direct</option>
-                <option value="own">own interceptor (record + passive discovery)</option>
+                <option value="own">NeuroSploit Interceptor (record + passive discovery)</option>
                 <option value="burp">Burp Suite</option>
                 <option value="caido">Caido</option>
                 <option value="zap">OWASP ZAP</option>
                 <option value="mitmproxy">mitmproxy</option>
-                <option value="own+burp">own + Burp</option>
-                <option value="own+caido">own + Caido</option>
+                <option value="own+burp">NeuroSploit Interceptor + Burp</option>
+                <option value="own+caido">NeuroSploit Interceptor + Caido</option>
               </select>
               <div class="field-help">The harness and agent commands route through it. Full HTTPS interception needs one of the tools (own tunnels TLS).</div>
             </div>
