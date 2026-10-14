@@ -247,9 +247,15 @@ function renderBoard() {
         </label>
         <span class="agent-title">${esc(a.title)}</span>
         ${a.cwe ? `<span class="agent-cwe">${esc(a.cwe)}</span>` : ''}
+        ${String(a.id).startsWith('custom_') ? `<button class="agent-remove" data-remove="${esc(a.id)}" title="Remove this custom lead">✕</button>` : ''}
       `;
       rows.appendChild(row);
     }
+    rows.querySelectorAll('.agent-remove').forEach((btn) => btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const a = group.agents.find((x) => x.id === btn.dataset.remove);
+      removeCustomAgent(btn.dataset.remove, a?.title);
+    }));
     card.querySelector('.cat-head').addEventListener('click', (e) => {
       if (e.target.closest('.switch')) return;
       const nowCollapsed = card.classList.toggle('collapsed');
@@ -341,9 +347,18 @@ function renderCustomLeads() {
 
 // `prompt()` gave a one-line box with no room to describe a lead, no way to
 // see the wizard behind it, and no place to report a generation failure.
+function setLeadMode(mode) {
+  state.leadMode = mode;
+  $$('#leadModeTabs .seg-tab').forEach((t) => t.classList.toggle('active', t.dataset.leadmode === mode));
+  $$('[data-leadpanel]').forEach((p) => show(p, p.dataset.leadpanel === mode));
+  $('#btnLeadGenerate').textContent = mode === 'own' ? 'Add lead' : 'Generate lead';
+}
 function openLeadModal() {
   $('#leadDesc').value = '';
+  $('#leadName') && ($('#leadName').value = '');
+  $('#leadOwn') && ($('#leadOwn').value = '');
   fieldError('#errLead', '');
+  setLeadMode('describe');
   show($('#leadModal'), true);
   $('#leadDesc').focus();
 }
@@ -352,14 +367,39 @@ $('#btnCustomLead').addEventListener('click', openLeadModal);
 $('#btnCloseLead').addEventListener('click', closeLeadModal);
 $('#btnLeadCancel').addEventListener('click', closeLeadModal);
 $('#leadModal').addEventListener('click', (e) => { if (e.target.id === 'leadModal') closeLeadModal(); });
+$$('#leadModeTabs .seg-tab').forEach((t) => t.addEventListener('click', () => setLeadMode(t.dataset.leadmode)));
 $('#leadDesc').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) $('#btnLeadGenerate').click();
 });
 $('#btnLeadGenerate').addEventListener('click', async () => {
-  const text = $('#leadDesc').value.trim();
-  if (!text) { fieldError('#errLead', 'Describe what the lead should test.'); return; }
+  const mode = state.leadMode || 'describe';
   const btn = $('#btnLeadGenerate');
   const original = btn.textContent;
+  // Mode B — the operator's own agent / system prompt, used verbatim.
+  if (mode === 'own') {
+    const md = $('#leadOwn').value.trim();
+    const title = $('#leadName').value.trim();
+    if (!md) { fieldError('#errLead', 'Paste your agent markdown or system prompt.'); return; }
+    btn.disabled = true; btn.textContent = 'Adding…';
+    try {
+      const { agent } = await api('/api/leads/custom', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, markdown: md }),
+      });
+      await loadAgents();
+      if (agent) state.selected.add(agent.id);
+      renderBoard();
+      closeLeadModal();
+      toast(`Added and pinned: ${agent?.title || title || 'custom lead'}`, 'ok');
+    } catch (e) {
+      fieldError('#errLead', e.message);
+    } finally {
+      btn.disabled = false; btn.textContent = original;
+    }
+    return;
+  }
+  // Mode A — Claude writes the agent from a description.
+  const text = $('#leadDesc').value.trim();
+  if (!text) { fieldError('#errLead', 'Describe what the lead should test.'); return; }
   btn.disabled = true;
   btn.textContent = 'Generating…';
   try {
@@ -383,6 +423,20 @@ $('#btnLeadGenerate').addEventListener('click', async () => {
     btn.textContent = original;
   }
 });
+
+// Delete a custom lead (the operator's own custom_* agent file) from the board.
+async function removeCustomAgent(id, title) {
+  if (!confirm(`Remove custom lead “${title || id}”? This deletes its agent file.`)) return;
+  try {
+    await api(`/api/leads/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    state.selected.delete(id);
+    await loadAgents();
+    renderBoard();
+    toast('Custom lead removed', 'ok');
+  } catch (e) {
+    toast(`Could not remove: ${e.message}`, 'error');
+  }
+}
 $('#btnExpandAll').addEventListener('click', () => {
   const anyCollapsed = $$('.cat-card').some((c) => c.classList.contains('collapsed'));
   state.expandedCats = anyCollapsed ? new Set(state.categories.map((g) => g.category)) : new Set();
@@ -499,7 +553,7 @@ function renderReview() {
     { k: 'Sandbox', v: $('#fieldSandbox').value ? 'Kali container' : 'host' },
     { k: 'PoC re-validation', v: $('#fieldRevalidatePoc').checked ? 'on' : 'off' },
     { k: 'TypeSafe', v: $('#fieldTypesafe') ? $('#fieldTypesafe').value : 'auto' },
-    { k: 'Compliance', v: (['fieldCompPci', 'fieldCompHipaa', 'fieldCompSoc2'].map((id) => $(`#${id}`).checked && $(`#${id}`).value).filter(Boolean).join(', ')) || 'none' },
+    { k: 'Compliance', v: (['fieldCompPci', 'fieldCompHipaa', 'fieldCompSoc2', 'fieldCompGdpr'].map((id) => $(`#${id}`).checked && $(`#${id}`).value).filter(Boolean).join(', ')) || 'none' },
     { k: 'Target auth', v: state.auth.header ? 'header set' : (state.auth.roles.length ? `${state.auth.roles.length} role(s)` : 'none') },
   ];
   $('#reviewGrid').innerHTML = items.map((it) => `
@@ -547,7 +601,7 @@ async function startExploitation() {
     sandbox: $('#fieldSandbox').value || undefined,
     revalidatePoc: $('#fieldRevalidatePoc').checked,
     typesafe: $('#fieldTypesafe') ? $('#fieldTypesafe').value : undefined,
-    compliance: ['fieldCompPci', 'fieldCompHipaa', 'fieldCompSoc2'].map((id) => $(`#${id}`).checked && $(`#${id}`).value).filter(Boolean),
+    compliance: ['fieldCompPci', 'fieldCompHipaa', 'fieldCompSoc2', 'fieldCompGdpr'].map((id) => $(`#${id}`).checked && $(`#${id}`).value).filter(Boolean),
     tokenLimit: Number($('#fieldTokenLimit').value) || undefined,
     order: $('#fieldOrder').value,
     samplePerRoute: Number($('#fieldSampleRoute').value) || undefined,
@@ -742,9 +796,12 @@ function reviewStatus(f) {
 function findingRow(f, idx) {
   const w = wireState(f);
   const st = reviewStatus(f);
+  const reg = state.detailRegression?.status?.[f.id];
+  const regBadge = reg === 'recurring' ? '<span class="reg-badge reg-recurring" title="Also present in the previous run of this target">recurring</span>'
+    : reg === 'new' ? '<span class="reg-badge reg-new" title="Not in the previous run of this target">new</span>' : '';
   return `<tr data-idx="${idx}">
     <td><span class="sev ${sevClass(f.severity)}">${esc(f.severity)}</span></td>
-    <td>${esc(f.title)}</td>
+    <td>${esc(f.title)}${regBadge}</td>
     <td class="col-endpoint" title="${esc(f.endpoint)}">${esc(f.endpoint)}</td>
     <td class="col-cwe">${esc(f.cwe)}</td>
     <td><span class="status-badge st-${esc(st)}">${esc(st)}</span></td>
@@ -1064,10 +1121,123 @@ function openFindingModal(f, pocs, runId) {
       }).catch(() => {});
     }
   }
+  // Wire evidence — the real request/response pairs behind the finding, plus
+  // its re-test history. Loaded on demand; the section hides itself when the
+  // finding carries no replayable exchange and has never been re-tested.
+  state.fmFinding = { f, runId };
+  loadWireEvidence(f, runId);
+
   show($('#findingModal'), true);
 }
 $('#btnCloseFinding').addEventListener('click', () => show($('#findingModal'), false));
 $('#findingModal').addEventListener('click', (e) => { if (e.target.id === 'findingModal') show($('#findingModal'), false); });
+
+// ---- wire evidence + per-finding re-test -----------------------------------
+
+const PROV_LABEL = {
+  'wire:replay': 'wire · harness replay', 'wire:recorded': 'wire · interceptor',
+  'wire:harness': 'wire · harness', '': 'agent-reported',
+};
+const REPRO_CLASS = { reproduced: 'ok', changed: 'warn', gone: 'bad', unverifiable: 'muted' };
+
+async function loadWireEvidence(f, runId) {
+  const summary = $('#fmWireSummary');
+  const exRoot = $('#fmWireExchanges');
+  summary.innerHTML = '';
+  exRoot.innerHTML = '<div class="field-help">loading…</div>';
+  let data = {};
+  try { data = await api(`/api/runs/${encodeURIComponent(runId)}/findings/${encodeURIComponent(f.id)}/traffic`); } catch { data = {}; }
+  // A later modal may have opened while this was in flight.
+  if (state.fmFinding?.f?.id !== f.id) return;
+
+  const w = data.wire;
+  if (w) {
+    const chips = [];
+    if (w.reproduced) chips.push(`<span class="wire-chip ok">${w.reproduced} reproduced by replay</span>`);
+    if (w.corroborated) chips.push(`<span class="wire-chip ok">${w.corroborated} corroborated on wire</span>`);
+    if (w.harness_observed) chips.push(`<span class="wire-chip ok">${w.harness_observed} harness-observed</span>`);
+    if (w.unverified) chips.push(`<span class="wire-chip muted">${w.unverified} unverifiable</span>`);
+    (w.contradicted || []).forEach((c) => chips.push(`<span class="wire-chip bad" title="${esc(c)}">contradicted</span>`));
+    (w.absent_from_capture || []).length && chips.push(`<span class="wire-chip warn">${w.absent_from_capture.length} not seen by interceptor</span>`);
+    summary.innerHTML = `<div class="wire-chips">${chips.join('')}</div>` +
+      ((w.contradicted || []).length ? `<ul class="wire-contra">${w.contradicted.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>` : '');
+  }
+
+  const ex = data.exchanges || [];
+  const flows = data.flows || [];
+  exRoot.innerHTML =
+    (ex.length ? ex.map(exchangeCard).join('') : '') +
+    (flows.length ? `<div class="wire-sub">Recorded flows on this endpoint (${flows.length})</div>` + flows.map(flowRow).join('') : '') +
+    (!ex.length && !flows.length ? '<div class="field-help">No replayable exchange recorded for this finding. Re-test sends its proof again if one exists.</div>' : '');
+
+  loadRetestHistory(f.id, runId);
+}
+
+function exchangeCard(ex) {
+  const prov = PROV_LABEL[ex.provenance] ?? ex.provenance ?? 'agent-reported';
+  const wireCls = String(ex.provenance || '').startsWith('wire:') ? 'ok' : 'muted';
+  const st = ex.status >= 500 ? 'tf-5' : ex.status >= 400 ? 'tf-4' : ex.status >= 300 ? 'tf-3' : ex.status >= 200 ? 'tf-2' : 'tf-0';
+  const reqH = Object.entries(ex.request_headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n');
+  const resH = Object.entries(ex.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n');
+  const body = (ex.body || '').slice(0, 4000);
+  return `<details class="wire-ex">
+    <summary>
+      <span class="wire-role">${esc(ex.role || '')}</span>
+      <span class="method">${esc(ex.method || 'GET')}</span>
+      <span class="wire-url" title="${esc(ex.url)}">${esc(ex.url || '')}</span>
+      <span class="tf ${st}">${ex.status || '—'}</span>
+      ${ex.identity ? `<span class="wire-id">as ${esc(ex.identity)}</span>` : ''}
+      <span class="wire-prov ${wireCls}">${esc(prov)}</span>
+    </summary>
+    <div class="wire-ex-body">
+      ${reqH ? `<div class="wire-h"><b>Request headers</b><pre class="poc-pre">${esc(reqH)}</pre></div>` : ''}
+      ${resH ? `<div class="wire-h"><b>Response headers</b><pre class="poc-pre">${esc(resH)}</pre></div>` : ''}
+      ${body ? `<div class="wire-h"><b>Response body${ex.body.length > 4000 ? ' (first 4 KB)' : ''}</b><pre class="poc-pre">${esc(body)}</pre></div>` : ''}
+    </div>
+  </details>`;
+}
+
+function flowRow(r) {
+  const st = r.status >= 500 ? 'tf-5' : r.status >= 400 ? 'tf-4' : r.status >= 300 ? 'tf-3' : r.status >= 200 ? 'tf-2' : 'tf-0';
+  return `<div class="wire-flow"><span class="method">${esc(r.method || '')}</span>
+    <span class="wire-url" title="${esc(r.url)}">${esc(r.url || '')}</span>
+    <span class="tf ${st}">${r.tunnelled ? 'TLS' : r.status || '—'}</span></div>`;
+}
+
+async function loadRetestHistory(fid, runId) {
+  const root = $('#fmRetestHistory');
+  let h = [];
+  try { h = (await api(`/api/runs/${encodeURIComponent(runId)}/retests/${encodeURIComponent(fid)}`)).history || []; } catch { h = []; }
+  if (state.fmFinding?.f?.id !== fid) return;
+  renderRetestHistory(h);
+}
+
+function renderRetestHistory(h) {
+  const root = $('#fmRetestHistory');
+  if (!h.length) { root.innerHTML = ''; return; }
+  root.innerHTML = `<div class="retest-hist"><div class="wire-sub">Re-test history</div>${h.slice().reverse().map((e) => {
+    const cls = REPRO_CLASS[e.reproduction] || 'muted';
+    return `<div class="retest-row"><span class="wire-chip ${cls}">${esc(e.reproduction || 'error')}</span>
+      <span class="retest-when">${e.at ? new Date(e.at * 1000).toLocaleString() : ''}</span>
+      <span class="retest-detail" title="${esc(e.detail || e.raw || '')}">${esc(e.detail || e.raw || '')}</span></div>`;
+  }).join('')}</div>`;
+}
+
+$('#btnFindingRetest').addEventListener('click', async (e) => {
+  const cur = state.fmFinding;
+  if (!cur?.f || !cur.runId) return;
+  const btn = e.currentTarget;
+  btn.disabled = true; const label = btn.textContent; btn.textContent = '⟳ re-testing…';
+  try {
+    const r = await api(`/api/runs/${encodeURIComponent(cur.runId)}/retest`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finding: cur.f.id }) });
+    if (state.fmFinding?.f?.id === cur.f.id) renderRetestHistory(r.history || []);
+    toast(`Re-test: ${r.result?.reproduction || 'done'}`, (REPRO_CLASS[r.result?.reproduction] === 'bad' ? 'error' : 'ok'));
+  } catch (err) {
+    toast(`Re-test failed: ${err.message}`, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
+});
 
 /// Exactly where the problem is: parameter/field/flow, not just the URL.
 function locationLine(f) {
@@ -1403,6 +1573,32 @@ function openRun(run) {
   renderSidebar();
 }
 
+async function loadRegression(id, token) {
+  const box = $('#detailRegression');
+  let r = null;
+  try { r = await api(`/api/runs/${encodeURIComponent(id)}/regression`); } catch { r = null; }
+  if (token !== state.detailToken) return;
+  if (!r || !r.prev) { state.detailRegression = null; show(box, false); return; }
+  state.detailRegression = r;
+  renderFindings('detail'); // repaint so the new/recurring badges show
+  // Count over the findings actually shown, so the banner matches the table
+  // even when a run's findings.json reuses an id.
+  const cur = state.detailFindings || [];
+  const recurring = cur.filter((f) => r.status?.[f.id] === 'recurring').length;
+  const fresh = cur.filter((f) => r.status?.[f.id] === 'new').length;
+  const fixed = r.fixed || [];
+  const when = r.prev.when ? timeAgo(Math.floor(new Date(r.prev.when).getTime() / 1000)) : '';
+  box.innerHTML = `<div class="reg-banner">
+    <span class="reg-h">vs previous run</span>
+    <span class="muted">${esc(when)}</span>
+    <span class="reg-chip reg-new">${fresh} new</span>
+    <span class="reg-chip reg-recurring">${recurring} recurring</span>
+    <span class="reg-chip reg-fixed">${fixed.length} fixed</span>
+    ${fixed.length ? `<details class="reg-fixed-list"><summary>fixed since</summary><ul>${fixed.map((x) => `<li><span class="sev ${sevClass(x.severity)}">${esc(x.severity)}</span> ${esc(x.title)}</li>`).join('')}</ul></details>` : ''}
+  </div>`;
+  show(box, true);
+}
+
 async function loadDetail(id) {
   clearInterval(state.detailPoll);
   // A poll for the previously opened run may still be in flight; when it
@@ -1424,7 +1620,11 @@ async function loadDetail(id) {
   $('#detailState').textContent = detail.status?.state || 'unknown';
   state.detailFindings = detail.findings;
   state.detailPocs = detail.pocs || [];
+  // Regression vs the previous run of this target — new / recurring badges and a
+  // "fixed since" banner. Best-effort: it never blocks the findings table.
+  state.detailRegression = null;
   renderFindings('detail');
+  loadRegression(id, token);
   // A past run's identity: when it ran, how many agents, what asset the recon
   // decided it was. Previously the page showed only target + state, so two
   // runs of the same target were indistinguishable.
@@ -2614,21 +2814,42 @@ function renderChains(x, g) {
         <span class="chain-meta">conf ${Number(c.confidence || 0).toFixed(2)} · blast ${c.blast_radius} · ${esc(c.exploitability)}</span>
       </summary>
       <div class="chain-body">
-        <div class="chain-impact"><b>Impact:</b> ${esc(c.impact)}</div>
-        <ol class="chain-steps">${(c.step_text || []).map((s, j) => `<li class="step st-${esc(c.steps?.[j]?.status || '')}">${esc(s)}</li>`).join('')}</ol>
-        ${block('Findings involved', (c.findings || []).map((f) => `${f.title} — ${f.severity} (${f.status})`))}
-        ${block('Evidence references', c.evidence, 'none recorded — this chain is unproven')}
-        ${block('Required assumptions', c.assumptions, 'none — every step is evidenced')}
-        ${block('Recommended validation', c.validation, 'none needed — confirmed end to end')}
-        ${block('Recommended remediation', c.remediation)}
+        <div class="chain-impact"><b>Impact:</b> ${chainText(c.impact)}</div>
+        <ol class="chain-steps">${(c.step_text || []).map((s, j) => `<li class="step st-${esc(c.steps?.[j]?.status || '')}">${chainText(s)}</li>`).join('')}</ol>
+        ${block('Findings involved', (c.findings || []).map((f) => `${chainText(f.title)} <span class="sev ${sevClass(f.severity)}">${esc(f.severity)}</span> <span class="chain-note">${esc(f.status)}</span>`), null, true)}
+        ${block('Evidence references', (c.evidence || []).map(chainText), 'none recorded — this chain is unproven', true)}
+        ${block('Required assumptions', (c.assumptions || []).map(chainText), 'none — every step is evidenced', true)}
+        ${block('Recommended validation', (c.validation || []).map(chainText), 'none needed — confirmed end to end', true)}
+        ${block('Recommended remediation', (c.remediation || []).map(chainText), null, true)}
       </div>
     </details>`).join('');
 }
 
-function block(title, items, emptyText) {
+// Turn the graph's prose into readable markup: node names (backtick-quoted) become
+// trimmed code references, relation tokens (—[ESCALATES_TO]→) become labelled
+// chips, and the "(needs_validation, conf 0.80)" tail becomes a muted note.
+function chainText(s) {
+  let e = esc(String(s || ''));
+  // Node references: `…` → <code>, with mid-word ellipsis trimmed to a word edge.
+  e = e.replace(/`([^`]*)`/g, (_m, inner) => {
+    let t = inner;
+    if (t.endsWith('…')) t = t.replace(/\s*\S*…$/, '…');
+    return `<code class="chain-ref" title="${inner}">${t}</code>`;
+  });
+  // Generic node-type words before a reference are noise once it is a code chip.
+  e = e.replace(/\b(?:Finding|BusinessImpact|Host|Service|Endpoint|Credential|Identity|AttackStep|Vulnerability)\s+(?=<code)/g, '');
+  // Relation tokens, em-dash or ASCII arrow form.
+  e = e.replace(/\s*(?:—|-)\[([A-Z_]+)\](?:→|-&gt;|->)\s*/g, ' <span class="chain-rel">$1</span> ');
+  // Trailing status/confidence note.
+  e = e.replace(/\(([a-z_]+,\s*conf\s*[0-9.]+)\)/g, '<span class="chain-note">$1</span>');
+  return e;
+}
+
+function block(title, items, emptyText, html) {
   const arr = items || [];
   if (!arr.length && !emptyText) return '';
-  return `<div class="chain-block"><div class="chain-block-h">${esc(title)}</div><ul>${arr.length ? arr.map((v) => `<li>${esc(v)}</li>`).join('') : `<li class="muted">${esc(emptyText)}</li>`}</ul></div>`;
+  const cell = (v) => html ? v : esc(v);
+  return `<div class="chain-block"><div class="chain-block-h">${esc(title)}</div><ul>${arr.length ? arr.map((v) => `<li>${cell(v)}</li>`).join('') : `<li class="muted">${esc(emptyText)}</li>`}</ul></div>`;
 }
 
 // ---- dependency todolist ---------------------------------------------------
@@ -2887,13 +3108,68 @@ async function extrasTraces(x) {
   x.count('traces', (r.traces || []).length);
   show(x.q('tr-empty'), !(r.traces || []).length);
   const base = `/api/runs/${encodeURIComponent(id)}/asset/`;
-  x.q('tr-files').innerHTML = (r.traces || []).map((t) => `<li><a href="${base}${encodeURI(t.file)}" target="_blank">${esc(t.agent)}</a><span class="muted">${(t.bytes / 1024).toFixed(1)} KB</span></li>`).join('');
-  x.q('tr-note').textContent = qv ? `${r.hits.length}${r.hits.length >= 200 ? '+' : ''} hit(s) for “${qv}”` : `${(r.traces || []).length} agent trace(s) — search across all of them`;
+  x.q('tr-files').innerHTML = (r.traces || []).map((t) =>
+    `<li><button class="trace-file-btn${x.trAgent === t.agent ? ' active' : ''}" data-agent="${esc(t.agent)}" data-file="${esc(t.file)}">${esc(t.agent)}</button><span class="muted">${(t.bytes / 1024).toFixed(1)} KB</span></li>`).join('');
+  $$('.trace-file-btn', x.q('tr-files')).forEach((b) => b.addEventListener('click', () => showTranscript(x, b.dataset.agent, b.dataset.file)));
+  x.q('tr-note').textContent = qv ? `${r.hits.length}${r.hits.length >= 200 ? '+' : ''} hit(s) for “${qv}”` : `${(r.traces || []).length} agent trace(s) — click one to read it, or search across all`;
   const re = qv ? new RegExp(qv.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'ig') : null;
-  x.q('tr-hits').innerHTML = qv
-    ? (r.hits.length ? r.hits.map((h) => `<div class="trace-hit"><a href="${base}${encodeURI(h.file)}" target="_blank">${esc(h.agent)}</a><span class="muted">:${h.line}</span><code>${esc(h.snippet).replace(re, (m) => `<mark>${m}</mark>`)}</code></div>`).join('') : '<div class="muted">No agent saw that.</div>')
-    : '<div class="muted">Type a keyword — an error string, a parameter, a version — to see which agents already observed it.</div>';
+  if (qv) {
+    x.trAgent = null;
+    x.q('tr-hits').innerHTML = r.hits.length
+      ? r.hits.map((h) => `<div class="trace-hit"><button class="trace-file-btn" data-agent="${esc(h.agent)}" data-file="${esc(h.file)}" data-line="${h.line}">${esc(h.agent)}</button><span class="muted">:${h.line}</span><code>${esc(h.snippet).replace(re, (m) => `<mark>${m}</mark>`)}</code></div>`).join('')
+      : '<div class="muted">No agent saw that.</div>';
+    $$('.trace-file-btn', x.q('tr-hits')).forEach((b) => b.addEventListener('click', () => showTranscript(x, b.dataset.agent, b.dataset.file, qv)));
+  } else if (x.trAgent) {
+    const cur = (r.traces || []).find((t) => t.agent === x.trAgent);
+    if (cur) showTranscript(x, cur.agent, cur.file);
+    else x.q('tr-hits').innerHTML = '<div class="muted">Click an agent on the left to read its transcript.</div>';
+  } else {
+    x.q('tr-hits').innerHTML = '<div class="muted">Click an agent on the left to read its transcript, or type a keyword to search across all of them.</div>';
+  }
 }
+
+// A transcript is mostly target output and tool noise. Render it readable:
+// group by the tool-call / HTTP-request boundaries the harness writes, and let
+// each block collapse, so a long run is navigable rather than one wall of text.
+const TR_STEP_RE = /^(?:#{1,4}\s|\$\s|>\s|(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|CONNECT)\s+\S|(?:TOOL|STEP|AGENT|ROUND|PHASE)\b|={3,}|-{3,}\s*$)/i;
+
+async function showTranscript(x, agent, file, highlight) {
+  x.trAgent = agent;
+  $$('.trace-file-btn', x.q('tr-files')).forEach((b) => b.classList.toggle('active', b.dataset.agent === agent));
+  const hits = x.q('tr-hits');
+  hits.innerHTML = '<div class="field-help">loading…</div>';
+  const id = x.getRunId();
+  let text = '';
+  try { text = await (await fetch(`/api/runs/${encodeURIComponent(id)}/asset/${encodeURI(file)}`)).text(); } catch { hits.innerHTML = '<div class="muted">Could not load trace.</div>'; return; }
+  if (x.trAgent !== agent) return;
+  text = stripAnsiJs(text);
+  const lines = text.split('\n');
+  // Split into blocks at each step/request boundary.
+  const blocks = [];
+  let cur = null;
+  for (const line of lines) {
+    if (TR_STEP_RE.test(line) || !cur) { cur = { head: line, body: [] }; blocks.push(cur); }
+    else cur.body.push(line);
+  }
+  const re = highlight ? new RegExp(highlight.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'ig') : null;
+  const mark = (s) => { const e = esc(s); return re ? e.replace(re, (m) => `<mark>${m}</mark>`) : e; };
+  hits.innerHTML = `<div class="transcript">
+    <div class="transcript-head"><b>${esc(agent)}</b><span class="muted">${blocks.length} block(s) · ${lines.length} line(s)</span>
+      <a class="btn btn-sm" href="/api/runs/${encodeURIComponent(id)}/asset/${encodeURI(file)}" target="_blank">Open raw</a></div>
+    ${blocks.map((b) => {
+      const body = b.body.join('\n').replace(/\s+$/, '');
+      const open = re && (re.test(b.head) || re.test(body));
+      re && (re.lastIndex = 0);
+      return `<details class="transcript-block"${open ? ' open' : ''}>
+        <summary>${mark(b.head.slice(0, 200)) || '<span class="muted">(blank)</span>'}</summary>
+        ${body ? `<pre class="poc-pre">${mark(body)}</pre>` : ''}
+      </details>`;
+    }).join('')}
+  </div>`;
+}
+
+/// Strip ANSI escapes client-side (traces are served raw).
+function stripAnsiJs(s) { return String(s || '').replace(/\u001b\[[0-9;]*m/g, ''); }
 
 // ---- deliverables ----------------------------------------------------------
 

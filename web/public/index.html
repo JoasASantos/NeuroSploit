@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>NeuroSploit v4.2.4 — Console</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧠</text></svg>">
+<title>NeuroSploit v4.3.0 — Console</title>
+<link rel="icon" type="image/svg+xml" href="logo.svg">
 <link rel="stylesheet" href="/vendor/xterm.css" />
 <link rel="stylesheet" href="/style.css" />
 </head>
@@ -18,7 +18,20 @@
   <!-- ============ SIDEBAR ============ -->
   <aside class="sidebar" id="sidebar">
     <div class="sb-top">
-      <div class="brand"><span class="mark">NS</span> NeuroSploit</div>
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+          <path d="M9 39V11l20 20V11" stroke="currentColor" stroke-width="5.5" stroke-linecap="square" stroke-linejoin="miter"/>
+          <path d="M39 9V37" stroke="currentColor" stroke-width="5.5" stroke-linecap="square"/>
+          <g stroke="#22a8ff" stroke-width="2.4" fill="#22a8ff">
+            <path d="M12 16h7l6 6h8" fill="none"/>
+            <circle cx="11" cy="16" r="3.4"/><circle cx="34" cy="22" r="3.4"/>
+            <circle cx="38" cy="10" r="3.4"/><circle cx="15" cy="37" r="3.4"/>
+            <path d="M18 34l-3 3" fill="none"/>
+          </g>
+          <path d="M41 7L18 41" stroke="#22a8ff" stroke-width="2.6" stroke-linecap="round"/>
+        </svg>
+        NeuroSploit
+      </div>
       <button class="icon-btn" id="btnThemeToggle" title="Toggle light / dark theme">☾</button>
     </div>
 
@@ -33,7 +46,7 @@
     <div class="sb-groups" id="sbGroups"><!-- populated by app.js --></div>
 
     <div class="sb-bottom">
-      <span class="sb-version" id="sbVersion">v4.2.4</span>
+      <span class="sb-version" id="sbVersion">v4.3.0</span>
       <div class="sb-bottom-actions">
         <button class="icon-btn" id="btnOpenAuth" title="Auth &amp; API keys">🔑</button>
         <button class="icon-btn" id="btnOpenRepl" title="Open terminal (Ctrl+`)">❭_</button>
@@ -220,13 +233,13 @@
             <div class="section-title">Reasoning budget</div>
             <div class="section-desc">Optional. Left on <em>unlimited</em>, the run behaves exactly as it always has — full depth, no cap.</div>
           </div>
+          <div class="check-col">
+            <div class="check-row"><input type="checkbox" id="fieldResearch" /> <label for="fieldResearch"><b>🔬 Research mode</b> — hunt a novel, CVE-reportable bug (whitebox/greybox)</label></div>
+            <div class="field-help check-help">Known-CVE de-dup + patch-diff variant analysis. Best with a source repo; reports only genuinely new issues (or a concrete patch bypass).</div>
+            <div class="check-row check-quick"><input type="checkbox" id="fieldQuick" /> <label for="fieldQuick"><b>⚡ Quick mode</b> — short, low-cost test</label></div>
+            <div class="field-help check-help">Economy preset: 1 voter, 1 chain round, light recon, ≤6 agents, eco budget. The big token saver. Wins over the settings below.</div>
+          </div>
           <div class="field-row">
-            <div class="check-row"><input type="checkbox" id="fieldResearch" /> <label for="fieldResearch"><b>🔬 Research mode</b> — hunt a novel, CVE-reportable bug (whitebox/greybox)</label>
-              <div class="field-help">Known-CVE de-dup + patch-diff variant analysis. Best with a source repo; reports only genuinely new issues (or a concrete patch bypass).</div>
-            </div>
-            <div class="check-row check-quick"><input type="checkbox" id="fieldQuick" /> <label for="fieldQuick"><b>⚡ Quick mode</b> — short, low-cost test</label>
-              <div class="field-help">Economy preset: 1 voter, 1 chain round, light recon, ≤6 agents, eco budget. The big token saver. Wins over the settings below.</div>
-            </div>
             <div class="field-group"><label class="field-label" for="fieldBudget">Budget mode</label>
               <select class="narrow" id="fieldBudget">
                 <option value="unlimited" selected>unlimited · full run (default)</option>
@@ -289,6 +302,7 @@
             <div class="check-row"><input type="checkbox" id="fieldCompPci" value="pci-dss" /> <label for="fieldCompPci">PCI-DSS v4.0</label></div>
             <div class="check-row"><input type="checkbox" id="fieldCompHipaa" value="hipaa" /> <label for="fieldCompHipaa">HIPAA Security Rule</label></div>
             <div class="check-row"><input type="checkbox" id="fieldCompSoc2" value="soc2" /> <label for="fieldCompSoc2">SOC 2 (Trust Services Criteria)</label></div>
+            <div class="check-row"><input type="checkbox" id="fieldCompGdpr" value="gdpr" /> <label for="fieldCompGdpr">GDPR (data-protection articles)</label></div>
             <div class="field-help">Maps confirmed findings onto control requirements in the report. Indicates gaps for an assessor — never a compliance verdict.</div>
           </div>
         </div>
@@ -414,6 +428,7 @@
             <button class="btn btn-sm" id="btnExportCsv" title="Export the filtered findings as CSV">⤓ CSV</button>
           </div>
           <div class="kpi-row" id="detailKpis"></div>
+          <div id="detailRegression" hidden></div>
           <div class="table-wrap">
             <table class="data-table" id="detailFindingsTable">
               <thead><tr><th data-sort="severity">Severity</th><th data-sort="title">Title</th><th data-sort="endpoint">Endpoint</th><th data-sort="cwe">CWE</th><th data-sort="review_status">Status</th><th data-sort="wire">Wire</th><th data-sort="agent">Agent</th><th data-sort="confidence" class="col-conf">Conf.</th></tr></thead>
@@ -460,7 +475,7 @@
     </div>
     <div class="modal-tabs">
       <button class="modal-tab active" data-mtab="target">Target auth</button>
-      <button class="modal-tab" data-mtab="keys">API keys</button>
+      <button class="modal-tab" data-mtab="keys">LLM API keys</button>
       <button class="modal-tab" data-mtab="creds">Creds file</button>
       <button class="modal-tab" data-mtab="authz">Authorization</button>
     </div>
@@ -479,7 +494,8 @@
         </div>
       </div>
       <div class="modal-panel" data-mpanel="keys" hidden>
-        <div class="field-help" style="margin-bottom:12px;">Keys are kept in this server process's memory only — never written to disk. Cleared on restart.</div>
+        <div class="section-title">Model provider keys</div>
+        <div class="field-help" style="margin:4px 0 12px;">The API keys for the <b>LLMs that run the engagement</b> (not the target's auth — that's the <em>Target auth</em> tab). Kept in this server process's memory only, never written to disk, cleared on restart.</div>
         <div id="providerKeyList"></div>
       </div>
       <div class="modal-panel" data-mpanel="authz" hidden>
@@ -500,11 +516,11 @@
           <div class="field-help">Without this the engagement is authorized against the target and nothing else — discovering a host is not permission to test it.</div>
         </div>
 
-        <div class="section-title" style="margin-top:20px;display:flex;align-items:center;gap:8px;">
+        <div class="section-title" style="margin-top:24px;margin-bottom:8px;display:flex;align-items:center;gap:8px;">
           Scoping &amp; Guardrails
           <span class="pill" style="font-size:10px;">enforced in code</span>
         </div>
-        <div class="field-help" style="margin:-6px 0 10px;">
+        <div class="field-help" style="margin:0 0 14px;">
           The <b>hard scope</b> is the boundary: a request whose host is not listed is <b>refused before it is sent</b> — not warned about. Exclusions always win. A capability token still caps all of this. Leave the hard list empty to keep the plain target + <em>Additional authorized hosts</em> behaviour.
         </div>
         <div class="field-group">
@@ -628,16 +644,28 @@
       <button class="icon-btn" id="btnCloseLead">✕</button>
     </div>
     <div class="modal-body">
-      <div class="field-group">
+      <div class="field-help" style="margin-bottom:14px;">A <b>lead</b> is a specialist agent the harness runs. Add one two ways — let Claude write it from a description, or paste your own agent / system prompt to run verbatim. Either way it is saved as a real, pinnable agent in <code>agents_md/vulns/</code> and you can remove it later.</div>
+      <div class="seg-tabs" id="leadModeTabs">
+        <button class="seg-tab active" data-leadmode="describe">Describe it</button>
+        <button class="seg-tab" data-leadmode="own">Paste my own</button>
+      </div>
+      <div class="field-group" data-leadpanel="describe">
         <label class="field-label" for="leadDesc">What should this lead test?</label>
         <textarea id="leadDesc" placeholder="e.g. Abuse the invoice PDF export to read internal files via the template engine."></textarea>
-        <div class="field-help">Claude (Opus, subscription) generates a real specialist agent file for it and pins it. If generation is unavailable, the text is folded into <code>--focus</code> instead.</div>
+        <div class="field-help">Claude (Opus, subscription) writes a real specialist agent for it and pins it. If generation is unavailable, the text is folded into <code>--focus</code> instead.</div>
+      </div>
+      <div class="field-group" data-leadpanel="own" hidden>
+        <label class="field-label" for="leadName">Name</label>
+        <input id="leadName" type="text" placeholder="e.g. GraphQL Introspection Abuse" />
+        <label class="field-label" for="leadOwn" style="margin-top:10px;">Your agent / system prompt</label>
+        <textarea id="leadOwn" rows="10" placeholder="Paste a full agent markdown (# Title / ## User Prompt / ## System Prompt), or just your system prompt — it will be wrapped into an agent. Use {target} and {recon_json} placeholders."></textarea>
+        <div class="field-help">Used verbatim — no model rewrites it. {target} and {recon_json} are filled per run.</div>
       </div>
       <div class="field-error" id="errLead" hidden></div>
     </div>
     <div class="modal-foot">
       <button class="btn" id="btnLeadCancel">Cancel</button>
-      <button class="btn btn-primary" id="btnLeadGenerate">Generate lead</button>
+      <button class="btn btn-primary" id="btnLeadGenerate">Add lead</button>
     </div>
   </div>
 </div>
@@ -659,6 +687,16 @@
       <div id="fmSection-impact"></div>
       <div id="fmSection-remediation"></div>
       <div id="fmSection-chains"></div>
+
+      <div class="field-group" id="fmSection-wire">
+        <div class="fm-wire-head">
+          <label class="field-label">Wire evidence — the bytes behind this finding</label>
+          <button class="btn btn-sm" id="btnFindingRetest">⟳ Re-test this finding</button>
+        </div>
+        <div id="fmWireSummary"></div>
+        <div id="fmRetestHistory"></div>
+        <div id="fmWireExchanges" class="wire-exchanges"></div>
+      </div>
 
       <div class="field-group">
         <label class="field-label">Other scripts from this run</label>

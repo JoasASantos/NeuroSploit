@@ -297,6 +297,8 @@ to the CLI — the console never re-implements harness logic.
 | `POST` | `/api/runs/:id/graph` | Recompute with `neurosploit graph <run>`; body `{ "push": true }` adds `--push` (Neo4j credentials from the server's `NEO4J_URI` / `NEO4J_USER` / `NEO4J_PASSWORD`). Returns the CLI output and the refreshed graph. |
 | `GET` | `/api/runs/:id/traffic?host=&method=&q=&offset=&limit=` | The recording interceptor's `flows.jsonl`, filtered, newest first; `hosts` lists every host seen. |
 | `GET` | `/api/runs/:id/traces?q=` | The shared agent traces (`traces/*.md`) and, with `q`, line hits across all of them. |
-| `POST` | `/api/runs/:id/retest` | `neurosploit poc <run>` — re-runs every finding's recorded proof and reports what still reproduces (report only; nothing is written back). |
+| `POST` | `/api/runs/:id/retest` | Body `{}` → `neurosploit poc <run>`, re-runs every finding's proof (report only). Body `{ "finding": "<id>" }` → `neurosploit poc <run> --only <id> --json`, re-tests one finding, appends the dated outcome to `retests/<id>.json`, and returns `{ result, history }`. Nothing is written back to `findings.json`. |
+| `GET` | `/api/runs/:id/retests/:findingId` | The re-test history for one finding — each entry `{ at, reproduction, detail, … }`, oldest first. |
+| `GET` | `/api/runs/:id/findings/:findingId/traffic` | The HTTP exchanges that back one finding: the exchanges the harness measured (`evidence_data` — baseline/attack, the identity pair, matrix probes, the oracle), each with its wire `provenance`; the finding's `wire` check summary; and the recorded `flows.jsonl` entries on the same endpoint. Real bytes, not the agent's prose. |
 
 `GET /api/runs/:id` now also returns `extras`: `{ graph, todo, traces, flows, deliverables[] }`.

@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 #[command(
     name = "neurosploit",
     version,
-    about = "NeuroSploit v4.2.4 — multi-model autonomous pentest harness",
-    long_about = "NeuroSploit v4.2.4 — a Rust multi-model harness that drives a pool of LLMs \
+    about = "NeuroSploit v4.3.0 — multi-model autonomous pentest harness",
+    long_about = "NeuroSploit v4.3.0 — a Rust multi-model harness that drives a pool of LLMs \
 (API key or local subscription: Claude/Codex/Gemini/Grok/OpenCode/Hermes) to autonomously test a target. \
 After recon it INTELLIGENTLY selects only the agents matching the discovered surface, runs \
 them in parallel, then validates every finding by cross-model voting before reporting.\n\n\
@@ -276,6 +276,12 @@ enum Cmd {
         /// Write the demoted findings back to findings.json.
         #[arg(long = "apply")]
         apply: bool,
+        /// Re-test only this finding id (default: every finding).
+        #[arg(long = "only")]
+        only: Option<String>,
+        /// Emit the results as JSON (one object per finding) instead of a table.
+        #[arg(long = "json")]
+        json: bool,
     },
     /// Assemble/print/verify a run's assurance bundle (P1–P5 in one manifest).
     Assurance {
@@ -864,7 +870,7 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Graph { run, internal, push, top } => handle_graph(&base, &run, internal.as_deref(), push, top, cli.neo4j.as_deref()).await?,
         Cmd::Assurance { run, verify } => handle_assurance(&base, &run, verify)?,
         Cmd::Compliance { run, framework, include_leads } => handle_compliance(&base, &run, &framework, include_leads)?,
-        Cmd::Poc { run, repeats, apply } => handle_poc(&base, &run, repeats, apply).await?,
+        Cmd::Poc { run, repeats, apply, only, json } => handle_poc(&base, &run, repeats, apply, only, json).await?,
         Cmd::Sandbox { cmd } => handle_sandbox(cmd).await?,
         Cmd::Capability { cmd } => handle_capability(cmd)?,
         Cmd::Provenance { cmd } => handle_provenance(cmd)?,
@@ -1957,16 +1963,40 @@ fn handle_compliance(base: &std::path::Path, run: &str, frameworks: &[String], i
     Ok(())
 }
 
-async fn handle_poc(base: &std::path::Path, run: &str, repeats: usize, apply: bool) -> anyhow::Result<()> {
+async fn handle_poc(base: &std::path::Path, run: &str, repeats: usize, apply: bool, only: Option<String>, json: bool) -> anyhow::Result<()> {
     let dir = resolve_run(base, run)?;
     let mut findings = load_findings(&dir)?;
+    // `--only <id>`: re-test a single finding (the web console's per-finding
+    // Re-test). The scope is still derived from every finding, so the one we
+    // replay stays inside the same authorized hosts.
+    if let Some(id) = &only {
+        if !findings.iter().any(|f| &f.id == id) {
+            anyhow::bail!("no finding with id `{id}` in {}", dir.display());
+        }
+    }
     // Scope the replay to the hosts the findings are on — a re-validation run
     // must not reach past where the engagement was authorized.
     let target = findings.iter().map(|f| harness::scope::host_of(&f.endpoint)).find(|h| !h.is_empty()).unwrap_or_default();
     let policy = harness::scope::ScopePolicy::for_target(&format!("https://{target}"));
     let validator = harness::poc::PocValidator::new(policy).with_repeats(repeats);
-    println!("  re-validating {} finding(s)…", findings.len());
-    let results = validator.validate_all(&findings).await;
+    let subset: Vec<harness::types::Finding> = match &only {
+        Some(id) => findings.iter().filter(|f| &f.id == id).cloned().collect(),
+        None => findings.clone(),
+    };
+    let results = validator.validate_all(&subset).await;
+    if json {
+        // Machine-readable for the web console; it persists the history itself.
+        println!("{}", serde_json::to_string(&results)?);
+        if apply {
+            let by_id: std::collections::HashMap<&str, &harness::poc::PocResult> = results.iter().map(|r| (r.finding_id.as_str(), r)).collect();
+            for f in findings.iter_mut() {
+                if let Some(r) = by_id.get(f.id.as_str()) { harness::poc::apply(f, r); }
+            }
+            std::fs::write(dir.join("findings.json"), serde_json::to_string_pretty(&findings)?)?;
+        }
+        return Ok(());
+    }
+    println!("  re-validating {} finding(s)…", subset.len());
     for r in &results {
         let color = match r.reproduction {
             harness::poc::Reproduction::Reproduced => "1;32",

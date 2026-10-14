@@ -18,6 +18,15 @@ CLI binary, never a reimplementation of harness logic.
   credential → impact, every edge marked confirmed / needs validation / hypothesis, findings ordered
   by kill-chain stage. Refreshed live at each graph checkpoint; click a finding to open it. Chains
   and Dependencies list the same paths as text and as the step-by-step todolist.
+- **Wire evidence in the finding** — the finding modal shows the real request/response pairs the
+  harness measured (baseline vs. attack, the identity pair, matrix probes, the oracle), each tagged
+  with its wire provenance, plus the finding's wire-check summary and any recorded flow on the same
+  endpoint. The proof as bytes, not as the agent's prose.
+- **Per-finding re-test with history** — ⟳ Re-test re-runs one finding's recorded proof through the
+  scope-guarded replay engine and keeps a dated history (reproduced / changed / gone / unverifiable),
+  so a finding drifting to "gone" over time is visible. Nothing is written back to the findings.
+- **Transcript viewer** — the Traces tab renders a chosen agent's transcript split into navigable,
+  collapsible blocks at each tool-call / HTTP-request boundary; search still spans every agent.
 - **Terminal dock (xterm.js)** — `❭_` in the sidebar, the topbar button, or `Ctrl+\`` opens a
   docked terminal running a real `neurosploit` REPL session. Its stdout is streamed **unstripped**,
   so the harness's own colour and box-drawn panels render as they do in a local shell. Line

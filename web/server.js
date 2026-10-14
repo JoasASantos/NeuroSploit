@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * NeuroSploit v4.2.4 — web console backend.
+ * NeuroSploit v4.3.0 — web console backend.
  *
  * Zero-dependency Node HTTP server that:
  *  - serves the static SPA in ./public
@@ -651,6 +651,128 @@ async function searchTraces(dir, needle) {
     });
   }
   return { traces: list, hits, query: needle || '' };
+}
+
+/// The CLI prints progress before the `--json` payload; take the last line that
+/// parses as JSON so a banner or a warning never breaks the parse.
+function lastJsonLine(buf) {
+  const lines = stripAnsi(buf || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].startsWith('[') || lines[i].startsWith('{')) return lines[i];
+  }
+  return '[]';
+}
+
+/// A finding-id is used as a file name; keep it to the safe charset.
+function safeId(id) { return /^[a-zA-Z0-9_.:-]+$/.test(id) ? id : null; }
+
+async function readRetests(dir, findingId) {
+  const id = safeId(findingId);
+  if (!id) return [];
+  return await readJsonSafe(path.join(dir, 'retests', `${id}.json`), []);
+}
+
+/// Append one re-test outcome to the finding's dated history (newest last).
+async function appendRetest(dir, findingId, entry) {
+  const id = safeId(findingId);
+  if (!id) return [];
+  const rdir = path.join(dir, 'retests');
+  await fsp.mkdir(rdir, { recursive: true }).catch(() => {});
+  const file = path.join(rdir, `${id}.json`);
+  const history = await readJsonSafe(file, []);
+  history.push(entry);
+  await fsp.writeFile(file, JSON.stringify(history, null, 2)).catch(() => {});
+  return history;
+}
+
+/// The real HTTP exchanges that back one finding: first the ones the harness
+/// measured itself (the finding's own evidence_data — baseline/attack, the
+/// identity pair, matrix probes, the oracle), each with its wire provenance;
+/// then, when the recording interceptor ran, the recorded flows on the same
+/// endpoint. This is the finding's proof as bytes, not as the agent's prose.
+async function findingTraffic(dir, findingId) {
+  const findings = await readJsonSafe(path.join(dir, 'findings.json'), []);
+  const f = findings.find((x) => x.id === findingId);
+  if (!f) return { error: 'finding not found', exchanges: [], flows: [] };
+  const ev = f.evidence_data || {};
+  const exchanges = [];
+  const push = (role, ex) => { if (ex && (ex.url || ex.body)) exchanges.push({ role, ...ex }); };
+  push('baseline', ev.baseline);
+  push('attack', ev.attack);
+  (ev.repeats || []).forEach((ex, i) => push(`repeat ${i + 1}`, ex));
+  push('as owner', ev.identity_a);
+  push('as other identity', ev.identity_b);
+  (ev.matrix || []).forEach((p) => push(`matrix · ${p.identity || '?'} (expect ${p.expect || '?'})`, p.exchange));
+  if (ev.oracle) { push('oracle · should-be-denied', ev.oracle.denied); push('oracle · control', ev.oracle.control); }
+  // Recorded flows whose path matches the finding's endpoint, newest first.
+  let ep = '';
+  try { ep = new URL(f.endpoint).pathname; } catch { ep = String(f.endpoint || '').replace(/^https?:\/\/[^/]+/, '') || f.endpoint; }
+  const text = await fsp.readFile(path.join(dir, 'flows.jsonl'), 'utf8').catch(() => '');
+  const flows = text.split('\n').filter(Boolean)
+    .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+    .filter((r) => r && ep && String(r.url || '').includes(ep))
+    .reverse().slice(0, 50);
+  return { finding: { id: f.id, title: f.title, endpoint: f.endpoint }, wire: ev.wire || null, exchanges, flows };
+}
+
+/// A stable identity for a finding across runs of the same target: its CWE (or,
+/// lacking one, a slug of its title) plus the endpoint's path. Query strings and
+/// object ids vary run to run, so they are dropped — the point is "the same bug",
+/// not "the same request".
+function findingKey(f) {
+  const cwe = String(f.cwe || '').trim().toUpperCase();
+  const base = cwe || String(f.title || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48);
+  let p = '';
+  try { p = new URL(f.endpoint).pathname; } catch { p = String(f.endpoint || '').replace(/^https?:\/\/[^/]+/, '').split('?')[0]; }
+  p = p.replace(/\/\d+(?=\/|$)/g, '/{id}').replace(/\/+$/, '') || '/';
+  return `${base}|${p}`;
+}
+
+const isReview = (f) => f.review_status === 'needs-review' || f.review_status === 'rejected';
+
+/// Compare one finished run to the most recent EARLIER run of the same target:
+/// which findings are new, which recur, and which were confirmed before and are
+/// now gone. Runs over whatever is already on disk — no model, no network.
+async function runRegression(dir, id) {
+  const norm = (t) => String(t || '').replace(/\/+$/, '').toLowerCase();
+  const [meta, status, findings] = await Promise.all([
+    readJsonSafe(path.join(dir, 'meta.json'), {}),
+    readJsonSafe(path.join(dir, 'status.json'), {}),
+    readJsonSafe(path.join(dir, 'findings.json'), []),
+  ]);
+  const target = norm(status.target || meta.target);
+  const ts = (id.match(/^ns-(\d+)-/) || [])[1] | 0;
+  if (!target) return { prev: null, status: {}, fixed: [] };
+  // The newest earlier run of the same target.
+  let ids = [];
+  try { ids = (await fsp.readdir(RUNS_DIR)).filter((d) => d.startsWith('ns-') && d !== id); } catch { /* none */ }
+  let prev = null;
+  for (const other of ids) {
+    const ots = (other.match(/^ns-(\d+)-/) || [])[1] | 0;
+    if (!ots || ots >= ts) continue;
+    const [om, os] = await Promise.all([
+      readJsonSafe(path.join(RUNS_DIR, other, 'meta.json'), {}),
+      readJsonSafe(path.join(RUNS_DIR, other, 'status.json'), {}),
+    ]);
+    if (norm(os.target || om.target) !== target) continue;
+    if (!prev || ots > prev.ts) prev = { id: other, ts: ots };
+  }
+  if (!prev) return { prev: null, status: {}, fixed: [] };
+  const prevFindings = await readJsonSafe(path.join(RUNS_DIR, prev.id, 'findings.json'), []);
+  const prevByKey = new Map();
+  for (const pf of prevFindings) {
+    const k = findingKey(pf);
+    if (!prevByKey.has(k)) prevByKey.set(k, pf);
+  }
+  const nowKeys = new Set(findings.map(findingKey));
+  // Per-finding verdict for the current run: recurring if the prior run had it.
+  const perFinding = {};
+  for (const f of findings) perFinding[f.id] = prevByKey.has(findingKey(f)) ? 'recurring' : 'new';
+  // Fixed: confirmed in the prior run, absent now.
+  const fixed = prevFindings
+    .filter((pf) => !isReview(pf) && !nowKeys.has(findingKey(pf)))
+    .map((pf) => ({ title: pf.title, severity: pf.severity, cwe: pf.cwe, endpoint: pf.endpoint }));
+  return { prev: { id: prev.id, ts: prev.ts, when: new Date(prev.ts * 1000).toISOString() }, status: perFinding, fixed };
 }
 
 function safeRunDir(id) {
@@ -1341,6 +1463,40 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { agent: created, raw: clean });
     }
 
+    // ---- custom lead from the operator's OWN agent markdown (verbatim) ----
+    if (req.method === 'POST' && p === '/api/leads/custom') {
+      const body = await readBody(req);
+      const title = (body.title || '').trim();
+      let md = (body.markdown || '').trim();
+      if (!md) return sendJson(res, 400, { error: 'paste the agent markdown (or a system prompt)' });
+      // Accept a bare system prompt too: wrap it into the minimal agent shape so
+      // it is a real, pinnable agent like every other lead.
+      if (!/^#\s+/m.test(md) || !/##\s*User Prompt/i.test(md) || !/##\s*System Prompt/i.test(md)) {
+        const name = title || 'Custom Lead';
+        md = `# ${name} Agent\n## User Prompt\nYou are testing **{target}**.\n**Recon Context:**\n{recon_json}\n\n${md}\n\n### Report\n\`\`\`\nFINDING:\n- Title: ...\n- Severity: ...\n- CWE: CWE-...\n- Endpoint: [URL]\n- Evidence: ...\n- Impact: ...\n- Remediation: ...\n\`\`\`\n## System Prompt\n${md}\n`;
+      }
+      const titleMatch = md.match(/^#\s+(.+?)\s*$/m);
+      const slug = `custom_${slugify(title || (titleMatch && titleMatch[1]) || 'lead')}`;
+      await fsp.writeFile(path.join(AGENTS_DIR, 'vulns', `${slug}.md`), md.trim() + '\n');
+      agentCache = null;
+      const { agents } = await loadAgents();
+      return sendJson(res, 200, { agent: agents.find((a) => a.id === slug), raw: md });
+    }
+
+    // ---- delete a custom lead (only the operator's own custom_* agents) ----
+    const delLead = p.match(/^\/api\/leads\/([^/]+)$/);
+    if (req.method === 'DELETE' && delLead) {
+      const id = decodeURIComponent(delLead[1]);
+      if (!/^custom_[a-z0-9_]+$/.test(id)) return sendJson(res, 400, { error: 'only custom leads can be removed' });
+      const file = path.join(AGENTS_DIR, 'vulns', `${id}.md`);
+      if (!file.startsWith(path.join(AGENTS_DIR, 'vulns') + path.sep) || !fs.existsSync(file)) {
+        return sendJson(res, 404, { error: 'custom lead not found' });
+      }
+      await fsp.rm(file, { force: true });
+      agentCache = null;
+      return sendJson(res, 200, { ok: true, removed: id });
+    }
+
     // ---- runs ----
     if (req.method === 'GET' && p === '/api/runs') {
       return sendJson(res, 200, await listRuns());
@@ -1577,9 +1733,44 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && m) {
       const dir = safeRunDir(decodeURIComponent(m[1]));
       if (!dir || !fs.existsSync(dir)) return sendJson(res, 404, { error: 'run not found' });
+      const body = await readBody(req).catch(() => ({}));
+      const only = typeof body.finding === 'string' && body.finding ? body.finding : null;
+      // Per-finding re-test asks the CLI for JSON and keeps a dated history so
+      // the operator can see a finding drift from reproduced to gone over time.
+      if (only) {
+        const out = await runCli(['poc', dir, '--only', only, '--json']);
+        if (out.code !== 0) return sendJson(res, 502, { error: out.buf.trim() || 're-test failed' });
+        let result = null;
+        try { result = (JSON.parse(lastJsonLine(out.buf)) || [])[0] || null; } catch { /* keep raw */ }
+        const entry = { at: Math.floor(Date.now() / 1000), ...(result || {}), raw: result ? undefined : out.buf.trim() };
+        const history = await appendRetest(dir, only, entry);
+        return sendJson(res, 200, { ok: true, result: entry, history });
+      }
       const out = await runCli(['poc', dir]);
       if (out.code !== 0) return sendJson(res, 502, { error: out.buf.trim() || 're-test failed' });
       return sendJson(res, 200, { ok: true, output: out.buf.trim() });
+    }
+    // ---- per-finding re-test history ----
+    m = p.match(/^\/api\/runs\/([^/]+)\/retests\/([^/]+)$/);
+    if (req.method === 'GET' && m) {
+      const dir = safeRunDir(decodeURIComponent(m[1]));
+      if (!dir || !fs.existsSync(dir)) return sendJson(res, 404, { error: 'run not found' });
+      return sendJson(res, 200, { history: await readRetests(dir, decodeURIComponent(m[2])) });
+    }
+    // ---- regression vs the previous run of the same target ----
+    m = p.match(/^\/api\/runs\/([^/]+)\/regression$/);
+    if (req.method === 'GET' && m) {
+      const id = decodeURIComponent(m[1]);
+      const dir = safeRunDir(id);
+      if (!dir || !fs.existsSync(dir)) return sendJson(res, 404, { error: 'run not found' });
+      return sendJson(res, 200, await runRegression(dir, id));
+    }
+    // ---- recorded traffic that backs one finding ----
+    m = p.match(/^\/api\/runs\/([^/]+)\/findings\/([^/]+)\/traffic$/);
+    if (req.method === 'GET' && m) {
+      const dir = safeRunDir(decodeURIComponent(m[1]));
+      if (!dir || !fs.existsSync(dir)) return sendJson(res, 404, { error: 'run not found' });
+      return sendJson(res, 200, await findingTraffic(dir, decodeURIComponent(m[2])));
     }
 
     // ---- report rebuild (generate/refresh the PDF for a finished run) ----
@@ -1620,7 +1811,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && p === '/api/meta') {
-      return sendJson(res, 200, { version: "4.2.4", binary: BIN, root: ROOT });
+      return sendJson(res, 200, { version: "4.3.0", binary: BIN, root: ROOT });
     }
 
     // ---- providers / API keys (in-memory only, never persisted) ----
@@ -1654,7 +1845,7 @@ const server = http.createServer(async (req, res) => {
 loadPersistedJobs();
 
 server.listen(PORT, () => {
-  console.log(`NeuroSploit v4.2.4 web console → http://localhost:${PORT}`);
+  console.log(`NeuroSploit v4.3.0 web console → http://localhost:${PORT}`);
   console.log(`  binary : ${BIN || '(not found — build neurosploit-rs first)'}`);
   console.log(`  agents : ${AGENTS_DIR}`);
   console.log(`  runs   : ${RUNS_DIR}`);
