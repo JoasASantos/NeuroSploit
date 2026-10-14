@@ -19,6 +19,27 @@
 
 ---
 
+## What is NeuroSploit?
+
+**NeuroSploit is an autonomous penetration-testing tool.** You point it at a
+target; it does the security assessment on its own and hands you a report —
+recon, exploitation, chaining findings into real impact, and validation, with no
+human driving each step.
+
+The key idea: **the harness is the pentester, not the model.** Instead of asking
+one LLM to "hack this", a Rust engine runs the methodology — it picks the right
+specialist agents for what it finds, runs them in parallel, re-sends every claim
+over the wire to confirm it's real, and has a second model check each finding
+before it's reported. The LLMs are the hands; the harness is the discipline that
+keeps them honest. That's why it finds more and invents less than running a model
+directly.
+
+It's **CLI-first** (with a web console and a TUI), **open source (MIT)**, and runs
+on **your own API keys or a local subscription** — nothing about your targets
+leaves your machine unless you send it.
+
+---
+
 Give NeuroSploit a **URL, a source repo, a running app, or a host/IP**. A Rust
 harness (`tokio`) drives a **pool of LLMs** — via **API key** or local
 **subscription** (Claude Code / Codex / Gemini / Grok) — and runs the whole
