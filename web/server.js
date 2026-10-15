@@ -263,6 +263,20 @@ async function materializeCreds(body, jobId) {
   return file;
 }
 
+// An imported API collection (Postman/OpenAPI/HAR). The UI either uploads the
+// file content (collectionData) or points at a path already on disk
+// (collectionPath). Uploaded content is written to a temp file so the CLI's
+// --collection flag can read it.
+async function materializeCollection(body, jobId) {
+  if (body.collectionPath) return body.collectionPath; // path on disk wins
+  if (!body.collectionData) return undefined;
+  const dir = path.join(os.tmpdir(), 'neurosploit-web');
+  await fsp.mkdir(dir, { recursive: true });
+  const file = path.join(dir, `${jobId}.collection.json`);
+  await fsp.writeFile(file, body.collectionData);
+  return file;
+}
+
 // ---------------------------------------------------------------------------
 // Agent library — read agents_md/{vulns,ai,infra,code,chains,recon,meta}/*.md
 // and classify each into a lead category the UI can group + toggle.
@@ -1022,6 +1036,7 @@ function buildArgs(body) {
   if (body.subscription) args.push('--subscription');
   if (body.mcp) args.push('--mcp');
   if (body.creds) args.push('--creds', body.creds);
+  if (body.collectionPath) args.push('--collection', body.collectionPath);
   if (body.focus) args.push('--focus', body.focus);
   if (body.objective) args.push('--objective', body.objective);
   if (body.outOfScope) args.push('--out-of-scope', body.outOfScope);
@@ -1060,7 +1075,8 @@ async function startJob(body) {
   const id = crypto.randomUUID();
   const credsPath = await materializeCreds(body, id);
   const scopePath = await materializeScope(body, id);
-  const args = buildArgs({ ...body, creds: credsPath, scopePath });
+  const collectionPath = await materializeCollection(body, id);
+  const args = buildArgs({ ...body, creds: credsPath, scopePath, collectionPath });
   const job = new Job(id, BIN, args, body.repo || body.target || '', body.name || '');
   job.pinnedAgents = body.agents || [];
   jobs.set(id, job);
@@ -1170,6 +1186,7 @@ function buildReplScript(body) {
   if (body.objective) lines.push(`/objective ${body.objective}`);
   if (body.outOfScope) lines.push(`/scope-out ${body.outOfScope}`);
   if (body.creds) lines.push(`/creds ${body.creds}`);
+  if (body.collectionPath) lines.push(`/collection ${body.collectionPath}`);
   if (body.research) lines.push(`/research on`);
   // Settings the wizard collects that are NOT already applied as launch flags
   // (authArgs) or the scope file. Emitted via the REPL's own commands so a web
@@ -1200,7 +1217,8 @@ async function startJobViaRepl(body) {
   if (!BIN) throw new Error('neurosploit binary not found — run `cargo build --release` in neurosploit-rs/');
   const id = crypto.randomUUID();
   const credsPath = await materializeCreds(body, id);
-  const script = buildReplScript({ ...body, creds: credsPath });
+  const collectionPath = await materializeCollection(body, id);
+  const script = buildReplScript({ ...body, creds: credsPath, collectionPath });
   const scopePath = await materializeScope(body, id);
   const auth = authArgs({ ...body, scopePath });
   const job = new Job(id, BIN, auth, body.repo || body.target || '', body.name || '');

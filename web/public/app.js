@@ -28,6 +28,8 @@ const state = {
   providers: [],
   auth: { header: '', roles: [] },
   credsPath: '',
+  collectionPath: '',
+  collectionData: '',
   // Engagement authorization: the grant, plus settings that may only narrow it.
   authz: { capability: '', inScope: '', environment: 'production', policyProfile: 'web', transport: '', oobDomain: '', oobHttp: '', oobDns: '', sms: '' },
   keys: [],
@@ -627,6 +629,8 @@ async function startExploitation() {
     auth: state.auth.header || undefined,
     roles: state.auth.roles.length ? state.auth.roles : undefined,
     creds: state.credsPath || undefined,
+    collectionPath: state.collectionPath || undefined,
+    collectionData: state.collectionData || undefined,
     capability: state.authz.capability || undefined,
     inScope: state.authz.inScope.split(/[,;\s]+/).filter(Boolean),
     environment: state.authz.environment,
@@ -1725,6 +1729,7 @@ function openAuthModal() {
   show($('#authModal'), true);
   renderRoleList();
   $('#credsPath').value = state.credsPath;
+  $('#collectionPath').value = state.collectionPath;
   refreshKeyStatus();
 }
 ['#btnOpenAuth', '#btnOpenAuth2', '#btnOpenAuth3'].forEach((sel) => $(sel)?.addEventListener('click', openAuthModal));
@@ -1740,6 +1745,28 @@ $$('.modal-tab').forEach((tab) => tab.addEventListener('click', () => {
 $('#authHeader').addEventListener('input', (e) => { state.auth.header = e.target.value.trim(); });
 $('#authHeader').value = state.auth.header;
 $('#credsPath').addEventListener('input', (e) => { state.credsPath = e.target.value.trim(); });
+$('#collectionPath').addEventListener('input', (e) => { state.collectionPath = e.target.value.trim(); });
+$('#collectionFile').addEventListener('change', async (e) => {
+  const help = $('#collectionHelp');
+  const file = e.target.files && e.target.files[0];
+  if (!file) { state.collectionData = ''; return; }
+  try {
+    const text = await file.text();
+    let n = 0;
+    try {
+      const j = JSON.parse(text);
+      if (j.log && Array.isArray(j.log.entries)) n = j.log.entries.length;
+      else if (j.paths) n = Object.values(j.paths).reduce((a, o) => a + Object.keys(o || {}).length, 0);
+      else if (Array.isArray(j.item)) n = JSON.stringify(j.item).match(/"request"/g)?.length || 0;
+    } catch { throw new Error('not valid JSON (convert a YAML spec to JSON first)'); }
+    state.collectionData = text;
+    state.collectionPath = ''; // uploaded content wins over a path
+    help.textContent = `Loaded ${file.name}${n ? ` — ~${n} endpoint(s)` : ''}. Tested as known surface.`;
+  } catch (err) {
+    state.collectionData = '';
+    help.textContent = `Could not read collection: ${err.message}`;
+  }
+});
 
 $('#capToken').addEventListener('input', (e) => {
   state.authz.capability = e.target.value.trim();

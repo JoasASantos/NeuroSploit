@@ -637,6 +637,12 @@
           <input id="credsPath" type="text" placeholder="creds.yaml" />
           <div class="field-help">An explicit file on disk — see neurosploit-rs/creds.example.yaml for the schema (jwt/header/cookie/login/roles/ssh/windows/cloud).</div>
         </div>
+        <div class="field-group">
+          <label class="field-label" for="collectionFile">API collection (Postman / OpenAPI / Swagger / HAR)</label>
+          <input id="collectionFile" type="file" accept=".json,application/json,.har" />
+          <input id="collectionPath" type="text" placeholder="…or a path on disk: api.postman_collection.json" />
+          <div class="field-help" id="collectionHelp">Imports the endpoints as known surface — every route is tested directly, alongside recon. JSON only (convert YAML specs first).</div>
+        </div>
       </div>
     </div>
   </div>
