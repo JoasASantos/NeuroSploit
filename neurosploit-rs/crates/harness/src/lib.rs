@@ -17,6 +17,7 @@ pub mod budget;
 pub mod capability;
 pub mod chain;
 pub mod claims;
+pub mod collection;
 pub mod compliance;
 pub mod creds;
 pub mod cvss;

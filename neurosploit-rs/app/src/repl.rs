@@ -147,7 +147,7 @@ struct LiveCheckpoint {
 /// near-neighbour would break working commands. A test keeps the two in sync.
 pub(crate) const ACCEPTED: &[&str] = &[
     "/?", "/agents", "/attach", "/audit", "/auth", "/burp", "/cap", "/capability", "/chain", "/changed", "/clear", "/config",
-    "/context", "/continue", "/creds", "/diff", "/exclude", "/exit", "/expand", "/feed",
+    "/collection", "/import-api", "/context", "/continue", "/creds", "/diff", "/exclude", "/exit", "/expand", "/feed",
     "/pocs", "/poc", "/evidence", "/artifacts", "/finding", "/findings", "/focus", "/forget", "/full", "/go", "/goal", "/graph", "/guardrail", "/guardrails", "/help",
     "/history", "/idle", "/inscope", "/instructions", "/integration", "/integrations", "/key", "/log",
     "/authorize", "/grant", "/inscope-set", "/scope-file", "/scopefile", "/import-scope", "/authorization", "/authz", "/program", "/logs", "/mcp", "/memory", "/model", "/models", "/objective", "/objectives", "/observe",
@@ -162,7 +162,7 @@ pub(crate) const ACCEPTED: &[&str] = &[
 /// All slash-commands, for Tab completion.
 const COMMANDS: &[&str] = &[
     "/help", "/onboard", "/show", "/config", "/providers", "/model", "/key", "/sub", "/target",
-    "/scope-file",     "/authorization", "/class",     "/repo", "/auth", "/creds", "/focus", "/objective", "/scope-out", "/attach", "/context", "/mcp", "/offline",
+    "/scope-file",     "/authorization", "/class",     "/repo", "/auth", "/creds", "/collection", "/focus", "/objective", "/scope-out", "/attach", "/context", "/mcp", "/offline",
     "/class", "/research", "/quick", "/economy", "/eco", "/sandbox", "/votes", "/chain", "/recon", "/tempmail", "/timeout", "/proxy", "/burp", "/ua", "/agents", "/only", "/theme", "/clear", "/run", "/stop", "/pause", "/continue", "/runs", "/results", "/report",
     "/status", "/logs", "/diff", "/retest", "/validate", "/finding", "/pocs", "/expand", "/integrations",
     "/memory", "/forget", "/graph", "/inscope", "/observe", "/guardrail", "/policy",
@@ -285,6 +285,8 @@ struct Session {
     /// Named identities for multi-role access-control testing (name, header line).
     roles: Vec<(String, String)>,
     creds: Option<String>,
+    /// Imported API collection (Postman/OpenAPI/HAR) path — tested as surface.
+    collection: Option<String>,
     instructions: Option<String>,
     /// Engagement objective / rules-of-engagement context (why + what matters).
     objective: Option<String>,
@@ -349,6 +351,7 @@ impl Default for Session {
             auth: None,
             roles: Vec::new(),
             creds: None,
+            collection: None,
             instructions: None,
             objective: None,
             authorization: None,
@@ -853,6 +856,18 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
                 if arg.is_empty() { println!("  creds file: {}", s.creds.clone().unwrap_or_else(|| "(none) — set with /creds <file.yaml>".into())); }
                 else if arg == "clear" { s.creds = None; println!("  creds cleared"); }
                 else { s.creds = Some(arg.to_string()); println!("  creds file: {arg}"); }
+            }
+            "/collection" | "/import-api" => {
+                if arg.is_empty() {
+                    println!("  api collection: {}", s.collection.clone().unwrap_or_else(|| "(none) — import with /collection <file> (Postman/OpenAPI/HAR, JSON)".into()));
+                } else if arg == "clear" {
+                    s.collection = None; println!("  api collection cleared");
+                } else {
+                    match harness::collection::parse_file(arg) {
+                        Ok(eps) => { s.collection = Some(arg.to_string()); println!("  api collection: imported {} endpoint(s) from {arg} — tested as known surface", eps.len()); }
+                        Err(e) => println!("  \x1b[33m⚠ {e}\x1b[0m"),
+                    }
+                }
             }
             "/focus" | "/instructions" => {
                 if arg == "clear" { s.instructions = None; println!("  focus cleared"); continue; }
@@ -1858,6 +1873,7 @@ async fn run(base: &Path, s: &Session, history: &mut Vec<RunRecord>) {
     if let M::Grey { repo, .. } = &m {
         cfg.repo = Some(repo.clone());
     }
+    cfg.api_collection = s.collection.clone();
     crate::apply_creds(&mut cfg, s.creds.as_deref()).await;
 
     let mode = match &m { M::Grey { .. } => "greybox", M::White(_) => "white-box", M::Black(_) => "black-box" };
@@ -1938,6 +1954,7 @@ async fn start_background(base: &Path, s: &Session, reader: &mut Reader,
     cfg.pinned = s.pinned.clone();
     apply_session_budget(&mut cfg, s);
     if matches!(mode_e, crate::Mode::Grey) { cfg.repo = s.repo.clone(); }
+    cfg.api_collection = s.collection.clone();
     crate::apply_creds(&mut cfg, s.creds.as_deref()).await;
     crate::subscription_preflight(&cfg).await; // warn early if the CLI isn't logged in
 
@@ -2324,6 +2341,8 @@ struct Snapshot {
     repo: Option<String>,
     auth: Option<String>,
     creds: Option<String>,
+    #[serde(default)]
+    collection: Option<String>,
     instructions: Option<String>,
     #[serde(default)]
     objective: Option<String>,
@@ -2346,6 +2365,7 @@ fn save_session(s: &Session) {
         models: s.models.clone(), subscription: s.subscription, mcp: s.mcp,
         vote_n: s.vote_n, max_agents: s.max_agents, target: s.target.clone(),
         repo: s.repo.clone(), auth: s.auth.clone(), creds: s.creds.clone(),
+        collection: s.collection.clone(),
         instructions: s.instructions.clone(),
         objective: s.objective.clone(), out_of_scope: s.out_of_scope.clone(),
         scope_in: s.policy.hard.iter().map(|p| p.as_text()).collect(),
@@ -2363,7 +2383,7 @@ fn load_session(s: &mut Session) -> bool {
     if snap.vote_n > 0 { s.vote_n = snap.vote_n; }
     s.max_agents = snap.max_agents;
     s.target = snap.target; s.repo = snap.repo; s.auth = snap.auth;
-    s.creds = snap.creds; s.instructions = snap.instructions;
+    s.creds = snap.creds; s.collection = snap.collection; s.instructions = snap.instructions;
     s.objective = snap.objective; s.out_of_scope = snap.out_of_scope;
     if let Some(soft) = snap.soft { s.policy.soft = soft; }
     for t in snap.scope_in { s.policy.allow(&t); }
@@ -2639,6 +2659,7 @@ fn show(s: &Session) {
     println!("  │  repo     : {}", s.repo.clone().unwrap_or_else(|| "(none)".into()));
     println!("  │  auth     : {}", s.auth.clone().unwrap_or_else(|| "(none)".into()));
     println!("  │  creds    : {}", s.creds.clone().unwrap_or_else(|| "(none)".into()));
+    println!("  │  collection: {}", s.collection.clone().unwrap_or_else(|| "(none — /collection to import Postman/OpenAPI/HAR)".into()));
     println!("  │  proxy    : {}", s.proxy.clone().unwrap_or_else(|| "(none — /proxy for Burp/ZAP)".into()));
     println!("  │  user-agent: {}", s.user_agent.clone().unwrap_or_else(|| "NeuroSploit (default)".into()));
     println!("  │  focus    : {}", s.instructions.clone().unwrap_or_else(|| "(none — tests everything)".into()));
@@ -2703,6 +2724,7 @@ fn help() {
     h("/repo <path|url>",   "source repo (greybox) OR skill/n8n file/folder to audit (skills scope)");
     h("/auth <value>",      "auth header (Bearer/cookie/key). Roles: /auth admin <hdr> · /auth user <hdr>");
     h("/creds <file.yaml>", "creds: jwt/header/cookie/login + ssh/windows + aws/gcp/azure + roles");
+    h("/collection <file>", "import an API collection (Postman/OpenAPI/HAR, JSON) as known surface to test");
     h("/focus <text>",      "steer the tests (or just type the instruction)");
     h("/objective <text>",  "engagement goal/context — shapes what agents prioritise & count as impact");
     h("/scope-out <text>",  "out-of-scope exclusions — host-shaped entries become ENFORCED denials");

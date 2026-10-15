@@ -303,6 +303,11 @@ pub struct RunConfig {
     /// gets the full run.
     #[serde(default)]
     pub budget: crate::budget::Budget,
+    /// Path to an API collection (Postman / OpenAPI / HAR, JSON) whose endpoints
+    /// are imported as known in-scope surface and injected into every agent so
+    /// they are tested directly, in addition to what recon discovers.
+    #[serde(default)]
+    pub api_collection: Option<String>,
 }
 
 fn default_vote() -> usize {
@@ -363,6 +368,7 @@ impl RunConfig {
             authz_matrix: None,
             creds_file: None,
             neo4j: None,
+            api_collection: None,
         }
     }
 }

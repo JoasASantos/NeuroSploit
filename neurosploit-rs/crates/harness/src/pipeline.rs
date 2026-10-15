@@ -176,6 +176,14 @@ fn operator_directives(cfg: &RunConfig) -> String {
     if let Some(auth) = cfg.auth.as_deref().filter(|x| !x.trim().is_empty()) {
         s.push_str(&format!("AUTHENTICATION — test as an authenticated user; send this with each request: {auth}\n"));
     }
+    // Operator-supplied API collection (Postman/OpenAPI/HAR): inject the known
+    // endpoints as surface to test directly. Parse errors are reported once at
+    // launch (see the CLI), so render silently here.
+    if let Some(col) = cfg.api_collection.as_deref().filter(|x| !x.trim().is_empty()) {
+        if let Ok(eps) = crate::collection::parse_file(col) {
+            s.push_str(&crate::collection::render_block(&eps, 200));
+        }
+    }
     // What the deterministic engine needs in order to confirm a class. Agents
     // hold the target *now*; asking for a baseline/attack pair or a marker
     // after the run is asking for something that no longer exists.

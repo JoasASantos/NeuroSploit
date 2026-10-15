@@ -91,6 +91,11 @@ struct Cli {
     /// Falls back to NEO4J_URI; credentials only via NEO4J_USER / NEO4J_PASSWORD.
     #[arg(long = "neo4j", global = true)]
     neo4j: Option<String>,
+    /// Import an API collection (Postman / OpenAPI / Swagger / HAR, JSON) as
+    /// known in-scope surface: its endpoints are injected into every agent and
+    /// tested directly, alongside what recon discovers.
+    #[arg(long = "collection", global = true)]
+    collection: Option<String>,
     /// Decision backend for the calibrated System One layer:
     /// typesafe (hosted API, needs TYPESAFE_API_KEY) or laya (local, free,
     /// open-source — downloads the model on first use and keeps evidence on the
@@ -924,6 +929,7 @@ async fn main() -> anyhow::Result<()> {
             cfg.authz_matrix = cli.authz_matrix.clone();
             cfg.creds_file = creds.clone();
             cfg.neo4j = cli.neo4j.clone();
+            apply_collection(&mut cfg, cli.collection.as_deref())?;
             if !models.is_empty() {
                 cfg.models = models;
             }
@@ -970,6 +976,7 @@ async fn main() -> anyhow::Result<()> {
             cfg.instructions = focus;
             cfg.pinned = parse_only(&only);
             cfg.research = research;
+            apply_collection(&mut cfg, cli.collection.as_deref())?;
             if quick { apply_quick(&mut cfg); }
             if !models.is_empty() {
                 cfg.models = models;
@@ -1047,6 +1054,7 @@ async fn main() -> anyhow::Result<()> {
             cfg.verbose = verbose;
             cfg.instructions = focus;
             cfg.auth = auth;
+            apply_collection(&mut cfg, cli.collection.as_deref())?;
             if !models.is_empty() { cfg.models = models; }
             let out = run_mode(&base, cfg, false, Mode::Ai).await?;
             print_findings(&out);
@@ -2237,6 +2245,18 @@ fn apply_quick(cfg: &mut RunConfig) {
     cfg.max_agents = 6;
     cfg.budget = Budget::with_mode(Mode::Eco);
     println!("  \x1b[2mquick: economy preset — 1 voter, 1 chain round, light recon, ≤6 agents, eco budget\x1b[0m");
+}
+
+/// Validate and attach an imported API collection (Postman/OpenAPI/HAR) so a
+/// bad file or format fails on the command line, not mid-run, and the operator
+/// sees how many endpoints were seeded.
+fn apply_collection(cfg: &mut RunConfig, path: Option<&str>) -> anyhow::Result<()> {
+    let Some(path) = path.filter(|p| !p.trim().is_empty()) else { return Ok(()) };
+    let eps = harness::collection::parse_file(path)
+        .map_err(|e| anyhow::anyhow!("--collection {path}: {e}"))?;
+    println!("  \x1b[2mcollection: imported {} endpoint(s) from {} — tested as known surface\x1b[0m", eps.len(), path);
+    cfg.api_collection = Some(path.to_string());
+    Ok(())
 }
 
 /// Egress route, out-of-band channel and inbound SMS.
