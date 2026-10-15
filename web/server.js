@@ -102,7 +102,7 @@ const PORT = Number(process.env.NEUROSPLOIT_WEB_PORT || process.env.PORT || 4173
 
 const PROVIDERS = [
   { key: 'anthropic', label: 'Anthropic Claude', kind: 'cli', envKey: 'ANTHROPIC_API_KEY',
-    models: ['claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-fable-5-1', 'claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5'] },
+    models: ['claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-fable-5-1', 'claude-opus-4-8', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5'] },
   { key: 'openai', label: 'OpenAI (ChatGPT)', kind: 'cli', envKey: 'OPENAI_API_KEY',
     models: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2', 'gpt-5.1', 'gpt-5.1-codex', 'o4'] },
   { key: 'xai', label: 'xAI Grok', kind: 'cli', envKey: 'XAI_API_KEY',

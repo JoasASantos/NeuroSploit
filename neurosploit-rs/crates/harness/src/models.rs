@@ -23,7 +23,7 @@ pub struct Provider {
 pub fn providers() -> Vec<Provider> {
     vec![
         Provider { key: "anthropic", label: "Anthropic Claude", base_url: "https://api.anthropic.com/v1", env_key: "ANTHROPIC_API_KEY", kind: "cli",
-            models: vec!["claude-opus-5-5", "claude-mythos-5-1", "claude-opus-5", "claude-sonnet-5", "claude-fable-5-1", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"] },
+            models: vec!["claude-opus-5-5", "claude-mythos-5-1", "claude-opus-5", "claude-sonnet-5", "claude-fable-5-1", "claude-opus-4-8", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"] },
         Provider { key: "openai", label: "OpenAI (ChatGPT)", base_url: "https://api.openai.com/v1", env_key: "OPENAI_API_KEY", kind: "cli",
             models: vec!["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2", "gpt-5.1", "gpt-5.1-codex", "o4"] },
         Provider { key: "xai", label: "xAI Grok", base_url: "https://api.x.ai/v1", env_key: "XAI_API_KEY", kind: "cli",
@@ -450,7 +450,15 @@ impl ChatClient {
         cmd.arg("-p").arg("--model").arg(model)
             .arg("--output-format").arg("stream-json").arg("--verbose")
             .arg("--dangerously-skip-permissions")
-            .env("IS_SANDBOX", "1");
+            .env("IS_SANDBOX", "1")
+            // Subscription mode means the `claude` CLI must authenticate with the
+            // user's logged-in session. A stray ANTHROPIC_API_KEY in the inherited
+            // environment (e.g. an invalid/stale key saved in the web console)
+            // makes the CLI switch to API-key billing and fail with
+            // "Invalid API key · Fix external API key". Strip it so the CLI
+            // always uses the subscription login here.
+            .env_remove("ANTHROPIC_API_KEY")
+            .env_remove("ANTHROPIC_AUTH_TOKEN");
         if let Some(mcp) = mcp_config {
             cmd.arg("--mcp-config").arg(mcp);
         }
@@ -545,7 +553,11 @@ impl ChatClient {
     ) -> Result<String> {
         let mut cmd = Command::new("codex");
         cmd.arg("exec").arg("--json").arg("--model").arg(model)
-            .arg("--dangerously-bypass-approvals-and-sandbox");
+            .arg("--dangerously-bypass-approvals-and-sandbox")
+            // Subscription mode uses the ChatGPT/Codex login; a stray
+            // OPENAI_API_KEY in the environment makes codex bill the API key
+            // instead. Strip it so the subscription login is used here.
+            .env_remove("OPENAI_API_KEY");
         if let Some(mcp) = mcp_config {
             for (name, cmdline, args) in mcp_servers_from(mcp) {
                 cmd.arg("-c").arg(format!("mcp_servers.{name}.command={cmdline}"));
