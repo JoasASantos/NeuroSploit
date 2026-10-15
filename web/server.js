@@ -921,18 +921,26 @@ function ingestLine(job, rawLine) {
   const low = line.toLowerCase();
   job.push({ type: 'log', line });
 
+  // The REPL/CLI decorates every streamed line with a leading glyph + spaces
+  // ("  · ", "  ✗ ", "  🧪 testing ", …). Machine markers (finding_json:,
+  // "exploit <name> via … → N candidate(s)") therefore don't start at column 0,
+  // so strip the decoration before matching — otherwise live findings and the
+  // per-agent progress never reach the UI even though the run is producing them.
+  const norm = line.replace(/^\s*[^\w/{(]*\s*/u, '').replace(/^testing\s+/i, '');
+  const lown = norm.toLowerCase();
+
   if (low.includes('paused by operator')) job.phase = 'paused (operator)';
   else if (low.includes('resumed by operator') || low.includes('▶ resumed')) job.phase = 'running';
   else if (low.includes('token/quota exhausted') || low.includes('run is paused')) job.phase = 'paused (quota)';
   else if (low.includes('authentication failed') || low.includes('circuit breaker')) job.phase = 'paused (auth)';
-  else if (low.startsWith('recon') || low.startsWith('ai-recon') || low.includes('recon round') || low.startsWith('probe:')) job.phase = 'recon';
+  else if (lown.startsWith('recon') || lown.startsWith('ai-recon') || low.includes('recon round') || lown.startsWith('probe:')) job.phase = 'recon';
   else if (low.includes('selected') && low.includes('agent')) {
     job.phase = 'planning';
     const n = line.split(/\s+/).map(Number).find((x) => Number.isFinite(x));
     if (n) job.agents = n;
-  } else if (low.startsWith('exploit') || low.startsWith('test ') || low.includes('launching agent')) job.phase = 'exploiting';
-  else if (low.startsWith('vote') || low.includes('validating')) job.phase = 'validating';
-  else if (low.startsWith('chain')) job.phase = 'chaining';
+  } else if (lown.startsWith('exploit') || lown.startsWith('test ') || low.includes('launching agent')) job.phase = 'exploiting';
+  else if (lown.startsWith('vote') || low.includes('validating')) job.phase = 'validating';
+  else if (lown.startsWith('chain')) job.phase = 'chaining';
   else if (low.includes('phase complete') || low.includes('validated finding(s)')) {
     job.phase = 'complete';
     // A REPL-backed job's child process doesn't exit when the engagement
@@ -941,9 +949,9 @@ function ingestLine(job, rawLine) {
     if (job.repl && !job.done) { job.done = true; job.push({ type: 'done', exitCode: 0 }); }
   }
 
-  if (/candidate\(s\)/.test(low) && /^(exploit |test |analyze |review )/.test(low)) job.agentsDone += 1;
+  if (/candidate\(s\)/.test(lown) && /^(exploit|test|analyze|review)\b/.test(lown)) job.agentsDone += 1;
 
-  const fj = line.match(/^finding_json:\s*(.+)$/);
+  const fj = norm.match(/^finding_json:\s*(.+)$/);
   if (fj) {
     try {
       const finding = JSON.parse(fj[1]);
@@ -975,14 +983,14 @@ function ingestLine(job, rawLine) {
     job.push({ type: 'agent', name: nm, status: 'running' });
   }
   // Done: "exploit|analyze|test <name> via <model> → N candidate(s)"
-  const done = line.match(/^\s*(?:exploit|analyze|test)\s+(\S+)\s+via\s+.+?(?:→|->)\s*(\d+)\s+candidate/i);
+  const done = norm.match(/^(?:exploit|analyze|test|review)\s+(\S+)\s+via\s+.+?(?:→|->)\s*(\d+)\s+candidate/i);
   if (done) {
     const nm = done[1]; const n = Number(done[2]) || 0;
     job.agentStatus[nm] = { ...(job.agentStatus[nm] || {}), status: 'done', found: n };
     job.push({ type: 'agent', name: nm, status: 'done', found: n });
   }
   // Failed: "<verb> <name> failed: ..."
-  const failed = line.match(/^\s*(?:exploit|analyze|test|chain)\s+(\S+)\s+failed/i);
+  const failed = norm.match(/^(?:exploit|analyze|test|chain|review)\s+(\S+)\s+failed/i);
   if (failed) {
     const nm = failed[1];
     job.agentStatus[nm] = { ...(job.agentStatus[nm] || {}), status: 'failed' };
