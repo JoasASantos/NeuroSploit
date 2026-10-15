@@ -1566,6 +1566,20 @@ async function resumeFromSidebar(run) {
   renderSidebar();
 }
 
+// Map a sidebar run (keyed by run-id) to the live harness job that owns it.
+// The server keys jobs by UUID and records each job's runId once the CLI prints
+// it, so match on that. Returns the job UUID, or null when no live job exists.
+async function resolveJobId(run) {
+  if (run.jobId) return run.jobId;
+  try {
+    const jobs = await api('/api/exploit');
+    const live = jobs.find((j) => !j.done && (j.runId === run.id || j.id === run.id));
+    if (live) return live.id;
+    const any = jobs.find((j) => j.runId === run.id || j.id === run.id);
+    return any ? any.id : null;
+  } catch { return null; }
+}
+
 function openRun(run) {
   state.currentDetailId = run.id;
   if (run.state === 'running' && state.currentJob && run.id === state.currentJob.runId) {
@@ -1575,11 +1589,19 @@ function openRun(run) {
   }
   // A running job we're not already attached to (e.g. opened in another tab, or
   // just started): reconnect its live stream instead of showing a static detail.
-  if (run.state === 'running' && (run.jobId || run.id)) {
-    const jid = run.jobId || run.id;
-    localStorage.setItem(ACTIVE_JOB_KEY, jid);
-    attachLiveJob(jid, run.target, run.name, []);
-    renderSidebar();
+  // The sidebar run is keyed by its run-id (ns-…), but the live job is keyed by
+  // its own UUID — so resolve the run-id to the owning job before attaching,
+  // otherwise /api/exploit/<run-id> 404s and the activity log stays empty.
+  if (run.state === 'running') {
+    resolveJobId(run).then((jid) => {
+      if (!jid) { // no live job (server restarted): fall back to static detail
+        show($('#wizardView'), false); show($('#liveView'), false); show($('#dashView'), false); show($('#detailView'), true);
+        loadDetail(run.id); renderSidebar(); return;
+      }
+      localStorage.setItem(ACTIVE_JOB_KEY, jid);
+      attachLiveJob(jid, run.target, run.name, []);
+      renderSidebar();
+    });
     return;
   }
   if (run.state === 'interrupted') {
