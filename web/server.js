@@ -121,8 +121,11 @@ const PROVIDERS = [
     models: ['mistral-large-latest', 'codestral-latest'] },
   { key: 'qwen', label: 'Qwen (DashScope)', kind: 'api', envKey: 'DASHSCOPE_API_KEY',
     models: ['qwen3.8-max', 'qwen3.8-omni-flash', 'qwen-max', 'qwen2.5-coder-32b-instruct', 'qwq-plus'] },
+  // Z.ai GLM: always needs a ZAI_API_KEY (so kind:'api' keeps the key field),
+  // but with the subscription toggle on it runs agentically through the Claude
+  // Code CLI pointed at Z.ai's Anthropic-compatible endpoint (devpack/cline).
   { key: 'zai', label: 'Z.ai (GLM)', kind: 'api', envKey: 'ZAI_API_KEY',
-    models: ['glm-5.3', 'glm-5.3-flashx', 'glm-4.6'] },
+    models: ['glm-5.3', 'glm-5.2', 'glm-5.1', 'glm-5.3-flashx', 'glm-4.6'] },
   { key: 'groq', label: 'Groq', kind: 'api', envKey: 'GROQ_API_KEY',
     models: ['llama-3.3-70b-versatile', 'qwen-2.5-coder-32b'] },
   { key: 'together', label: 'Together AI', kind: 'api', envKey: 'TOGETHER_API_KEY',
@@ -163,7 +166,8 @@ function keyProbe(provider, key) {
     case 'moonshot': return { url: 'https://api.moonshot.ai/v1/models', headers: bearer };
     case 'qwen': return { url: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models', headers: bearer };
     case 'nvidia_nim': return { url: 'https://integrate.api.nvidia.com/v1/models', headers: bearer };
-    default: return null; // opencode, nous, zai, litellm, azure, ollama, llamacpp — not auto-verifiable here
+    case 'zai': return { url: 'https://api.z.ai/api/paas/v4/models', headers: bearer };
+    default: return null; // opencode, nous, litellm, azure, ollama, llamacpp — not auto-verifiable here
   }
 }
 

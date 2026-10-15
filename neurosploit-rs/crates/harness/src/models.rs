@@ -39,8 +39,13 @@ pub fn providers() -> Vec<Provider> {
         Provider { key: "qwen", label: "Qwen (DashScope)", base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", env_key: "DASHSCOPE_API_KEY", kind: "api",
             models: vec!["qwen3.8-max", "qwen3.8-omni-flash", "qwen-max", "qwen2.5-coder-32b-instruct", "qwq-plus"] },
         // Z.ai (Zhipu / GLM). OpenAI-compatible open platform endpoint.
-        Provider { key: "zai", label: "Z.ai (GLM)", base_url: "https://api.z.ai/api/paas/v4", env_key: "ZAI_API_KEY", kind: "api",
-            models: vec!["glm-5.3", "glm-5.3-flashx", "glm-4.6"] },
+        // Z.ai GLM. `kind: "cli"` so a run can drive GLM agentically through the
+        // Claude Code CLI using Z.ai's Anthropic-compatible endpoint (the Z.ai
+        // devpack "cline"/"zcode" integration) — the base URL + auth token are
+        // injected for the `claude` binary in chat_claude_stream. The plain HTTP
+        // API path (api.z.ai/api/paas/v4, OpenAI-compatible) still works too.
+        Provider { key: "zai", label: "Z.ai (GLM)", base_url: "https://api.z.ai/api/paas/v4", env_key: "ZAI_API_KEY", kind: "cli",
+            models: vec!["glm-5.3", "glm-5.2", "glm-5.1", "glm-5.3-flashx", "glm-4.6"] },
         Provider { key: "groq", label: "Groq", base_url: "https://api.groq.com/openai/v1", env_key: "GROQ_API_KEY", kind: "api",
             models: vec!["llama-3.3-70b-versatile", "qwen-2.5-coder-32b"] },
         Provider { key: "together", label: "Together AI", base_url: "https://api.together.xyz/v1", env_key: "TOGETHER_API_KEY", kind: "api",
@@ -298,7 +303,7 @@ impl ChatClient {
         // Claude Code can stream structured events (tools, commands, files) which
         // we surface live as a categorized activity feed, attributed to `label`.
         if bin == "claude" {
-            return self.chat_claude_stream(label, model, &prompt, mcp_config, progress).await;
+            return self.chat_claude_stream(label, provider, model, &prompt, mcp_config, progress).await;
         }
         // Codex exec streams JSONL events (`--json`): commands it runs, agent
         // messages, file changes, token usage. Surface them live so recon and
@@ -441,6 +446,7 @@ impl ChatClient {
     async fn chat_claude_stream(
         &self,
         label: &str,
+        provider: &str,
         model: &str,
         prompt: &str,
         mcp_config: Option<&str>,
@@ -450,15 +456,28 @@ impl ChatClient {
         cmd.arg("-p").arg("--model").arg(model)
             .arg("--output-format").arg("stream-json").arg("--verbose")
             .arg("--dangerously-skip-permissions")
-            .env("IS_SANDBOX", "1")
+            .env("IS_SANDBOX", "1");
+        if provider == "zai" {
+            // Z.ai GLM via the Claude Code CLI (devpack / cline / zcode): point
+            // the CLI at Z.ai's Anthropic-compatible endpoint and authenticate
+            // with the Z.ai key, so `claude --model glm-5.3` drives GLM.
+            let token = std::env::var("ZAI_API_KEY").unwrap_or_default();
+            if token.trim().is_empty() {
+                return Err(anyhow!("Z.ai GLM via CLI needs ZAI_API_KEY (get a key at https://z.ai, see https://docs.z.ai/devpack/tool/cline)"));
+            }
+            cmd.env("ANTHROPIC_BASE_URL", zai_anthropic_base_url())
+                .env("ANTHROPIC_AUTH_TOKEN", token)
+                .env_remove("ANTHROPIC_API_KEY");
+        } else {
             // Subscription mode means the `claude` CLI must authenticate with the
             // user's logged-in session. A stray ANTHROPIC_API_KEY in the inherited
             // environment (e.g. an invalid/stale key saved in the web console)
             // makes the CLI switch to API-key billing and fail with
             // "Invalid API key · Fix external API key". Strip it so the CLI
             // always uses the subscription login here.
-            .env_remove("ANTHROPIC_API_KEY")
-            .env_remove("ANTHROPIC_AUTH_TOKEN");
+            cmd.env_remove("ANTHROPIC_API_KEY")
+                .env_remove("ANTHROPIC_AUTH_TOKEN");
+        }
         if let Some(mcp) = mcp_config {
             cmd.arg("--mcp-config").arg(mcp);
         }
@@ -720,6 +739,11 @@ fn mcp_servers_from(path: &str) -> Vec<(String, String, String)> {
 pub fn cli_binary_for(provider: &str) -> Option<&'static str> {
     match provider {
         "anthropic" => Some("claude"),
+        // Z.ai GLM runs through the Claude Code CLI pointed at Z.ai's
+        // Anthropic-compatible endpoint (the Z.ai devpack "cline"/"zcode" setup):
+        // chat_claude_stream injects ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN
+        // from ZAI_API_KEY for this provider.
+        "zai" => Some("claude"),
         "openai" => Some("codex"),
         "xai" => Some("grok"),
         "gemini" => Some("gemini"),
@@ -727,6 +751,14 @@ pub fn cli_binary_for(provider: &str) -> Option<&'static str> {
         "nous" => Some("hermes"),
         _ => None,
     }
+}
+
+/// Z.ai's Anthropic-compatible base URL for driving GLM through the Claude Code
+/// CLI (Z.ai devpack / cline / zcode). Overridable for self-hosted gateways.
+pub fn zai_anthropic_base_url() -> String {
+    std::env::var("ZAI_ANTHROPIC_BASE_URL")
+        .or_else(|_| std::env::var("ZAI_CODING_BASE_URL"))
+        .unwrap_or_else(|_| "https://api.z.ai/api/anthropic".to_string())
 }
 
 /// Is `name` an executable found on PATH?
@@ -757,6 +789,14 @@ pub enum LoginStatus {
 pub async fn cli_login_status(provider: &str) -> LoginStatus {
     let Some(bin) = cli_binary_for(provider) else { return LoginStatus::NotInstalled };
     if !binary_in_path(bin) { return LoginStatus::NotInstalled; }
+    // Z.ai GLM runs through the `claude` binary but authenticates with a Z.ai
+    // key, not the Claude login — so a trivial `claude` probe here would check
+    // the wrong credential. It's usable iff the binary exists and ZAI_API_KEY
+    // is set.
+    if provider == "zai" {
+        let has_key = std::env::var("ZAI_API_KEY").map(|v| !v.trim().is_empty()).unwrap_or(false);
+        return if has_key { LoginStatus::LoggedIn } else { LoginStatus::NotLoggedIn };
+    }
     let mut cmd = Command::new(bin);
     // opencode/hermes take the probe prompt as an argv value, not stdin.
     let prompt_via_stdin = !matches!(bin, "opencode" | "hermes");
@@ -1036,6 +1076,19 @@ fn truncate(s: &str, n: usize) -> String {
 mod response_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn zai_glm_catalog_and_cli_backend() {
+        // GLM must be offered in all requested versions and be drivable through
+        // the Claude Code CLI (Z.ai devpack / cline / zcode).
+        let z = providers().into_iter().find(|p| p.key == "zai").expect("zai provider");
+        for m in ["glm-5.1", "glm-5.2", "glm-5.3"] {
+            assert!(z.models.contains(&m), "GLM {m} missing from catalog: {:?}", z.models);
+        }
+        assert_eq!(cli_binary_for("zai"), Some("claude"), "GLM runs via the claude CLI");
+        // GLM is reasoning-heavy → gets the larger token ceiling.
+        assert_eq!(max_tokens_for("glm-5.3"), 32768);
+    }
 
     #[test]
     fn anthropic_catalog_lists_opus_4_6() {
