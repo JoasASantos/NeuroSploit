@@ -1038,6 +1038,15 @@ mod response_tests {
     use serde_json::json;
 
     #[test]
+    fn anthropic_catalog_lists_opus_4_6() {
+        // Regression: the web console offers claude-opus-4-6, so the harness
+        // catalog must list it too — otherwise the model id is "corrected" to a
+        // sibling and the requested model never runs.
+        let a = providers().into_iter().find(|p| p.key == "anthropic").expect("anthropic provider");
+        assert!(a.models.contains(&"claude-opus-4-6"), "catalog: {:?}", a.models);
+    }
+
+    #[test]
     fn reasoning_models_get_more_headroom() {
         for m in ["glm-5.3", "glm-4.6", "deepseek-v4.1", "z-ai/glm-5.3", "qwen3.8-max", "kimi-k3", "o3", "gpt-6-sol"] {
             assert_eq!(max_tokens_for(m), 32768, "{m} should be treated as reasoning-heavy");

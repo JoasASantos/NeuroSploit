@@ -154,7 +154,7 @@ pub(crate) const ACCEPTED: &[&str] = &[
     "/observe-only", "/offline",
     "/onboard", "/only", "/oos", "/outofscope", "/policy", "/providers", "/proxy", "/class", "/classes", "/focus-class", "/compliance", "/comply", "/budget", "/research", "/quick", "/economy", "/eco", "/q", "/quit", "/recon",
     "/pause", "/repo", "/report", "/results", "/resume", "/retest", "/revalidate", "/run", "/runs",
-    "/scope", "/scope-out", "/show", "/status", "/stop", "/sub", "/subscription", "/target",
+    "/sandbox", "/scope", "/scope-out", "/show", "/status", "/stop", "/sub", "/subscription", "/target",
     "/temp-email", "/tempmail", "/theme", "/timeout", "/ua", "/url", "/useragent", "/validate",
     "/votes",
 ];

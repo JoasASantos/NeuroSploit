@@ -241,6 +241,20 @@ mod tests {
     }
 
     #[test]
+    fn a_known_model_variant_is_not_corrected_to_a_sibling() {
+        // Regression: claude-opus-4-6 and claude-opus-4-8 differ by one digit.
+        // Once 4-6 is a real catalog entry it must resolve to itself and never
+        // be silently rewritten to 4-8 (which is what starved the opus-4-6 run).
+        let catalog: Vec<String> = [
+            "anthropic:claude-opus-4-8",
+            "anthropic:claude-opus-4-6",
+            "anthropic:claude-sonnet-4-6",
+        ].iter().map(|s| s.to_string()).collect();
+        assert_eq!(nearest_model("anthropic:claude-opus-4-6", &catalog), None, "4-6 is exact");
+        assert_eq!(nearest_model("anthropic:claude-opus-4-8", &catalog), None, "4-8 is exact");
+    }
+
+    #[test]
     fn a_transposition_is_one_edit_away() {
         assert_eq!(distance("/staus", "/status"), 1, "a dropped character");
         assert_eq!(distance("/sttaus", "/status"), 1, "a swapped pair is one edit, not two");

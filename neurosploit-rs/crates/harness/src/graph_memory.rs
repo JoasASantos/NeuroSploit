@@ -2384,6 +2384,28 @@ mod tests {
     }
 
     #[test]
+    fn an_endpoint_method_is_not_treated_as_a_host() {
+        // Regression: "METHOD /path" endpoints must graph under the target host,
+        // never create a bogus HOST "get"/"post" node (which also split real
+        // findings off from the target and hid them from the report).
+        let finding = Finding {
+            id: "X1".into(),
+            title: "Search API exposes internals".into(),
+            cwe: "CWE-200".into(),
+            severity: "Medium".into(),
+            endpoint: "GET /api/search?q=x".into(),
+            review_status: "confirmed".into(),
+            validated: true,
+            confidence: 0.9,
+            ..Default::default()
+        };
+        let b = build("https://www.evidelo.com.br", "r1", &[finding], None, None);
+        let dump = export_json(&b);
+        assert!(!dump.contains("\"get\""), "the HTTP method must not become a host node: {dump}");
+        assert!(dump.contains("evidelo.com.br"), "the finding must graph under the target host");
+    }
+
+    #[test]
     fn secrets_never_become_properties() {
         let mut x = f("F1", "SQLi dumps users", "CWE-89", "High", "https://app.test/search?q=1&token=SUPERSECRET", "admin password hash $2y$10$abc");
         x.secret = "P@ssw0rd-Real".into();
