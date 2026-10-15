@@ -179,9 +179,28 @@ fn u32_to_ipv4(v: u32) -> String {
     format!("{}.{}.{}.{}", v >> 24, (v >> 16) & 255, (v >> 8) & 255, v & 255)
 }
 
+/// Strip a leading HTTP method token from an endpoint string.
+///
+/// Agent endpoints are frequently written as "METHOD /path" or
+/// "METHOD https://host/path" (e.g. "GET /api/search"). Without stripping it,
+/// the method is mistaken for the host — a host-relative finding like
+/// "GET /api/search" resolves to host "get" and gets wrongly quarantined as
+/// out-of-scope or graphed as a bogus HOST node. Returns the input unchanged
+/// when it does not begin with a known method.
+pub fn strip_leading_method(endpoint: &str) -> &str {
+    let s = endpoint.trim_start();
+    if let Some((first, rest)) = s.split_once(char::is_whitespace) {
+        const METHODS: [&str; 9] = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"];
+        if METHODS.contains(&first.to_ascii_uppercase().as_str()) {
+            return rest.trim_start();
+        }
+    }
+    s
+}
+
 /// Host of a URL or bare authority, lowercased, without port or userinfo.
 pub fn host_of(url: &str) -> String {
-    let s = url.trim().to_lowercase();
+    let s = strip_leading_method(url).to_lowercase();
     let s = s.split_once("://").map(|(_, r)| r).unwrap_or(&s);
     let s = s.split(['/', '?', '#']).next().unwrap_or(s);
     let s = s.rsplit_once('@').map(|(_, h)| h).unwrap_or(s);
@@ -751,6 +770,33 @@ mod tests {
         let mut p = ScopePolicy::for_target("https://app.example.com/login");
         p.soft.max_requests_per_minute = 0; // rate guard tested separately
         p
+    }
+
+    #[test]
+    fn host_of_strips_a_leading_http_method() {
+        // "METHOD /path" endpoints (how agents usually report them) must not
+        // resolve the method as the host — the path is host-relative, so the
+        // host is empty and the finding stays in scope.
+        assert_eq!(host_of("GET /api/search?q=x"), "");
+        assert_eq!(host_of("POST /api/auth/login"), "");
+        assert_eq!(host_of("get /admin"), "");
+        // Method + absolute URL still yields the real host.
+        assert_eq!(host_of("GET https://www.evidelo.com.br/api/x"), "evidelo.com.br");
+        // A bare host or URL is unchanged.
+        assert_eq!(host_of("https://app.example.com/a"), "app.example.com");
+        assert_eq!(host_of("app.example.com:8443"), "app.example.com");
+    }
+
+    #[test]
+    fn host_relative_findings_are_kept_in_scope() {
+        let p = policy();
+        let f = |ep: &str| Finding { endpoint: ep.to_string(), ..Default::default() };
+        let (kept, out) = p.audit_findings(vec![
+            f("GET /api/search?q=x"),
+            f("POST /api/auth/login"),
+        ]);
+        assert_eq!(kept.len(), 2, "host-relative findings must not be quarantined");
+        assert!(out.is_empty());
     }
 
     #[test]

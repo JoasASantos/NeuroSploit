@@ -626,7 +626,9 @@ pub fn project_findings(b: &mut GraphBatch, target: &str, run: &str, findings: &
         let conf = f.confidence.clamp(0.0, 1.0).max(if st == Status::Confirmed { 0.8 } else { 0.3 });
         let attack = f.evidence_data.as_ref().and_then(|e| e.attack.as_ref().or(e.identity_b.as_ref()));
         let url = if !f.endpoint.trim().is_empty() {
-            f.endpoint.trim().to_string()
+            // Endpoints are often "METHOD /path" — drop the method so it isn't
+            // mistaken for the host (which created bogus "get"/"post" HOST nodes).
+            crate::scope::strip_leading_method(&f.endpoint).to_string()
         } else if let Some(a) = attack {
             a.url.clone()
         } else {
