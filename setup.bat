@@ -11,7 +11,7 @@ REM   Env (optional): NEUROSPLOIT_REF, NEUROSPLOIT_DIR, NEUROSPLOIT_BUILD=1,
 REM                   NEUROSPLOIT_NO_DEPS=1, NEUROSPLOIT_RUN=1
 setlocal
 echo.
-echo   NeuroSploit installer (Windows) v4.3.0
+echo   NeuroSploit installer (Windows) v4.3.1
 echo   --------------------------------------
 
 where powershell >nul 2>&1

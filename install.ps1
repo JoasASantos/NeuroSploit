@@ -14,7 +14,7 @@ function Ok ($m) { Write-Host "  + $m" -ForegroundColor Green }
 function Warn($m){ Write-Host "  ! $m" -ForegroundColor Yellow }
 
 Write-Host ""
-Write-Host "  NeuroSploit installer (Windows) — v4.3.0" -ForegroundColor Cyan
+Write-Host "  NeuroSploit installer (Windows) — v4.3.1" -ForegroundColor Cyan
 
 # arch → asset arch (only x64 prebuilt today; arm64 falls back to source)
 $rawArch = $env:PROCESSOR_ARCHITECTURE
@@ -29,7 +29,7 @@ $ref  = $env:NEUROSPLOIT_REF
 if (-not $ref) {
   try { $ref = (Invoke-RestMethod "https://api.github.com/repos/$slug/releases/latest").tag_name } catch { }
 }
-if (-not $ref) { $ref = "v4.3.0" }
+if (-not $ref) { $ref = "v4.3.1" }
 Say "Release: $ref"
 
 New-Item -ItemType Directory -Force -Path $dir | Out-Null

@@ -1,4 +1,4 @@
-# NeuroSploit — Tutorial & User Guide (v4.3.0)
+# NeuroSploit — Tutorial & User Guide (v4.3.1)
 
 A complete, hands-on guide to installing, configuring and running NeuroSploit —
 the autonomous, multi-model penetration-testing harness.
@@ -106,7 +106,7 @@ Agents **degrade gracefully**: if `rustscan` is absent they use `nmap`; if neith
 ### Verify
 
 ```bash
-neurosploit --version          # neurosploit 4.3.0
+neurosploit --version          # neurosploit 4.3.1
 neurosploit agents             # {"vulns":255,...,"ai":30,...,"total":480}
 neurosploit models             # all providers & models
 ```
@@ -121,7 +121,7 @@ You pick **per run**. They're independent.
 
 Absolute first run, in order:
 
-1. **Install** (section 2) and confirm `neurosploit --version` prints `neurosploit 4.3.0`.
+1. **Install** (section 2) and confirm `neurosploit --version` prints `neurosploit 4.3.1`.
 2. **Give it a model to talk to** — one of:
    - **API key**: export the provider key, e.g. `export ANTHROPIC_API_KEY=sk-ant-...`
      (full list below), then run **without** `--subscription`; or
