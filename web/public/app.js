@@ -731,10 +731,24 @@ function attachLiveJob(id, target, name, pinnedAgents) {
 }
 
 function updatePinnedLine() {
-  const n = state.currentJob?.pinnedAgents?.length || 0;
-  $('#livePinned').textContent = n
-    ? `${n} pinned lead(s): ${state.currentJob.pinnedAgents.join(', ')}`
-    : 'auto — recon-driven agent selection (no leads pinned)';
+  const el = $('#livePinned');
+  const pins = state.currentJob?.pinnedAgents || [];
+  const n = pins.length;
+  if (!n) { el.textContent = 'auto — recon-driven agent selection (no leads pinned)'; el.title = ''; el.onclick = null; el.classList.remove('expandable'); return; }
+  // A /run with every lead pinned (hundreds of agents) must not flood the
+  // header and push the tabs off-screen — collapse to a count + preview the
+  // operator can click to expand.
+  const CAP = 6;
+  const render = (expanded) => {
+    const shown = expanded ? pins : pins.slice(0, CAP);
+    const more = (!expanded && n > CAP) ? ` … +${n - CAP} more` : '';
+    el.textContent = `${n} pinned lead(s): ${shown.join(', ')}${more}`;
+    el.classList.toggle('expandable', n > CAP);
+  };
+  let expanded = false;
+  render(false);
+  el.title = n > CAP ? 'Click to show all pinned leads' : pins.join(', ');
+  el.onclick = n > CAP ? () => { expanded = !expanded; render(expanded); el.title = expanded ? 'Click to collapse' : 'Click to show all pinned leads'; } : null;
 }
 
 // Resume a live view across a page reload: the server-side job outlives the

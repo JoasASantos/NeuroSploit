@@ -481,6 +481,13 @@ textarea { resize: vertical; min-height: 72px; }
 .run-head-main { min-width: 0; }
 .run-target { font-size: var(--fs-lg); font-weight: 600; font-family: var(--mono); overflow-wrap: anywhere; }
 .run-meta { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-1); font-size: var(--fs-sm); color: var(--text-dim); font-family: var(--mono); }
+/* Pinned-leads line: never let a /run with hundreds of pinned agents flood the
+   header and push the tabs below the fold. Collapsed by default (JS truncates
+   to a preview + count); clicking expands it, capped so it still scrolls. */
+#livePinned { display: block; line-height: 1.5; }
+#livePinned.expandable { cursor: pointer; }
+#livePinned.expandable:hover { color: var(--text); }
+#livePinned { max-height: 4.5em; overflow-y: auto; }
 #liveTargetSub:empty, #detailTargetSub:empty { display: none; }
 .run-facts { flex-wrap: wrap; font-size: var(--fs-xs); color: var(--text-faint); }
 .run-facts span:not(:last-child)::after { content: " ·"; }
