@@ -2655,7 +2655,11 @@ async function boot() {
   renderFindings('live');
   renderFindings('detail');
   const meta = await api('/api/meta').catch(() => ({}));
-  $('#sbVersion').textContent = `v${meta.version || '4.0.0'}`;
+  if (meta.version) {
+    // Version is authoritative from the CLI binary — keep badge + title in sync.
+    $('#sbVersion').textContent = `v${meta.version}`;
+    document.title = `NeuroSploit v${meta.version} — Console`;
+  }
   await Promise.all([loadAgents(), loadProviders()]);
   await refreshRuns();
   await tryResumeActiveJob(); // survive an F5 while watching a live run

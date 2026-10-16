@@ -19,7 +19,7 @@ const fs = require('node:fs');
 const fsp = fs.promises;
 const os = require('node:os');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const { StringDecoder } = require('node:string_decoder');
@@ -88,6 +88,21 @@ function findBinary() {
   return null;
 }
 const BIN = findBinary();
+
+// The console version is whatever the compiled CLI reports — never a hardcoded
+// string. This keeps the web UI and the CLI binary in lockstep: bump the crate,
+// rebuild, and the title/badge/UA all move together with no web edit. Falls back
+// to the package string only when the binary is missing.
+const FALLBACK_VERSION = '4.3.1';
+function binaryVersion() {
+  if (!BIN) return FALLBACK_VERSION;
+  try {
+    const out = execFileSync(BIN, ['--version'], { encoding: 'utf8', timeout: 5000 });
+    const m = out.match(/\b(\d+\.\d+\.\d+(?:[-+][\w.]+)?)\b/);
+    return (m && m[1]) || FALLBACK_VERSION;
+  } catch { return FALLBACK_VERSION; }
+}
+const VERSION = binaryVersion();
 
 const PORT = Number(process.env.NEUROSPLOIT_WEB_PORT || process.env.PORT || 4173);
 
@@ -1890,7 +1905,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && p === '/api/meta') {
-      return sendJson(res, 200, { version: "4.3.1", binary: BIN, root: ROOT });
+      return sendJson(res, 200, { version: VERSION, binary: BIN, root: ROOT });
     }
 
     // ---- providers / API keys (in-memory only, never persisted) ----
@@ -1936,7 +1951,7 @@ const server = http.createServer(async (req, res) => {
 loadPersistedJobs();
 
 server.listen(PORT, () => {
-  console.log(`NeuroSploit v4.3.1 web console → http://localhost:${PORT}`);
+  console.log(`NeuroSploit v${VERSION} web console → http://localhost:${PORT}`);
   console.log(`  binary : ${BIN || '(not found — build neurosploit-rs first)'}`);
   console.log(`  agents : ${AGENTS_DIR}`);
   console.log(`  runs   : ${RUNS_DIR}`);
