@@ -123,6 +123,7 @@ fn client() -> reqwest::Client {
         .timeout(Duration::from_secs(15))
         .danger_accept_invalid_certs(true)
         .redirect(redirect)
+        .default_headers(crate::pipeline::default_scan_headers())
         .user_agent(ua);
     if let Ok(p) = std::env::var("NEUROSPLOIT_PROXY") {
         if !p.trim().is_empty() {

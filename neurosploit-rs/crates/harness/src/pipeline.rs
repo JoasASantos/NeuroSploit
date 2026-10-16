@@ -404,9 +404,26 @@ fn tool_doctrine(mcp_on: bool) -> String {
 
 /// Default identifying User-Agent so target owners (and the operator) can tell
 /// traffic came from NeuroSploit — and so authorship of a scan is unambiguous.
+/// Deliberately a plain `NeuroSploit/<ver>` token: the verbose
+/// "authorized security assessment" comment made WAFs/CDNs block or fingerprint
+/// the scan outright (false negatives). Attribution still travels in the
+/// `X-NeuroSploit-Scan` header (see `default_scan_headers`), which every request
+/// carries, so the scan stays identifiable to defenders regardless of the UA.
 pub fn default_user_agent() -> String {
-    format!("NeuroSploit/{} (authorized security assessment; +https://github.com/JoasASantos/NeuroSploit)",
-        env!("CARGO_PKG_VERSION"))
+    format!("NeuroSploit/{}", env!("CARGO_PKG_VERSION"))
+}
+
+/// Headers stamped on every request the harness makes, so attribution lives in
+/// the HEADER (not just the UA) and survives a browser-UA switch:
+///   `Accept: */*` and `X-NeuroSploit-Scan: <ver>`.
+pub fn default_scan_headers() -> reqwest::header::HeaderMap {
+    use reqwest::header::{HeaderMap, HeaderValue, ACCEPT};
+    let mut h = HeaderMap::new();
+    h.insert(ACCEPT, HeaderValue::from_static("*/*"));
+    if let Ok(v) = HeaderValue::from_str(env!("CARGO_PKG_VERSION")) {
+        h.insert("X-NeuroSploit-Scan", v);
+    }
+    h
 }
 
 /// A realistic current-browser User-Agent. Use this when the identifying UA
@@ -428,7 +445,7 @@ fn ua_line() -> String {
     format!(
         "IDENTIFY & UA STRATEGY (attribution lives in the HEADER, not just the UA): add \
          `-H \"X-NeuroSploit-Scan: {ver}\"` to EVERY request — that is what keeps the scan attributable. \
-         For the User-Agent, start with `-A \"{ua}\"`. BUT: if the target sits behind a WAF/CDN \
+         For the User-Agent, start with the plain `-A \"{ua}\"`. BUT: if the target sits behind a WAF/CDN \
          (Cloudflare, Akamai, …) and the scanner UA gets blocked, challenged, rate-limited, or returns \
          DIFFERENT content than a browser would, SWITCH to a realistic browser UA `-A \"{browser}\"` — a \
          self-declaring scanner UA causes FALSE NEGATIVES, and the X-NeuroSploit-Scan header keeps you \
@@ -922,6 +939,7 @@ async fn authz_matrix_pass(cfg: &RunConfig, recon: &str, tx: &Sender<String>) ->
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
         .timeout(std::time::Duration::from_secs(30))
+        .default_headers(default_scan_headers())
         .user_agent(cfg.user_agent.clone().unwrap_or_else(default_user_agent))
         .build()
         .unwrap_or_default();
@@ -4674,6 +4692,7 @@ async fn enumerate_subdomains(cfg: &RunConfig, tx: &Sender<String>) -> String {
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
         .timeout(std::time::Duration::from_secs(30))
+        .default_headers(default_scan_headers())
         .user_agent(cfg.user_agent.clone().unwrap_or_else(|| default_user_agent()))
         .build().unwrap_or_default();
 
@@ -5383,5 +5402,23 @@ mod dedup_tests {
         assert_eq!(endpoint_key("GET https://h.test/ (and /Account/Register)"), "h.test");
         assert_eq!(endpoint_key("https://h.test/Account/Login?x=1"), "h.test/account/login");
         assert_eq!(endpoint_key("https://www.h.test/a/"), "h.test/a");
+    }
+
+    /// The default UA is a plain token — no "authorized security assessment"
+    /// comment that WAFs/CDNs block or fingerprint. Attribution moves to the
+    /// X-NeuroSploit-Scan header, carried on every request.
+    #[test]
+    fn the_default_user_agent_is_a_plain_token() {
+        let ua = default_user_agent();
+        assert!(ua.starts_with("NeuroSploit/"), "{ua}");
+        assert!(!ua.contains("authorized"), "verbose comment causes WAF false negatives: {ua}");
+        assert!(!ua.contains('('), "no parenthetical comment in the UA: {ua}");
+    }
+
+    #[test]
+    fn every_request_carries_the_scan_attribution_header() {
+        let h = default_scan_headers();
+        assert_eq!(h.get("X-NeuroSploit-Scan").unwrap(), env!("CARGO_PKG_VERSION"));
+        assert_eq!(h.get(reqwest::header::ACCEPT).unwrap(), "*/*");
     }
 }
