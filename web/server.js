@@ -227,6 +227,30 @@ function envOverrides() {
   return env;
 }
 
+async function cloudEnvOverrides(cloudProvider) {
+  if (!cloudProvider) return {};
+  const integs = await readConfig('integrations');
+  const cfg = (integs.find(i => i.id === cloudProvider) || {}).config || {};
+  const env = {};
+  if (cloudProvider === 'aws') {
+    if (cfg.accesskey) env.AWS_ACCESS_KEY_ID = cfg.accesskey;
+    if (cfg.secretkey) env.AWS_SECRET_ACCESS_KEY = cfg.secretkey;
+    if (cfg.region) env.AWS_DEFAULT_REGION = cfg.region;
+    if (cfg.profile) env.AWS_PROFILE = cfg.profile;
+    if (cfg.rolearn) env.AWS_ROLE_ARN = cfg.rolearn;
+  } else if (cloudProvider === 'gcp') {
+    if (cfg.serviceaccount) env.GOOGLE_APPLICATION_CREDENTIALS = cfg.serviceaccount;
+    if (cfg.project) env.GCP_PROJECT = cfg.project;
+    if (cfg.region) env.CLOUDSDK_COMPUTE_REGION = cfg.region;
+  } else if (cloudProvider === 'azure') {
+    if (cfg.tenantid) env.AZURE_TENANT_ID = cfg.tenantid;
+    if (cfg.clientid) env.AZURE_CLIENT_ID = cfg.clientid;
+    if (cfg.clientsecret) env.AZURE_CLIENT_SECRET = cfg.clientsecret;
+    if (cfg.subscriptionid) env.AZURE_SUBSCRIPTION_ID = cfg.subscriptionid;
+  }
+  return env;
+}
+
 /// Build a minimal creds.yaml-compatible file (see neurosploit-rs/creds.example.yaml)
 /// from a raw auth header and/or named roles, so the CLI's --creds flag can be
 /// used to carry web-entered auth material without a real file on disk.
@@ -1048,9 +1072,13 @@ function ingestLine(job, rawLine) {
 }
 
 function buildArgs(body) {
-  const mode = body.mode || 'run';
+  const rawMode = body.mode || 'run';
+  const mode = rawMode === 'cloud' ? 'host' : rawMode;
   const args = [mode];
-  if (mode === 'run' || mode === 'host' || mode === 'aitest') {
+  if (rawMode === 'cloud') {
+    args.push(body.target || 'localhost');
+    args.push('--cloud', body.target || 'aws');
+  } else if (mode === 'run' || mode === 'host' || mode === 'aitest') {
     args.push(body.target);
   } else if (mode === 'whitebox' || mode === 'skills') {
     args.push(body.repo || body.target);
@@ -1112,7 +1140,8 @@ async function startJob(body) {
   job.pinnedAgents = body.agents || [];
   jobs.set(id, job);
 
-  const child = spawn(BIN, args, { cwd: ROOT, env: { ...process.env, ...envOverrides() } });
+  const cloudEnv = body.cloudProvider ? await cloudEnvOverrides(body.cloudProvider) : {};
+  const child = spawn(BIN, args, { cwd: ROOT, env: { ...process.env, ...envOverrides(), ...cloudEnv } });
   job.child = child;
   let buf = '';
   const onData = (chunk) => {
@@ -2050,6 +2079,22 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'PUT' && p === '/api/config/settings') {
       const body = await readBody(req);
       await writeConfig('settings', body);
+      return sendJson(res, 200, body);
+    }
+
+    // ---- Config: vault ----
+    if (req.method === 'GET' && p === '/api/config/vault') return sendJson(res, 200, await readConfigObj('vault'));
+    if (req.method === 'PUT' && p === '/api/config/vault') {
+      const body = await readBody(req);
+      await writeConfig('vault', body);
+      return sendJson(res, 200, body);
+    }
+
+    // ---- Config: guardrails ----
+    if (req.method === 'GET' && p === '/api/config/guardrails') return sendJson(res, 200, await readConfigObj('guardrails'));
+    if (req.method === 'PUT' && p === '/api/config/guardrails') {
+      const body = await readBody(req);
+      await writeConfig('guardrails', body);
       return sendJson(res, 200, body);
     }
 

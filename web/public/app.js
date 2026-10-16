@@ -10,6 +10,7 @@ const MODE_LABELS = {
   greybox: { target: 'Target URL', help: 'The running application to exploit, alongside the source repo below.', showRepo: true, placeholder: 'https://target.example.com' },
   host: { target: 'Target host / IP', help: 'Runs Linux / Windows / Active Directory agents.', showRepo: false, placeholder: '10.0.0.10' },
   aitest: { target: 'AI endpoint URL', help: 'A live AI agent, LLM chat, or MCP endpoint (OWASP LLM Top 10).', showRepo: false, placeholder: 'https://target.example.com/chat' },
+  cloud: { target: 'Cloud account / project', help: 'Test a connected cloud environment — select from configured AWS, GCP, or Azure integrations.', showRepo: false, placeholder: 'aws / gcp / azure', showCloudPicker: true },
 };
 
 const STEP_COUNT = 5;
@@ -101,7 +102,7 @@ function clearFieldErrors() { $$('.field-error').forEach((el) => { el.textConten
 // view navigation
 // ---------------------------------------------------------------------------
 
-const ALL_VIEWS = ['dashView','wizardView','liveView','detailView','pentestsView','prreviewsView','issuesView','reposView','domainsView','networksView','integrationsView','settingsView'];
+const ALL_VIEWS = ['dashView','wizardView','liveView','detailView','pentestsView','prreviewsView','issuesView','reposView','domainsView','networksView','vaultView','guardrailsView','integrationsView','settingsView'];
 
 function switchView(viewName) {
   state.activeView = viewName;
@@ -112,7 +113,7 @@ function switchView(viewName) {
     btn.classList.toggle('active', btn.dataset.view === viewName);
   });
   const runHist = $('#sbRunHistory');
-  if (runHist) runHist.style.display = ['dash','wizard','live','detail'].includes(viewName) ? '' : 'none';
+  if (runHist) runHist.style.display = ['live','detail'].includes(viewName) ? '' : 'none';
   if (viewName === 'pentests') loadPentests();
   if (viewName === 'issues') loadIssues();
   if (viewName === 'repos') loadRepos();
@@ -121,6 +122,8 @@ function switchView(viewName) {
   if (viewName === 'integrations') loadIntegrations();
   if (viewName === 'settings') loadSettings();
   if (viewName === 'prreviews') loadPrReviews();
+  if (viewName === 'vault') loadVault();
+  if (viewName === 'guardrails') loadGuardrails();
   if (viewName === 'dash') renderDashboard();
 }
 
@@ -225,10 +228,38 @@ function selectMode(mode) {
   $('#targetHelp').textContent = cfg.help;
   $('#fieldTarget').placeholder = cfg.placeholder;
   show($('#fieldRepoGroup'), cfg.showRepo);
+  show($('#fieldCloudGroup'), !!cfg.showCloudPicker);
+  if (cfg.showCloudPicker) populateCloudPicker();
   updateWizardSummary();
 }
 $$('.mode-tile').forEach((tile) => tile.addEventListener('click', () => selectMode(tile.dataset.mode)));
 $('#fieldTarget').addEventListener('input', updateWizardSummary);
+
+async function populateCloudPicker() {
+  const sel = $('#fieldCloudProvider');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">Select a cloud provider…</option>';
+  try {
+    const integs = await api('/api/config/integrations');
+    const clouds = [
+      { id: 'aws', label: 'AWS' },
+      { id: 'gcp', label: 'GCP' },
+      { id: 'azure', label: 'Azure' },
+    ];
+    for (const c of clouds) {
+      const cfg = integs.find(i => i.id === c.id);
+      const on = cfg?.enabled;
+      sel.innerHTML += `<option value="${c.id}" ${on ? '' : 'disabled'}>${c.label}${on ? ' (connected)' : ' (not configured)'}</option>`;
+    }
+  } catch { /* keep empty */ }
+}
+$('#fieldCloudProvider')?.addEventListener('change', (e) => {
+  const v = e.target.value;
+  if (v) {
+    $('#fieldTarget').value = v;
+    updateWizardSummary();
+  }
+});
 
 // ---------------------------------------------------------------------------
 // agents / lead board (step 3)
@@ -659,6 +690,7 @@ async function startExploitation() {
     creds: state.credsPath || undefined,
     collectionPath: state.collectionPath || undefined,
     collectionData: state.collectionData || undefined,
+    cloudProvider: mode === 'cloud' ? ($('#fieldCloudProvider')?.value || target) : undefined,
     capability: state.authz.capability || undefined,
     inScope: state.authz.inScope.split(/[,;\s]+/).filter(Boolean),
     environment: state.authz.environment,
@@ -1642,7 +1674,8 @@ function openRun(run) {
   if (run.state === 'running') {
     resolveJobId(run).then((jid) => {
       if (!jid) { // no live job (server restarted): fall back to static detail
-        show($('#wizardView'), false); show($('#liveView'), false); show($('#dashView'), false); show($('#detailView'), true);
+        ALL_VIEWS.forEach(id => { const el = $(`#${id}`); if (el) el.hidden = true; });
+        show($('#detailView'), true);
         loadDetail(run.id); renderSidebar(); return;
       }
       localStorage.setItem(ACTIVE_JOB_KEY, jid);
@@ -1656,7 +1689,8 @@ function openRun(run) {
     resumeFromSidebar(run);
     return;
   }
-  show($('#wizardView'), false); show($('#liveView'), false); show($('#dashView'), false); show($('#detailView'), true);
+  ALL_VIEWS.forEach(id => { const el = $(`#${id}`); if (el) el.hidden = true; });
+  show($('#detailView'), true);
   loadDetail(run.id);
   renderSidebar();
 }
@@ -1761,7 +1795,8 @@ function openAuthModal() {
   $('#collectionPath').value = state.collectionPath;
   refreshKeyStatus();
 }
-['#btnOpenAuth', '#btnOpenAuth2', '#btnOpenAuth3'].forEach((sel) => $(sel)?.addEventListener('click', openAuthModal));
+$('#btnOpenAuth')?.addEventListener('click', () => switchView('vault'));
+['#btnOpenAuth2', '#btnOpenAuth3'].forEach((sel) => $(sel)?.addEventListener('click', openAuthModal));
 $('#btnCloseAuth').addEventListener('click', () => show($('#authModal'), false));
 $('#authModal').addEventListener('click', (e) => { if (e.target.id === 'authModal') show($('#authModal'), false); });
 
@@ -2226,7 +2261,7 @@ function termOpen(mode) {
 function termClose() { show($('#termDock'), false); }
 function termToggle() { $('#termDock').hidden ? termOpen() : termClose(); }
 
-$('#btnOpenRepl').addEventListener('click', () => termOpen());
+$('#btnOpenRepl')?.addEventListener('click', () => termOpen());
 $('#btnOpenTerm2').addEventListener('click', () => termOpen());
 $('#btnOpenTerm3').addEventListener('click', () => termOpen());
 $('#btnSendPromptTerm').addEventListener('click', () => termOpen('job'));
@@ -2644,12 +2679,14 @@ function showDashboard() {
 }
 // Sidebar nav items
 $$('.sb-nav-item').forEach(btn => {
+  if (!btn.dataset.view) return;
   btn.addEventListener('click', () => {
     if (btn.dataset.view === 'wizard') { leaveLiveJob(); clearInterval(state.detailPoll); }
     switchView(btn.dataset.view);
     if (window.matchMedia(NARROW).matches) setSidebar(false);
   });
 });
+$('#sbTerminal')?.addEventListener('click', () => termOpen());
 $('#btnDashRefresh')?.addEventListener('click', renderDashboard);
 $('#dashRange')?.addEventListener('change', renderDashboard);
 $('#runFilter')?.addEventListener('input', (e) => { state.runFilter = e.target.value; renderSidebar(); });
@@ -2680,6 +2717,7 @@ window.matchMedia(NARROW).addEventListener('change', (m) => { if (!m.matches) se
 
 async function boot() {
   applyTheme();
+  switchView('dash');
   selectMode('run');
   goToStep(0);
   renderCustomLeads();
@@ -2810,12 +2848,21 @@ function extrasPanelsHtml(uid) {
     <div data-x="todo"></div><div class="empty-state" data-x="todo-empty" hidden>Nothing pending — every chain is confirmed, or there is no multi-step path yet.</div>
   </div>
   <div class="run-tab-panel" data-tabpanel="graph" hidden>
-    <div class="panel-toolbar"><div class="chip-row" data-x="legend"></div><div class="topbar-spacer"></div>
-      <label class="toggle"><input type="checkbox" data-x="full" /> full graph</label></div>
-    <div class="gm-wrap" data-x="wrap"><div class="gm-stage" data-x="stage"></div>
-      <div class="gm-zoom"><button class="btn btn-sm" data-z="in">+</button><button class="btn btn-sm" data-z="out">−</button><button class="btn btn-sm" data-z="fit">⤢</button></div></div>
-    <div class="gm-detail" data-x="node" hidden></div>
-    <div class="empty-state" data-x="graph-empty" hidden>No attack graph yet — it is written at every graph checkpoint of a run, or press ↻ Graph on a finished run.</div>
+    <div class="graph-split">
+      <div class="graph-finding-list" data-x="gflist">
+        <div class="gfl-header">Attack Paths</div>
+        <button class="gfl-item active" data-gf="overview">Overview</button>
+      </div>
+      <div class="graph-main">
+        <div class="panel-toolbar"><div class="chip-row" data-x="legend"></div><div class="topbar-spacer"></div>
+          <label class="toggle"><input type="checkbox" data-x="full" /> full graph</label></div>
+        <div class="gm-finding-desc" data-x="fdesc" hidden></div>
+        <div class="gm-wrap" data-x="wrap"><div class="gm-stage" data-x="stage"></div>
+          <div class="gm-zoom"><button class="btn btn-sm" data-z="in">+</button><button class="btn btn-sm" data-z="out">−</button><button class="btn btn-sm" data-z="fit">⤢</button></div></div>
+        <div class="gm-detail" data-x="node" hidden></div>
+        <div class="empty-state" data-x="graph-empty" hidden>No attack graph yet — it is written at every graph checkpoint of a run, or press ↻ Graph on a finished run.</div>
+      </div>
+    </div>
   </div>
   <div class="run-tab-panel" data-tabpanel="traffic" hidden>
     <div class="panel-toolbar">
@@ -2902,7 +2949,7 @@ function extrasCounts(x) {
 async function extrasRefresh(x, extras, force) {
   if (!x) return;
   const id = x.getRunId();
-  if (x.lastId !== id) { x.lastId = id; x.graphData = null; x.view = { k: 1, tx: 20, ty: 20, sel: null }; }
+  if (x.lastId !== id) { x.lastId = id; x.graphData = null; x.view = { k: 1, tx: 20, ty: 20, sel: null, filterFinding: null }; }
   x.extras = extras || {};
   try { await extrasGraph(x, force); } catch { /* no graph yet */ }
   extrasCounts(x);
@@ -3055,16 +3102,42 @@ function gmName(n) {
   return p.title || p.name || p.category || p.path || p.type || p.address || n.key;
 }
 
+function renderGraphFindingList(x) {
+  const data = x.graphData?.graph;
+  const list = x.q('gflist');
+  if (!list || !data) return;
+  const findings = (data.nodes || []).filter(n => n.label === 'Finding');
+  findings.sort((a, b) => sevRank(a.props?.local_severity) - sevRank(b.props?.local_severity));
+  const sel = x.view.filterFinding || 'overview';
+  list.innerHTML = `<div class="gfl-header">Attack Paths</div>
+    <button class="gfl-item ${sel === 'overview' ? 'active' : ''}" data-gf="overview">Overview (${findings.length})</button>
+    ${findings.map(f => {
+      const sev = f.props?.local_severity || 'info';
+      return `<button class="gfl-item ${sel === f.key ? 'active' : ''}" data-gf="${esc(f.key)}" title="${esc(gmName(f))}">
+        <span class="gfl-sev sev ${sevClass(sev)}">${esc(sev.charAt(0).toUpperCase())}</span>
+        <span class="gfl-title">${esc(gmName(f))}</span>
+      </button>`;
+    }).join('')}`;
+  $$('[data-gf]', list).forEach(btn => btn.addEventListener('click', () => {
+    x.view.filterFinding = btn.dataset.gf === 'overview' ? null : btn.dataset.gf;
+    x.view.sel = null;
+    x.drawnSig = null;
+    renderGraphMemory(x);
+  }));
+}
+
 function renderGraphMemory(x) {
   const data = x.graphData?.graph;
   const stage = x.q('stage');
   const has = !!(data && (data.nodes || []).length);
   show(x.q('graph-empty'), !has);
   show(x.q('wrap'), has);
+  renderGraphFindingList(x);
   x.q('legend').innerHTML = [['asset', 'asset / host'], ['surface', 'service / endpoint'], ['weak', 'vulnerability / finding'], ['step', 'attack step'], ['cred', 'credential / identity'], ['impact', 'impact']]
     .map(([k, l]) => `<span class="gm-leg gk-${k}">${esc(l)}</span>`).join('') +
     '<span class="gm-leg-sep"></span><span class="gm-edge-leg es-confirmed">confirmed</span><span class="gm-edge-leg es-needs_validation">needs validation</span><span class="gm-edge-leg es-hypothesis">hypothesis</span>';
   if (!has) { stage.innerHTML = ''; return; }
+  const filterFid = x.view.filterFinding || null;
 
   const full = x.q('full').checked;
   const id = (n) => `${n.label}|${n.key}`;
@@ -3102,6 +3175,60 @@ function renderGraphMemory(x) {
       keep = new Set(nodes.map(id));
       edges = trav.filter((e) => keep.has(eid(e.from)) && keep.has(eid(e.to))).concat(virtual);
     }
+  }
+
+  // Per-finding filter: show only the selected finding's attack path
+  const descBox = x.q('fdesc');
+  if (filterFid) {
+    const fNode = data.nodes.find(n => n.label === 'Finding' && n.key === filterFid);
+    const fid = fNode ? id(fNode) : `Finding|${filterFid}`;
+    // Only keep edges directly involving this finding, then walk outward
+    // from connected non-Finding nodes (hosts, impacts, steps).
+    // Exclude edges connecting OTHER findings to shared hosts.
+    const findingEdges = edges.filter(e => eid(e.from) === fid || eid(e.to) === fid);
+    const reachable = new Set([fid]);
+    for (const e of findingEdges) { reachable.add(eid(e.from)); reachable.add(eid(e.to)); }
+    // Walk traversal edges from those seeds, but never bridge to other findings
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const e of edges) {
+        const from = eid(e.from), to = eid(e.to);
+        if (from === fid || to === fid) continue; // already handled
+        const fromIn = reachable.has(from), toIn = reachable.has(to);
+        if (!fromIn && !toIn) continue;
+        // Don't bridge to other finding nodes
+        if (fromIn && !toIn && e.to.label === 'Finding') continue;
+        if (toIn && !fromIn && e.from.label === 'Finding') continue;
+        if (fromIn && !toIn) { reachable.add(to); changed = true; }
+        if (toIn && !fromIn) { reachable.add(from); changed = true; }
+      }
+    }
+    nodes = nodes.filter(n => reachable.has(id(n)));
+    keep = new Set(nodes.map(id));
+    edges = edges.filter(e => keep.has(eid(e.from)) && keep.has(eid(e.to)));
+    if (fNode && descBox) {
+      const f = gmFinding(x, fNode.props?.finding_id);
+      const props = fNode.props || {};
+      descBox.innerHTML = `<div class="fd-header">
+        <span class="sev ${sevClass(props.local_severity || 'info')}">${esc(props.local_severity || 'info')}</span>
+        <span class="fd-title">${esc(gmName(fNode))}</span>
+      </div>
+      <div class="fd-body">${props.description ? `<p>${esc(props.description)}</p>` : ''}
+        ${props.category ? `<p><b>Category:</b> ${esc(props.category)}</p>` : ''}
+        ${props.cwe ? `<p><b>CWE:</b> ${esc(Array.isArray(props.cwe) ? props.cwe.join(', ') : props.cwe)}</p>` : ''}
+        ${props.stage ? `<p><b>Stage:</b> ${esc(props.stage)}</p>` : ''}
+      </div>
+      <div class="fd-meta">
+        ${props.status ? `<span>Status: ${esc(props.status)}</span>` : ''}
+        ${f ? '<button class="btn btn-sm" data-openfinding>Open finding details</button>' : ''}
+      </div>`;
+      show(descBox, true);
+      const openBtn = descBox.querySelector('[data-openfinding]');
+      if (openBtn && f) openBtn.addEventListener('click', () => openFindingModal(f.f, f.pocs, f.runId));
+    }
+  } else if (descBox) {
+    show(descBox, false);
   }
 
   // Columns by entity kind; a long column wraps into sub-columns.
@@ -3451,9 +3578,16 @@ async function loadIssues() {
     if (!data.length) { body.innerHTML = '<div class="empty-state">No findings across any engagement yet.</div>'; return; }
     const rows = data.map(f => {
       const sc = sevClass(f.severity);
-      return `<tr><td><span class="pill ${sc}">${esc(f.severity)}</span></td><td>${esc(f.title)}</td><td class="mono">${esc(f.target || '')}</td><td class="mono">${esc(f.run || '')}</td><td>${esc(f.status || 'open')}</td></tr>`;
+      return `<tr class="issue-row" data-run="${esc(f.run || '')}" data-title="${esc(f.title || '')}" data-cwe="${esc(f.cwe || '')}" style="cursor:pointer"><td><span class="sev ${sc}">${esc(f.severity)}</span></td><td>${esc(f.title)}</td><td class="mono">${esc(f.target || '')}</td><td class="mono">${esc(f.run || '')}</td><td>${esc(f.status || 'open')}</td></tr>`;
     }).join('');
     body.innerHTML = `<table class="data-table"><thead><tr><th>Severity</th><th>Title</th><th>Target</th><th>Run</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`;
+    $$('.issue-row', body).forEach(row => {
+      row.addEventListener('click', () => {
+        const runId = row.dataset.run;
+        if (!runId) return;
+        openContributorFinding(runId, row.dataset.title, row.dataset.cwe);
+      });
+    });
   } catch (e) { body.innerHTML = `<div class="empty-state">Failed to load: ${esc(e.message)}</div>`; }
 }
 
@@ -3478,10 +3612,11 @@ async function loadDomains() {
   try {
     const domains = await api('/api/config/domains');
     if (!domains.length) { body.innerHTML = '<div class="empty-state">No domains configured yet. Click <strong>+ Add Domain</strong> to add one.</div>'; return; }
+    const typeLabel = { web: 'Web', api: 'API', llm: 'LLM', mobile: 'Mobile', other: 'Other' };
     body.innerHTML = '<div class="config-grid">' + domains.map(d => `<div class="config-card">
       <div class="config-card-title">${esc(d.domain)}</div>
       <div class="config-card-desc">${esc(d.description || 'Target domain')}</div>
-      <div class="config-card-meta">${d.subdomains ? d.subdomains.length + ' subdomains' : 'No subdomains'} · ${esc(d.scope || 'in-scope')}</div>
+      <div class="config-card-meta">${esc(typeLabel[d.type] || d.type || 'Web')} · ${d.subdomains ? d.subdomains.length + ' subdomains' : 'No subdomains'} · ${esc(d.scope || 'in-scope')}</div>
       <div class="config-card-actions"><button class="btn btn-danger" onclick="deleteDomain('${esc(d.id)}')">Remove</button></div>
     </div>`).join('') + '</div>';
   } catch { body.innerHTML = '<div class="empty-state">No domains configured yet. Click <strong>+ Add Domain</strong> to add one.</div>'; }
@@ -3560,11 +3695,12 @@ async function loadSettings() {
         <div class="config-card-actions"><button class="btn btn-accent" onclick="saveSettings()">Save</button></div>
       </div>
       <div class="config-card">
-        <div class="config-card-title">MCP Server</div>
-        <div class="config-card-desc">Run NeuroSploit as an MCP server for Claude Code, Codex, Cursor, Windsurf and other MCP clients.</div>
-        <div class="config-card-meta" style="margin-top:var(--sp-2)"><code>neurosploit mcp</code><br/>Config: <code>{"command":"neurosploit","args":["mcp"]}</code></div>
+        <div class="config-card-title">LLM Provider Keys</div>
+        <div class="config-card-desc">API keys for the LLMs that run engagements. Kept in server memory only, never written to disk.</div>
+        <div class="config-card-actions"><button class="btn btn-accent" id="btnOpenProviderKeys">Config</button></div>
       </div>
     </div>`;
+    $('#btnOpenProviderKeys')?.addEventListener('click', () => openProviderKeysModal());
   } catch { body.innerHTML = '<div class="empty-state">Failed to load settings.</div>'; }
 }
 
@@ -3628,6 +3764,115 @@ function configureIntegration(id) {
   $('#integrationModal').dataset.integId = id;
   $('#integrationModal').hidden = false;
 }
+// ---------------------------------------------------------------------------
+// Vault page
+// ---------------------------------------------------------------------------
+
+function loadVault() {
+  const header = $('#vaultAuthHeader');
+  if (header) header.value = state.auth?.header || '';
+  const credsPath = $('#vaultCredsPath');
+  if (credsPath) credsPath.value = state.credsPath || '';
+  const collPath = $('#vaultCollectionPath');
+  if (collPath) collPath.value = state.collectionPath || '';
+  renderVaultRoles();
+}
+
+function renderVaultRoles() {
+  const list = $('#vaultRoleList');
+  if (!list) return;
+  if (!state.auth) state.auth = { header: '', roles: [] };
+  list.innerHTML = state.auth.roles.map((r, i) => `
+    <div class="role-row">
+      <input type="text" placeholder="Role name" value="${esc(r.name)}" data-ri="${i}" data-rf="name" />
+      <input type="text" placeholder="Auth header for this role" value="${esc(r.header)}" data-ri="${i}" data-rf="header" />
+      <button class="icon-btn" data-rdel="${i}">✕</button>
+    </div>
+  `).join('');
+  $$('input[data-ri]', list).forEach(inp => inp.addEventListener('change', () => {
+    state.auth.roles[Number(inp.dataset.ri)][inp.dataset.rf] = inp.value;
+  }));
+  $$('[data-rdel]', list).forEach(btn => btn.addEventListener('click', () => {
+    state.auth.roles.splice(Number(btn.dataset.rdel), 1);
+    renderVaultRoles();
+  }));
+}
+
+$('#btnVaultAddRole')?.addEventListener('click', () => {
+  if (!state.auth) state.auth = { header: '', roles: [] };
+  state.auth.roles.push({ name: '', header: '' });
+  renderVaultRoles();
+});
+
+$('#btnVaultSave')?.addEventListener('click', async () => {
+  state.auth.header = $('#vaultAuthHeader')?.value || '';
+  state.credsPath = $('#vaultCredsPath')?.value || '';
+  state.collectionPath = $('#vaultCollectionPath')?.value || '';
+  try {
+    await api('/api/config/vault', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ auth: state.auth, credsPath: state.credsPath, collectionPath: state.collectionPath }),
+    });
+    toast('Vault saved', 'ok');
+  } catch (e) { toast(`Failed: ${e.message}`, 'error'); }
+});
+
+// ---------------------------------------------------------------------------
+// Guardrails page
+// ---------------------------------------------------------------------------
+
+function loadGuardrails() {
+  api('/api/config/guardrails').then(cfg => {
+    if (!cfg) cfg = {};
+    $('#grCapToken').value = cfg.capToken || '';
+    $('#grInScope').value = cfg.inScope || '';
+    $('#grScopeHard').value = cfg.scopeHard || '';
+    $('#grScopeExclude').value = cfg.scopeExclude || '';
+    $('#grScopeObserve').value = cfg.scopeObserve || '';
+    $('#grDestructive').checked = !!cfg.destructive;
+    $('#grAccounts').checked = cfg.accounts !== false;
+    $('#grMaxAccounts').value = cfg.maxAccounts ?? 3;
+    $('#grRate').value = cfg.rate ?? 240;
+    $('#grForbidden').value = cfg.forbidden || '';
+    $('#grNotes').value = cfg.notes || '';
+    $('#grEnv').value = cfg.environment || 'production';
+    $('#grPolicy').value = cfg.policy || 'web';
+    $('#grTransport').value = cfg.transport || '';
+    $('#grOobDomain').value = cfg.oobDomain || '';
+    $('#grOobHttp').value = cfg.oobHttp || '';
+    $('#grOobDns').value = cfg.oobDns || '';
+    $('#grSms').value = cfg.sms || '';
+  }).catch(() => {});
+}
+
+$('#btnGuardrailsSave')?.addEventListener('click', async () => {
+  const data = {
+    capToken: $('#grCapToken')?.value || '',
+    inScope: $('#grInScope')?.value || '',
+    scopeHard: $('#grScopeHard')?.value || '',
+    scopeExclude: $('#grScopeExclude')?.value || '',
+    scopeObserve: $('#grScopeObserve')?.value || '',
+    destructive: $('#grDestructive')?.checked || false,
+    accounts: $('#grAccounts')?.checked !== false,
+    maxAccounts: Number($('#grMaxAccounts')?.value) || 3,
+    rate: Number($('#grRate')?.value) || 240,
+    forbidden: $('#grForbidden')?.value || '',
+    notes: $('#grNotes')?.value || '',
+    environment: $('#grEnv')?.value || 'production',
+    policy: $('#grPolicy')?.value || 'web',
+    transport: $('#grTransport')?.value || '',
+    oobDomain: $('#grOobDomain')?.value || '',
+    oobHttp: $('#grOobHttp')?.value || '',
+    oobDns: $('#grOobDns')?.value || '',
+    sms: $('#grSms')?.value || '',
+  };
+  try {
+    await api('/api/config/guardrails', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+    toast('Guardrails saved', 'ok');
+  } catch (e) { toast(`Failed: ${e.message}`, 'error'); }
+});
+
 async function saveSettings() {
   const data = {
     defaultModel: $('#settingModel')?.value || '',
@@ -3639,6 +3884,66 @@ async function saveSettings() {
   };
   try { await api('/api/config/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }); toast('Settings saved', 'ok'); }
   catch (e) { toast(`Failed: ${e.message}`, 'error'); }
+}
+
+async function openProviderKeysModal() {
+  if (!state.providers?.length) {
+    try { state.providers = await api('/api/providers'); } catch { state.providers = []; }
+  }
+  try { state.keys = await api('/api/keys'); } catch { state.keys = []; }
+  let existing = $('#providerKeysModal');
+  if (!existing) {
+    document.body.insertAdjacentHTML('beforeend', `<div class="modal-overlay" id="providerKeysModal" hidden>
+      <div class="modal" style="max-width:620px"><div class="modal-header"><h3>LLM Provider Keys</h3><span class="modal-sub">API keys for engagements. Kept in server memory only.</span><button class="modal-close" onclick="$('#providerKeysModal').hidden=true">✕</button></div>
+      <div class="modal-body" id="providerKeysModalBody" style="max-height:60vh;overflow-y:auto"></div>
+      <div class="modal-footer"><button class="btn btn-accent" onclick="$('#providerKeysModal').hidden=true">Done</button></div></div></div>`);
+    existing = $('#providerKeysModal');
+  }
+  const body = $('#providerKeysModalBody');
+  body.innerHTML = state.providers.map((p) => {
+    const set = state.keys.find((k) => k.provider === p.key)?.set;
+    return `
+      <div class="provider-row" data-prow="${esc(p.key)}">
+        <span class="dot ${set ? 'set' : ''}"></span>
+        <span class="p-name">${esc(p.label)}</span>
+        <span class="p-kind">${p.kind === 'cli' ? 'cli+api' : 'api only'}</span>
+        <input type="password" data-sprovider="${esc(p.key)}" placeholder="${set ? '•••••••• (set)' : 'paste API key'}" />
+        <button class="btn btn-sm" data-ssave="${esc(p.key)}">Save</button>
+        <span class="key-verify" data-sverify="${esc(p.key)}"></span>
+      </div>
+    `;
+  }).join('');
+  const doSave = async (btn) => {
+    const provider = btn.dataset.ssave;
+    const input = body.querySelector(`input[data-sprovider="${provider}"]`);
+    const vtag = body.querySelector(`[data-sverify="${provider}"]`);
+    const p = state.providers.find(x => x.key === provider);
+    const key = input.value.trim();
+    if (!key) return;
+    btn.disabled = true; btn.textContent = 'Saving…';
+    if (vtag) { vtag.className = 'key-verify checking'; vtag.textContent = '· verifying…'; }
+    try {
+      const r = await api('/api/keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, key }) });
+      input.value = '';
+      const v = r.verify || { ok: null, message: 'saved' };
+      if (vtag) {
+        vtag.className = `key-verify ${v.ok === true ? 'ok' : v.ok === false ? 'bad' : 'unknown'}`;
+        vtag.textContent = v.ok === true ? '✓ valid' : v.ok === false ? '✗ ' + v.message : '• ' + v.message;
+      }
+      toast(v.ok === true ? `${p?.label || provider}: key valid` : v.ok === false ? `${p?.label || provider}: ${v.message}` : `${p?.label || provider}: ${v.message}`, v.ok === false ? 'error' : 'ok');
+      state.keys = await api('/api/keys').catch(() => state.keys);
+      const dot = btn.closest('.provider-row')?.querySelector('.dot');
+      if (dot) dot.classList.add('set');
+      input.placeholder = '•••••••• (set)';
+    } catch (e) {
+      if (vtag) { vtag.className = 'key-verify bad'; vtag.textContent = '✗ ' + e.message; }
+    } finally { btn.disabled = false; btn.textContent = 'Save'; }
+  };
+  $$('[data-ssave]', body).forEach((btn) => btn.addEventListener('click', () => doSave(btn)));
+  $$('input[data-sprovider]', body).forEach((inp) => inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') body.querySelector(`[data-ssave="${inp.dataset.sprovider}"]`)?.click();
+  }));
+  existing.hidden = false;
 }
 
 // Add-item modals
@@ -3655,6 +3960,7 @@ $('#btnAddRepo')?.addEventListener('click', () => {
 $('#btnAddDomain')?.addEventListener('click', () => {
   $('#domainName').value = '';
   $('#domainDesc').value = '';
+  if ($('#domainType')) $('#domainType').value = 'web';
   if ($('#domainScope')) $('#domainScope').value = 'in-scope';
   openModal('#domainModal');
 });
@@ -3688,6 +3994,7 @@ $('#btnDomainSubmit')?.addEventListener('click', async () => {
   try {
     await api('/api/config/domains', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
       domain,
+      type: $('#domainType')?.value || 'web',
       description: $('#domainDesc')?.value?.trim() || '',
       scope: $('#domainScope')?.value || 'in-scope',
     })});

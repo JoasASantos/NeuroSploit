@@ -657,6 +657,7 @@ textarea { resize: vertical; min-height: 72px; }
 .modal-foot { display: flex; justify-content: flex-end; gap: var(--sp-2); padding: var(--sp-3) var(--sp-5); border-top: 1px solid var(--border); }
 .modal-head { display: flex; align-items: center; justify-content: space-between; padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--border); }
 .modal-head .title { font-size: var(--fs-lg); font-weight: 600; }
+.modal-sub { display: block; font-size: var(--fs-xs); font-weight: 400; color: var(--text-faint); margin-top: 2px; }
 .modal-tabs { display: flex; gap: var(--sp-1); padding: 0 var(--sp-5); border-bottom: 1px solid var(--border); }
 .modal-tab { padding: var(--sp-3) var(--sp-2); font-size: var(--fs-sm); font-weight: 500; color: var(--text-faint); border-bottom: 2px solid transparent; background: none; border-top: none; border-left: none; border-right: none; }
 .modal-tab.active { color: var(--text); border-bottom-color: var(--accent); }
@@ -667,18 +668,31 @@ textarea { resize: vertical; min-height: 72px; }
 .field-status.ok { color: var(--sev-low-fg); }
 .field-status.bad { color: var(--sev-critical-fg); }
 
-.provider-row { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) 0; border-bottom: 1px solid var(--border); }
+.provider-row { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); position: relative; }
 .provider-row:last-child { border-bottom: none; }
 .provider-row .p-name { flex: none; width: 150px; font-size: var(--fs-sm); font-weight: 500; }
 .provider-row .p-kind { flex: none; width: 74px; font-size: var(--fs-2xs); text-transform: uppercase; color: var(--text-faint); font-family: var(--mono); }
-.provider-row input { flex: 1; font-family: var(--mono); font-size: var(--fs-sm); }
+.provider-row .p-status { flex: 1; font-size: var(--fs-2xs); color: var(--text-faint); }
+.provider-row .p-status.configured { color: var(--sev-low-fg); font-weight: 600; }
 .provider-row .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border-strong); flex: none; }
 .provider-row .dot.set { background: var(--sev-low-fg); }
+.provider-row .btn-config { flex: none; }
 .key-verify { flex: none; font-size: var(--fs-2xs); font-weight: 700; min-width: 60px; }
 .key-verify.ok { color: var(--sev-low-fg); }
 .key-verify.bad { color: var(--sev-critical-fg); }
 .key-verify.unknown { color: var(--text-faint); font-weight: 500; }
 .key-verify.checking { color: var(--text-dim); font-weight: 500; }
+
+/* floating config popover for provider keys */
+.provider-popover { position: absolute; top: calc(100% + 4px); right: 0; z-index: var(--z-overlay); background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-md); box-shadow: 0 8px 24px rgba(0,0,0,.12); padding: var(--sp-4); min-width: 340px; max-width: 420px; }
+.provider-popover .pop-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-3); }
+.provider-popover .pop-title { font-size: var(--fs-base); font-weight: 600; }
+.provider-popover .pop-close { background: none; border: none; cursor: pointer; color: var(--text-dim); font-size: 16px; padding: 2px 6px; border-radius: var(--radius-xs); }
+.provider-popover .pop-close:hover { background: var(--surface-3); }
+.provider-popover .pop-body { display: flex; flex-direction: column; gap: var(--sp-3); }
+.provider-popover .pop-body input { font-family: var(--mono); font-size: var(--fs-sm); width: 100%; }
+.provider-popover .pop-actions { display: flex; gap: var(--sp-2); align-items: center; }
+.provider-popover .pop-verify { font-size: var(--fs-2xs); font-weight: 700; }
 
 /* ============================================================ Terminal dock
 
@@ -1103,3 +1117,21 @@ a.deliv-card:hover { border-color: var(--accent); }
 .panel-toolbar .search-wrap { flex: 1 1 260px; max-width: 420px; }
 .gm-detail header { justify-content: flex-start; }
 .gm-detail header [data-close] { margin-left: auto; }
+
+/* graph split: finding list + graph view */
+.graph-split { display: flex; gap: 0; height: 100%; min-height: 540px; }
+.graph-finding-list { width: 220px; min-width: 180px; flex: none; border-right: 1px solid var(--border); overflow-y: auto; background: var(--surface); padding: 0; }
+.gfl-header { font-size: var(--fs-xs); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); padding: var(--sp-3) var(--sp-3) var(--sp-2); }
+.gfl-item { display: flex; align-items: center; gap: var(--sp-2); width: 100%; text-align: left; background: none; border: none; border-bottom: 1px solid var(--border); padding: var(--sp-2) var(--sp-3); font-size: var(--fs-xs); color: var(--text); cursor: pointer; line-height: 1.3; }
+.gfl-item:hover { background: var(--surface-3); }
+.gfl-item.active { background: var(--accent-soft, rgba(181,89,10,.08)); color: var(--accent); font-weight: 600; border-left: 3px solid var(--accent); }
+.gfl-item .gfl-sev { font-size: var(--fs-2xs); font-weight: 700; flex: none; padding: 1px 5px; border-radius: var(--radius-xs); }
+.gfl-item .gfl-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.graph-main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+.gm-finding-desc { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); padding: var(--sp-3) var(--sp-4); margin: 0 0 var(--sp-2); flex: none; }
+.gm-finding-desc .fd-header { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+.gm-finding-desc .fd-title { font-weight: 600; font-size: var(--fs-base); }
+.gm-finding-desc .fd-body { font-size: var(--fs-sm); color: var(--text-dim); line-height: 1.5; }
+.gm-finding-desc .fd-body p { margin: 4px 0; }
+.gm-finding-desc .fd-meta { display: flex; gap: var(--sp-3); margin-top: var(--sp-2); font-size: var(--fs-2xs); color: var(--text-faint); }
+@media (max-width: 760px) { .graph-finding-list { width: 160px; } }

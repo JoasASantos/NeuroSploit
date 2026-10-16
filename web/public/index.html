@@ -47,6 +47,10 @@
       <button class="sb-nav-item" data-view="domains"><span class="sb-nav-icon">◇</span> Domains</button>
       <button class="sb-nav-item" data-view="networks"><span class="sb-nav-icon">⬡</span> Networks</button>
       <div class="sb-nav-separator"></div>
+      <button class="sb-nav-item" data-view="vault"><span class="sb-nav-icon">🔑</span> Vault</button>
+      <button class="sb-nav-item" data-view="guardrails"><span class="sb-nav-icon">⛨</span> Guardrails</button>
+      <div class="sb-nav-separator"></div>
+      <button class="sb-nav-item" id="sbTerminal"><span class="sb-nav-icon">❭_</span> Terminal</button>
       <button class="sb-nav-item" data-view="integrations"><span class="sb-nav-icon">⚙</span> Integrations</button>
       <button class="sb-nav-item" data-view="settings"><span class="sb-nav-icon">☰</span> Settings</button>
     </nav>
@@ -62,10 +66,6 @@
 
     <div class="sb-bottom">
       <span class="sb-version" id="sbVersion">v4.3.2</span>
-      <div class="sb-bottom-actions">
-        <button class="icon-btn" id="btnOpenAuth" title="Auth &amp; API keys">🔑</button>
-        <button class="icon-btn" id="btnOpenRepl" title="Open terminal (Ctrl+`)">❭_</button>
-      </div>
     </div>
   </aside>
 
@@ -184,12 +184,201 @@
       <div class="page-body" id="networksBody"><div class="empty-state">No networks configured yet.</div></div>
     </section>
 
+    <!-- ============ VAULT ============ -->
+    <section class="page-view" id="vaultView" hidden>
+      <header class="topbar">
+        <div>
+          <div class="topbar-title">Vault</div>
+          <div class="topbar-sub">Target authentication, credentials files, and API collections</div>
+        </div>
+        <div class="topbar-spacer"></div>
+      </header>
+      <div class="page-body" id="vaultBody">
+        <div class="config-grid">
+          <div class="config-card" style="grid-column:1/-1;">
+            <div class="config-card-title">Target Authentication</div>
+            <div class="config-card-desc">Credentials used so agents test as a logged-in user. Kept only for this session.</div>
+            <div class="form-group">
+              <label for="vaultAuthHeader">Auth header</label>
+              <input id="vaultAuthHeader" type="text" placeholder="Authorization: Bearer <token>  or  Cookie: session=..." />
+              <div class="field-help">Sent to the CLI as an ephemeral creds file.</div>
+            </div>
+            <div class="form-group">
+              <label>Named roles (multi-identity access-control testing)</label>
+              <div class="role-list" id="vaultRoleList"></div>
+              <button class="btn btn-sm" id="btnVaultAddRole" style="align-self:flex-start;">+ Add role</button>
+              <div class="field-help">Two or more roles enable IDOR/BOLA/BFLA cross-role testing.</div>
+            </div>
+          </div>
+          <div class="config-card" style="grid-column:1/-1;">
+            <div class="config-card-title">Credentials File</div>
+            <div class="form-group">
+              <label for="vaultCredsPath">creds.yaml path (overrides target auth above)</label>
+              <input id="vaultCredsPath" type="text" placeholder="creds.yaml" />
+              <div class="field-help">An explicit file on disk — see neurosploit-rs/creds.example.yaml for the schema.</div>
+            </div>
+            <div class="form-group">
+              <label for="vaultCollectionFile">API collection (Postman / OpenAPI / Swagger / HAR)</label>
+              <input id="vaultCollectionFile" type="file" accept=".json,application/json,.har" multiple />
+              <input id="vaultCollectionPath" type="text" placeholder="…or a path on disk: file.json or a directory of .json files" />
+              <div class="field-help">Imports endpoints as known surface — file or directory of .json files.</div>
+            </div>
+          </div>
+          <div class="config-card" style="grid-column:1/-1;">
+            <div class="config-card-actions"><button class="btn btn-accent" id="btnVaultSave">Save</button></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ GUARDRAILS ============ -->
+    <section class="page-view" id="guardrailsView" hidden>
+      <header class="topbar">
+        <div>
+          <div class="topbar-title">Guardrails</div>
+          <div class="topbar-sub">Authorization, scoping, safety controls, environment, and egress configuration</div>
+        </div>
+        <div class="topbar-spacer"></div>
+      </header>
+      <div class="page-body" id="guardrailsBody">
+        <div class="config-grid">
+          <div class="config-card" style="grid-column:1/-1;">
+            <div class="config-card-title">Capability Token</div>
+            <div class="form-group">
+              <label for="grCapToken">Capability token</label>
+              <input id="grCapToken" type="text" placeholder="ns-cap.v1.…" spellcheck="false" />
+              <div class="field-status" id="grCapStatus"></div>
+              <div class="field-help">Signed grant for this engagement: who authorized it, which hosts, which environment, until when. Verified by the harness. Mint with <code>neurosploit capability issue</code>.</div>
+            </div>
+            <div class="form-group">
+              <label for="grInScope">Additional authorized hosts</label>
+              <input id="grInScope" type="text" placeholder="app.example.com, *.api.example.com, 10.0.0.0/24" />
+              <div class="field-help">Without this the engagement is authorized against the target and nothing else.</div>
+            </div>
+          </div>
+
+          <div class="config-card" style="grid-column:1/-1;">
+            <div class="config-card-title">Scoping &amp; Guardrails <span class="pill" style="font-size:10px;">enforced in code</span></div>
+            <div class="config-card-desc">The hard scope is the boundary: a request whose host is not listed is refused before it is sent. Exclusions always win. A capability token still caps all of this.</div>
+            <div class="form-group">
+              <label for="grScopeHard">Hard scope — the allowlist</label>
+              <textarea id="grScopeHard" rows="3" placeholder="one per line, or comma-separated&#10;app.example.com&#10;*.staging.example.com"></textarea>
+              <div class="field-help">Exact host · <code>*.wildcard</code> · <code>CIDR</code> · <code>https://host/path</code> prefix. Empty = nothing extra enforced.</div>
+            </div>
+            <div class="field-row">
+              <div class="form-group">
+                <label for="grScopeExclude">Exclusions — always win</label>
+                <textarea id="grScopeExclude" rows="3" placeholder="payments.example.com&#10;admin.example.com"></textarea>
+                <div class="field-help">Refused even if the allowlist would cover them.</div>
+              </div>
+              <div class="form-group">
+                <label for="grScopeObserve">Observe-only</label>
+                <textarea id="grScopeObserve" rows="3" placeholder="cdn.example.com&#10;*.thirdparty.example.com"></textarea>
+                <div class="field-help">May be looked at (recon) but never attacked.</div>
+              </div>
+            </div>
+            <div class="field-row">
+              <div class="form-group">
+                <label>State-changing methods</label>
+                <div class="check-row"><input type="checkbox" id="grDestructive" /> <label for="grDestructive">Allow DELETE / PUT / PATCH</label></div>
+                <div class="field-help">Off by default — a scan should not change the target's state.</div>
+              </div>
+              <div class="form-group">
+                <label>Test accounts</label>
+                <div class="check-row"><input type="checkbox" id="grAccounts" checked /> <label for="grAccounts">Allow account creation</label></div>
+              </div>
+              <div class="form-group">
+                <label for="grMaxAccounts">Max accounts</label>
+                <input class="narrow" id="grMaxAccounts" type="number" min="0" value="3" />
+                <div class="field-help">0 = unlimited.</div>
+              </div>
+              <div class="form-group">
+                <label for="grRate">Requests / min</label>
+                <input class="narrow" id="grRate" type="number" min="0" value="240" />
+                <div class="field-help">Whole engagement. 0 = unlimited.</div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="grForbidden">Forbidden payloads</label>
+              <textarea id="grForbidden" rows="2" placeholder="delete from&#10;drop table&#10;rm -rf /"></textarea>
+              <div class="field-help">Substrings NEVER acceptable. Extends built-in defaults.</div>
+            </div>
+            <div class="form-group">
+              <label for="grNotes">Notes — guidance, NOT enforced</label>
+              <textarea id="grNotes" rows="2" placeholder="SOW-2026-0142; test window 02:00–06:00 UTC"></textarea>
+              <div class="field-help">Context passed to agents. Prose is not a control.</div>
+            </div>
+          </div>
+
+          <div class="config-card" style="grid-column:1/-1;">
+            <div class="config-card-title">Environment &amp; Policy</div>
+            <div class="field-row">
+              <div class="form-group">
+                <label for="grEnv">Environment</label>
+                <select id="grEnv">
+                  <option value="production" selected>production</option>
+                  <option value="staging">staging</option>
+                  <option value="development">development</option>
+                  <option value="lab">lab</option>
+                  <option value="ot-production">ot-production (ICS/SCADA)</option>
+                </select>
+                <div class="field-help">Scales every risk score.</div>
+              </div>
+              <div class="form-group">
+                <label for="grPolicy">Policy profile</label>
+                <select id="grPolicy">
+                  <option value="web" selected>web — standard</option>
+                  <option value="ot">ot — read-only, paced, industrial writes blocked</option>
+                </select>
+                <div class="field-help">OT blocks writes, disruptive actions, fuzzing and exploit payloads over industrial protocols.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="config-card" style="grid-column:1/-1;">
+            <div class="config-card-title">Egress &amp; Out-of-band</div>
+            <div class="form-group">
+              <label for="grTransport">Transport (how traffic reaches the target)</label>
+              <input id="grTransport" type="text" placeholder="direct · socks5://127.0.0.1:1080 · openvpn:/path/client.ovpn" spellcheck="false" />
+              <div class="field-help">An internal target with no transport is refused, not tested.</div>
+            </div>
+            <div class="field-row">
+              <div class="form-group">
+                <label for="grOobDomain">Out-of-band domain</label>
+                <input id="grOobDomain" type="text" placeholder="oob.yourdomain.com" spellcheck="false" />
+                <div class="field-help">Without it blind SSRF/XXE/RCE can only be reported as leads.</div>
+              </div>
+              <div class="form-group">
+                <label for="grOobHttp">OOB HTTP listener</label>
+                <input id="grOobHttp" type="text" placeholder="0.0.0.0:8080" spellcheck="false" />
+                <div class="field-help">Where callbacks land.</div>
+              </div>
+              <div class="form-group">
+                <label for="grOobDns">OOB DNS listener</label>
+                <input id="grOobDns" type="text" placeholder="0.0.0.0:5353" spellcheck="false" />
+                <div class="field-help">Only if the zone is delegated here.</div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="grSms">Inbound SMS (OTP &amp; rate-limit work)</label>
+              <input id="grSms" type="text" placeholder="twilio:<sid>:<token>:+15550101  ·  webhook:https://…/inbox:+15550101" spellcheck="false" />
+              <div class="field-help">A throttling claim counts delivered messages carrying distinct codes, not HTTP 200s.</div>
+            </div>
+          </div>
+
+          <div class="config-card" style="grid-column:1/-1;">
+            <div class="config-card-actions"><button class="btn btn-accent" id="btnGuardrailsSave">Save</button></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- ============ INTEGRATIONS ============ -->
     <section class="page-view" id="integrationsView" hidden>
       <header class="topbar">
         <div>
           <div class="topbar-title">Integrations</div>
-          <div class="topbar-sub">Connect external services — GitHub, GitLab, Jira, Slack, CI/CD</div>
+          <div class="topbar-sub">Connect external services — GitHub, GitLab, Jira, Slack, CI/CD, AWS, GCP, Azure</div>
         </div>
         <div class="topbar-spacer"></div>
       </header>
@@ -201,7 +390,7 @@
       <header class="topbar">
         <div>
           <div class="topbar-title">Settings</div>
-          <div class="topbar-sub">Console configuration, API keys, and preferences</div>
+          <div class="topbar-sub">Console configuration, LLM provider keys, and preferences</div>
         </div>
         <div class="topbar-spacer"></div>
       </header>
@@ -248,6 +437,7 @@
             <button class="mode-tile" data-mode="greybox"><span class="t">Grey-box</span><span class="d">URL + source together</span></button>
             <button class="mode-tile" data-mode="host"><span class="t">Host / Infra</span><span class="d">IP — Linux/Windows/AD</span></button>
             <button class="mode-tile" data-mode="aitest"><span class="t">AI / LLM</span><span class="d">Live AI agent or MCP endpoint</span></button>
+            <button class="mode-tile" data-mode="cloud"><span class="t">Cloud</span><span class="d">AWS / GCP / Azure audit</span></button>
           </div>
 
           <div class="field-group" id="fieldTargetGroup">
@@ -261,6 +451,13 @@
             <input id="fieldRepo" type="text" placeholder="owner/repo, a GitHub URL, or a local path" aria-describedby="errRepo" />
             <div class="field-error" id="errRepo" hidden></div>
             <div class="field-help">Cloned automatically if it's a GitHub URL or owner/repo shorthand.</div>
+          </div>
+          <div class="field-group" id="fieldCloudGroup" hidden>
+            <label class="field-label">Connected cloud</label>
+            <select id="fieldCloudProvider" class="narrow">
+              <option value="">Select a cloud provider…</option>
+            </select>
+            <div class="field-help">Pick a connected cloud integration from the Integrations page. Configure credentials there first.</div>
           </div>
         </div>
 
@@ -542,7 +739,6 @@
           <a class="btn" id="detailOpenPdf" target="_blank" hidden>⤓ PDF</a>
           <button class="btn" id="btnBuildReport" title="Regenerate this run's report from its findings">Generate report</button>
           <button class="btn" id="btnGraphRecompute" title="Recompute the attack graph with the CLI (neurosploit graph)">↻ Graph</button>
-          <button class="btn" id="btnGraphPush" title="Push the attack graph to Neo4j (neurosploit graph --push; needs NEO4J_URI / NEO4J_USER / NEO4J_PASSWORD on the server)">⇪ Neo4j</button>
           <button class="btn" id="btnRetest" title="Re-run every finding's recorded proof (neurosploit poc) and see what still reproduces">⟳ Re-test</button>
           <a class="btn" id="detailOpenAudit" target="_blank" hidden title="Every action this run took, hash-chained">Audit trail</a>
           <button class="btn btn-danger" id="btnDeleteRun" title="Permanently delete this session and its report">🗑 Delete</button>
@@ -893,6 +1089,16 @@
         <label class="field-label" for="domainName">Domain</label>
         <input id="domainName" type="text" placeholder="app.example.com" spellcheck="false" />
         <div class="field-help">The target domain for black-box scanning. Subdomains will be discovered during recon.</div>
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="domainType">Type</label>
+        <select id="domainType">
+          <option value="web" selected>Web application</option>
+          <option value="api">API</option>
+          <option value="llm">LLM endpoint</option>
+          <option value="mobile">Mobile backend</option>
+          <option value="other">Other</option>
+        </select>
       </div>
       <div class="field-group">
         <label class="field-label" for="domainDesc">Description (optional)</label>
