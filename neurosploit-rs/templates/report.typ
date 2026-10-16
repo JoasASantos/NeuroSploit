@@ -138,13 +138,33 @@
 ]
 
 // ---- Test accounts created ----
-#if meta.accounts != "" [
+#let acct_list = meta.at("accounts", default: ())
+#if type(acct_list) == array and acct_list.len() > 0 [
   #v(8pt)
   == Test Accounts Created (delete after)
   #v(3pt)
-  #text(9pt, fill: gray)[Created to reach the authenticated surface. Credentials are in the run vault (.neurosploit/vault/<run-id>.json); delete once testing is complete.]
-  #v(3pt)
-  #block(width: 100%, inset: 8pt, radius: 4pt, fill: rgb("#faf7ff"), text(9pt)[#meta.accounts])
+  #text(9pt, fill: gray)[Created to reach the authenticated surface. Credentials are in the run vault (.neurosploit/vault/.json); delete once testing is complete.]
+  #v(2pt)
+  #let hdr = meta.at("accounts_header", default: "")
+  #if hdr != "" [ #text(9pt)[#hdr] #v(4pt) ]
+  #block(width: 100%, inset: 8pt, radius: 4pt, fill: rgb("#faf7ff"), stroke: 0.5pt + rgb("#e4e4e8"))[
+    #set text(size: 7.5pt, font: ("Menlo", "DejaVu Sans Mono", "Courier New"))
+    #set par(leading: 0.6em)
+    #for acct in acct_list [
+      #box(width: 4pt, text(fill: rgb("#7c5cff"))[•]) #acct \
+    ]
+  ]
+] else [
+  // Fallback for old-format string accounts
+  #let acct_str = meta.at("accounts_header", default: "")
+  #if acct_str != "" [
+    #v(8pt)
+    == Test Accounts Created (delete after)
+    #v(3pt)
+    #text(9pt, fill: gray)[Created to reach the authenticated surface. Credentials are in the run vault (.neurosploit/vault/.json); delete once testing is complete.]
+    #v(3pt)
+    #block(width: 100%, inset: 8pt, radius: 4pt, fill: rgb("#faf7ff"), text(9pt)[#acct_str])
+  ]
 ]
 
 #v(10pt)

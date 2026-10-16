@@ -501,6 +501,16 @@ fn tq(s: &str) -> String {
     format!("\"{}\"", cleaned)
 }
 
+/// Like `tq` but preserves newlines as literal `\n` inside the Typst string,
+/// so multi-paragraph text renders with proper line breaks.
+fn tq_multi(s: &str) -> String {
+    let cleaned: String = s
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\r', "");
+    format!("\"{}\"", cleaned)
+}
+
 /// Generate a self-contained `report.typ` (data + bundled template) in `dir`
 /// and compile it to `report.pdf` via the `typst` binary. Falls back to leaving
 /// the `.typ` when `typst` is unavailable.
@@ -516,16 +526,27 @@ pub fn typst_report(target: &str, findings: &[Finding], dir: &Path) -> std::io::
     let confirmed: Vec<&Finding> = sorted.iter().filter(|f| !needs_review(f)).collect();
     let review: Vec<&Finding> = sorted.iter().filter(|f| needs_review(f)).collect();
     let asset = if meta.asset.is_empty() { "unidentified web asset".to_string() } else { meta.asset.clone() };
-    let accounts = findings.iter().find(|f| f.id == "test-accounts").map(|f| f.evidence.clone()).unwrap_or_default();
+    let accounts_raw = findings.iter().find(|f| f.id == "test-accounts").map(|f| f.evidence.clone()).unwrap_or_default();
+    let account_lines: Vec<&str> = accounts_raw.split('\n')
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+    let accounts_header = account_lines.first().copied().unwrap_or("");
+    let account_items: Vec<&str> = account_lines.iter().skip(1)
+        .filter(|l| l.starts_with("•") || l.starts_with("-") || l.starts_with("*"))
+        .map(|l| l.trim_start_matches(['•', '-', '*', ' ']))
+        .collect();
 
     let mut data = String::new();
+    let accounts_arr = format!("({})", account_items.iter().map(|a| format!("{},", tq(a))).collect::<String>());
     data.push_str(&format!(
-        "#let meta = (target: {}, asset: {}, tech: {}, server: {}, run_id: {}, generated: {}, model: {}, exec: {}, conclusion: {}, accounts: {}, provenance: {})\n",
+        "#let meta = (target: {}, asset: {}, tech: {}, server: {}, run_id: {}, generated: {}, model: {}, exec: {}, conclusion: {}, accounts_header: {}, accounts: {}, provenance: {})\n",
         tq(target), tq(&asset), tq(&meta.tech.join(", ")), tq(&meta.server),
         tq(&run_id), tq("July 2026"), tq("multi-model"),
         tq(&strip_md(&exec_summary(target, &meta, &confirmed, &review))),
         tq(&strip_md(&conclusion(target, &meta, &confirmed, &review))),
-        tq(&strip_md(&accounts)),
+        tq(&strip_md(accounts_header)),
+        accounts_arr,
         tq(&crate::provenance::Provenance::process().tag()),
     ));
     data.push_str("#let findings = (\n");
@@ -543,8 +564,8 @@ pub fn typst_report(target: &str, findings: &[Finding], dir: &Path) -> std::io::
         data.push_str(&format!(
             "  (severity: {}, title: {}, agent: {}, cwe: {}, owasp: {}, cvss: {}, endpoint: {}, payload: {}, evidence: {}, impact: {}, remediation: {}, votes: {}, confidence: {}, status: {}, auth: {}, screenshots: {}, location: {}, steps: {}),\n",
             tq(&f.severity), tq(&f.title), tq(&f.agent), tq(&f.cwe), tq(&owasp), tq(&f.cvss),
-            tq(&f.endpoint), tq(&wrappable(&f.payload)), tq(&wrappable(&technical_evidence(f))), tq(&f.impact),
-            tq(&f.remediation), tq(&f.votes), f.confidence, tq(status),
+            tq(&f.endpoint), tq(&wrappable(&f.payload)), tq(&wrappable(&technical_evidence(f))), tq_multi(&f.impact),
+            tq_multi(&f.remediation), tq(&f.votes), f.confidence, tq(status),
             tq(if f.auth_context.is_empty() { "-" } else { &f.auth_context }),
             shots,
             tq(&location_line(f)),

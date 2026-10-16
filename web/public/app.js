@@ -3102,6 +3102,28 @@ function gmName(n) {
   return p.title || p.name || p.category || p.path || p.type || p.address || n.key;
 }
 
+const GM_ICON = {
+  Target: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg>`,
+  Host: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="14" rx="2"/><line x1="3" y1="14" x2="21" y2="14"/><circle cx="7" cy="9" r="1" fill="currentColor"/><circle cx="7" cy="17" r="1" fill="currentColor"/></svg>`,
+  Service: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2L3 7v10l9 5 9-5V7z"/><line x1="12" y1="12" x2="12" y2="22"/><line x1="3" y1="7" x2="12" y2="12"/><line x1="21" y1="7" x2="12" y2="12"/></svg>`,
+  Technology: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2L3 7v10l9 5 9-5V7z"/><line x1="12" y1="12" x2="12" y2="22"/><line x1="3" y1="7" x2="12" y2="12"/><line x1="21" y1="7" x2="12" y2="12"/></svg>`,
+  Endpoint: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 2a10 10 0 0110 10"/><path d="M12 2a10 10 0 00-10 10"/><path d="M12 22a10 10 0 0010-10"/><path d="M12 22a10 10 0 01-10-10"/></svg>`,
+  Vulnerability: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><circle cx="12" cy="16" r=".5" fill="currentColor"/></svg>`,
+  Finding: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><circle cx="12" cy="16" r=".5" fill="currentColor"/></svg>`,
+  AttackStep: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="13 2 13 9 20 9"/><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9l-7-7z"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg>`,
+  ExploitAttempt: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>`,
+  Credential: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/><circle cx="12" cy="16" r="1" fill="currentColor"/></svg>`,
+  Secret: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>`,
+  Identity: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,
+  Role: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>`,
+  Permission: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>`,
+  Asset: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>`,
+  Control: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`,
+  BusinessImpact: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`,
+  Internet: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>`,
+};
+function gmIcon(label) { return GM_ICON[label] || GM_ICON.Asset; }
+
 function renderGraphFindingList(x) {
   const data = x.graphData?.graph;
   const list = x.q('gflist');
@@ -3133,8 +3155,8 @@ function renderGraphMemory(x) {
   show(x.q('graph-empty'), !has);
   show(x.q('wrap'), has);
   renderGraphFindingList(x);
-  x.q('legend').innerHTML = [['asset', 'asset / host'], ['surface', 'service / endpoint'], ['weak', 'vulnerability / finding'], ['step', 'attack step'], ['cred', 'credential / identity'], ['impact', 'impact']]
-    .map(([k, l]) => `<span class="gm-leg gk-${k}">${esc(l)}</span>`).join('') +
+  x.q('legend').innerHTML = [['internet', 'Internet'], ['asset', 'Host / Target'], ['surface', 'Service / Endpoint'], ['weak', 'Finding'], ['step', 'Attack Step'], ['cred', 'Credential / Role'], ['impact', 'Impact']]
+    .map(([k, l]) => `<span class="gm-leg gk-${k}"><span class="gm-leg-dot"></span>${esc(l)}</span>`).join('') +
     '<span class="gm-leg-sep"></span><span class="gm-edge-leg es-confirmed">confirmed</span><span class="gm-edge-leg es-needs_validation">needs validation</span><span class="gm-edge-leg es-hypothesis">hypothesis</span>';
   if (!has) { stage.innerHTML = ''; return; }
   const filterFid = x.view.filterFinding || null;
@@ -3182,22 +3204,17 @@ function renderGraphMemory(x) {
   if (filterFid) {
     const fNode = data.nodes.find(n => n.label === 'Finding' && n.key === filterFid);
     const fid = fNode ? id(fNode) : `Finding|${filterFid}`;
-    // Only keep edges directly involving this finding, then walk outward
-    // from connected non-Finding nodes (hosts, impacts, steps).
-    // Exclude edges connecting OTHER findings to shared hosts.
     const findingEdges = edges.filter(e => eid(e.from) === fid || eid(e.to) === fid);
     const reachable = new Set([fid]);
     for (const e of findingEdges) { reachable.add(eid(e.from)); reachable.add(eid(e.to)); }
-    // Walk traversal edges from those seeds, but never bridge to other findings
     let changed = true;
     while (changed) {
       changed = false;
       for (const e of edges) {
         const from = eid(e.from), to = eid(e.to);
-        if (from === fid || to === fid) continue; // already handled
+        if (from === fid || to === fid) continue;
         const fromIn = reachable.has(from), toIn = reachable.has(to);
         if (!fromIn && !toIn) continue;
-        // Don't bridge to other finding nodes
         if (fromIn && !toIn && e.to.label === 'Finding') continue;
         if (toIn && !fromIn && e.from.label === 'Finding') continue;
         if (fromIn && !toIn) { reachable.add(to); changed = true; }
@@ -3210,29 +3227,46 @@ function renderGraphMemory(x) {
     if (fNode && descBox) {
       const f = gmFinding(x, fNode.props?.finding_id);
       const props = fNode.props || {};
+      const finding = f?.f || {};
+      const cweStr = finding.cwe || props.cwe || '';
+      const cvssStr = finding.cvss || props.cvss || '';
+      const owasp = finding.owasp || '';
+      const mitre = finding.mitre || props.mitre || '';
+      const stageVal = finding.stage || props.stage || '';
+      const exploitability = finding.exploitability || '';
+      const confidence = finding.confidence ?? props.confidence ?? '';
+      const votes = finding.votes || '';
+      const reviewStatus = finding.review_status || props.status || '';
+      const agent = finding.agent || '';
+      const whereText = finding.where_text || finding.proof || props.description || '';
+      const whatText = finding.what_text || '';
+      const fixText = finding.fix_text || '';
       descBox.innerHTML = `<div class="fd-header">
         <span class="sev ${sevClass(props.local_severity || 'info')}">${esc(props.local_severity || 'info')}</span>
-        <span class="fd-title">${esc(gmName(fNode))}</span>
+        <span class="fd-title">${esc(finding.title || gmName(fNode))}</span>
       </div>
-      <div class="fd-body">${props.description ? `<p>${esc(props.description)}</p>` : ''}
-        ${props.category ? `<p><b>Category:</b> ${esc(props.category)}</p>` : ''}
-        ${props.cwe ? `<p><b>CWE:</b> ${esc(Array.isArray(props.cwe) ? props.cwe.join(', ') : props.cwe)}</p>` : ''}
-        ${props.stage ? `<p><b>Stage:</b> ${esc(props.stage)}</p>` : ''}
+      <div class="fd-cards">
+        ${cweStr ? `<div class="fd-card"><div class="fd-card-label">CWE</div><div class="fd-card-value">${esc(Array.isArray(cweStr) ? cweStr.join(', ') : cweStr)}</div></div>` : ''}
+        ${cvssStr ? `<div class="fd-card"><div class="fd-card-label">CVSS</div><div class="fd-card-value">${esc(String(cvssStr))}</div></div>` : ''}
+        ${owasp ? `<div class="fd-card"><div class="fd-card-label">OWASP</div><div class="fd-card-value">${esc(owasp)}</div></div>` : ''}
+        ${mitre ? `<div class="fd-card"><div class="fd-card-label">MITRE</div><div class="fd-card-value">${esc(mitre)}</div></div>` : ''}
+        ${stageVal ? `<div class="fd-card"><div class="fd-card-label">Stage</div><div class="fd-card-value">${esc(stageVal)}</div></div>` : ''}
+        ${exploitability ? `<div class="fd-card"><div class="fd-card-label">Exploitability</div><div class="fd-card-value">${esc(exploitability)}</div></div>` : ''}
+        ${confidence !== '' ? `<div class="fd-card"><div class="fd-card-label">Confidence</div><div class="fd-card-value">${esc(String(confidence))}</div></div>` : ''}
+        ${reviewStatus ? `<div class="fd-card"><div class="fd-card-label">Review Status</div><div class="fd-card-value">${esc(reviewStatus)}</div></div>` : ''}
+        ${agent ? `<div class="fd-card"><div class="fd-card-label">Agent</div><div class="fd-card-value mono">${esc(agent)}</div></div>` : ''}
       </div>
-      <div class="fd-meta">
-        ${props.status ? `<span>Status: ${esc(props.status)}</span>` : ''}
-        ${f ? '<button class="btn btn-sm" data-openfinding>Open finding details</button>' : ''}
-      </div>`;
+      ${whereText ? `<div class="fd-section"><div class="fd-section-title">WHERE THE PROBLEM IS</div><p>${esc(whereText)}</p></div>` : ''}
+      ${whatText ? `<div class="fd-section"><div class="fd-section-title">WHAT IT MEANS</div><p>${esc(whatText)}</p></div>` : ''}
+      ${fixText ? `<div class="fd-section"><div class="fd-section-title">HOW TO FIX IT</div><p>${esc(fixText)}</p></div>` : ''}`;
       show(descBox, true);
-      const openBtn = descBox.querySelector('[data-openfinding]');
-      if (openBtn && f) openBtn.addEventListener('click', () => openFindingModal(f.f, f.pocs, f.runId));
     }
   } else if (descBox) {
     show(descBox, false);
   }
 
-  // Columns by entity kind; a long column wraps into sub-columns.
-  const W = 220, H = 54, GX = 90, GY = 12, PER = 12;
+  // Circular node layout — left-to-right columns by entity kind
+  const NW = 140, NH = 90, GX = 60, GY = 30, PER = 8;
   const cols = new Map();
   for (const n of nodes) {
     const c = GM_COL[n.label] ?? 3;
@@ -3248,16 +3282,16 @@ function renderGraphMemory(x) {
       || sevRank(a.props?.local_severity) - sevRank(b.props?.local_severity)
       || (a.label + gmName(a)).localeCompare(b.label + gmName(b)));
     const sub = Math.ceil(list.length / PER);
-    list.forEach((n, i) => pos.set(id(n), { x: (col + Math.floor(i / PER)) * (W + GX) - Math.floor(i / PER) * (GX - 24), y: (i % PER) * (H + GY) }));
-    maxH = Math.max(maxH, Math.min(list.length, PER) * (H + GY));
+    list.forEach((n, i) => pos.set(id(n), { x: (col + Math.floor(i / PER)) * (NW + GX), y: (i % PER) * (NH + GY) }));
+    maxH = Math.max(maxH, Math.min(list.length, PER) * (NH + GY));
     col += sub;
   });
-  const width = col * (W + GX);
+  const width = col * (NW + GX);
+  const CX = NW / 2, CY = 28;
   const path = (a, b) => {
-    const x1 = a.x + W, y1 = a.y + H / 2, x2 = b.x, y2 = b.y + H / 2;
-    if (x2 > x1) { const m = (x1 + x2) / 2; return `M${x1},${y1} C${m},${y1} ${m},${y2} ${x2},${y2}`; }
-    const r = Math.max(a.x, b.x) + W + 40;
-    return `M${x1},${y1} C${r},${y1} ${r},${y2} ${b.x + W},${y2}`;
+    const x1 = a.x + CX + 28, y1 = a.y + CY, x2 = b.x + CX - 28, y2 = b.y + CY;
+    const mx = (x1 + x2) / 2;
+    return `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`;
   };
   const svg = edges.map((e) => {
     const a = pos.get(eid(e.from)), b = pos.get(eid(e.to));
@@ -3268,12 +3302,14 @@ function renderGraphMemory(x) {
   const cards = nodes.map((n) => {
     const p = pos.get(id(n));
     const props = n.props || {};
-    const badge = props.status ? `<span class="gm-st st-${esc(props.status)}">${esc(STATUS_LABEL[props.status] || props.status)}</span>` : '';
-    const sev = props.local_severity ? `<span class="sev ${sevClass(props.local_severity)}">${esc(props.local_severity)}</span>` : '';
-    const crit = props.critical === true || props.privileged === true ? '<span class="gm-crit" title="crown jewel / privileged">★</span>' : '';
-    return `<div class="gm-node gk-${GM_KIND[n.label] || 'meta'}" style="left:${p.x}px;top:${p.y}px;width:${W}px;height:${H}px" data-id="${esc(id(n))}">
-      <div class="gm-node-h"><span class="gm-lbl">${esc(n.label)}${props.stage ? ` · ${esc(props.stage)}` : ''}</span>${crit}${sev}${badge}</div>
-      <div class="gm-node-t" title="${esc(gmName(n))}">${esc(gmName(n))}</div></div>`;
+    const kind = GM_KIND[n.label] || 'meta';
+    const sev = props.local_severity;
+    const sevBadge = sev ? `<span class="gm-sev-badge sev ${sevClass(sev)}">${esc(sev.charAt(0).toUpperCase())}</span>` : '';
+    const countBadge = props.endpoint_count ? `<span class="gm-badge" style="background:var(--sev-high-fg);color:#fff">${props.endpoint_count}</span>` : '';
+    return `<div class="gm-node gk-${kind}" style="left:${p.x}px;top:${p.y}px;width:${NW}px" data-id="${esc(id(n))}">
+      <div class="gm-circle">${gmIcon(n.label)}${sevBadge}${countBadge}</div>
+      <div class="gm-node-label" title="${esc(gmName(n))}">${esc(gmName(n))}</div>
+      <div class="gm-node-sub">${esc(n.label)}${props.stage ? ` · ${esc(props.stage)}` : ''}</div></div>`;
   }).join('');
   stage.innerHTML = `<svg class="gm-svg" width="${width + 80}" height="${maxH + 40}">${svg}</svg>${cards}`;
   stage.style.width = `${width + 80}px`;
@@ -3894,9 +3930,14 @@ async function openProviderKeysModal() {
   let existing = $('#providerKeysModal');
   if (!existing) {
     document.body.insertAdjacentHTML('beforeend', `<div class="modal-overlay" id="providerKeysModal" hidden>
-      <div class="modal" style="max-width:620px"><div class="modal-header"><h3>LLM Provider Keys</h3><span class="modal-sub">API keys for engagements. Kept in server memory only.</span><button class="modal-close" onclick="$('#providerKeysModal').hidden=true">✕</button></div>
-      <div class="modal-body" id="providerKeysModalBody" style="max-height:60vh;overflow-y:auto"></div>
-      <div class="modal-footer"><button class="btn btn-accent" onclick="$('#providerKeysModal').hidden=true">Done</button></div></div></div>`);
+      <div class="modal" style="max-width:620px">
+        <div class="modal-head">
+          <div><div class="title">LLM Provider Keys</div><span class="modal-sub">API keys for engagements. Kept in server memory only.</span></div>
+          <button class="icon-btn" onclick="$('#providerKeysModal').hidden=true">✕</button>
+        </div>
+        <div class="modal-body" id="providerKeysModalBody" style="max-height:60vh;overflow-y:auto"></div>
+        <div class="modal-foot"><button class="btn btn-accent" onclick="$('#providerKeysModal').hidden=true">Done</button></div>
+      </div></div>`);
     existing = $('#providerKeysModal');
   }
   const body = $('#providerKeysModalBody');
