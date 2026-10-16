@@ -112,7 +112,7 @@ function switchView(viewName) {
     btn.classList.toggle('active', btn.dataset.view === viewName);
   });
   const runHist = $('#sbRunHistory');
-  if (runHist) runHist.style.display = ['dash','pentests','wizard'].includes(viewName) ? '' : 'none';
+  if (runHist) runHist.style.display = ['dash','wizard','live','detail'].includes(viewName) ? '' : 'none';
   if (viewName === 'pentests') loadPentests();
   if (viewName === 'issues') loadIssues();
   if (viewName === 'repos') loadRepos();
@@ -3513,6 +3513,9 @@ async function loadIntegrations() {
       { id: 'jira', name: 'Jira', desc: 'Create Jira tickets for confirmed findings' },
       { id: 'slack', name: 'Slack', desc: 'Notifications for completed engagements and critical findings' },
       { id: 'mcp', name: 'MCP Server', desc: 'Model Context Protocol — drive NeuroSploit from Claude Code, Codex, Cursor, Windsurf' },
+      { id: 'aws', name: 'AWS', desc: 'Cloud security testing — IAM, S3, Lambda, EC2, ECS, RDS misconfigurations' },
+      { id: 'gcp', name: 'GCP', desc: 'Cloud security testing — IAM, GCS, Cloud Functions, GKE, Cloud SQL misconfigurations' },
+      { id: 'azure', name: 'Azure', desc: 'Cloud security testing — Entra ID, Blob Storage, Functions, AKS, SQL misconfigurations' },
     ];
     body.innerHTML = '<div class="config-grid">' + defs.map(c => {
       const cfg = integs.find(i => i.id === c.id) || {};
@@ -3568,7 +3571,63 @@ async function loadSettings() {
 function deleteRepo(id) { api(`/api/config/repos/${id}`, { method: 'DELETE' }).then(() => loadRepos()).catch(e => toast(e.message, 'error')); }
 function deleteDomain(id) { api(`/api/config/domains/${id}`, { method: 'DELETE' }).then(() => loadDomains()).catch(e => toast(e.message, 'error')); }
 function deleteNetwork(id) { api(`/api/config/networks/${id}`, { method: 'DELETE' }).then(() => loadNetworks()).catch(e => toast(e.message, 'error')); }
-function configureIntegration(id) { toast('Integration configuration — coming soon', 'info'); }
+function configureIntegration(id) {
+  const fields = {
+    github: [
+      { id: 'integToken', label: 'Personal Access Token', type: 'password', placeholder: 'ghp_...' },
+      { id: 'integOrg', label: 'Organization / Owner', placeholder: 'my-org' },
+      { id: 'integWebhook', label: 'Webhook Secret (optional)', type: 'password', placeholder: 'whsec_...' },
+    ],
+    gitlab: [
+      { id: 'integToken', label: 'Access Token', type: 'password', placeholder: 'glpat-...' },
+      { id: 'integUrl', label: 'GitLab URL', placeholder: 'https://gitlab.com' },
+      { id: 'integProject', label: 'Project ID or path', placeholder: 'group/project' },
+    ],
+    jira: [
+      { id: 'integUrl', label: 'Jira URL', placeholder: 'https://myteam.atlassian.net' },
+      { id: 'integEmail', label: 'Email', placeholder: 'user@example.com' },
+      { id: 'integToken', label: 'API Token', type: 'password', placeholder: '' },
+      { id: 'integProject', label: 'Project Key', placeholder: 'SEC' },
+    ],
+    slack: [
+      { id: 'integWebhook', label: 'Webhook URL', placeholder: 'https://hooks.slack.com/services/...' },
+      { id: 'integChannel', label: 'Channel (optional)', placeholder: '#security-alerts' },
+    ],
+    mcp: [
+      { id: 'integPort', label: 'MCP Server Port', placeholder: '9100' },
+      { id: 'integTransport', label: 'Transport', placeholder: 'stdio' },
+    ],
+    aws: [
+      { id: 'integAccessKey', label: 'Access Key ID', placeholder: 'AKIA...' },
+      { id: 'integSecretKey', label: 'Secret Access Key', type: 'password', placeholder: '' },
+      { id: 'integRegion', label: 'Default Region', placeholder: 'us-east-1' },
+      { id: 'integProfile', label: 'AWS Profile (optional)', placeholder: 'default' },
+      { id: 'integRoleArn', label: 'Assume Role ARN (optional)', placeholder: 'arn:aws:iam::123456:role/SecurityAudit' },
+    ],
+    gcp: [
+      { id: 'integServiceAccount', label: 'Service Account Key (JSON path)', placeholder: '/path/to/sa-key.json' },
+      { id: 'integProject', label: 'Project ID', placeholder: 'my-project-123' },
+      { id: 'integRegion', label: 'Default Region', placeholder: 'us-central1' },
+    ],
+    azure: [
+      { id: 'integTenantId', label: 'Tenant ID', placeholder: '' },
+      { id: 'integClientId', label: 'Client (App) ID', placeholder: '' },
+      { id: 'integClientSecret', label: 'Client Secret', type: 'password', placeholder: '' },
+      { id: 'integSubscriptionId', label: 'Subscription ID', placeholder: '' },
+    ],
+  };
+  const defs = fields[id] || [];
+  const title = { github: 'GitHub', gitlab: 'GitLab', jira: 'Jira', slack: 'Slack', mcp: 'MCP Server', aws: 'AWS', gcp: 'GCP', azure: 'Azure' }[id] || id;
+  $('#integModalTitle').textContent = `Configure ${title}`;
+  $('#integModalBody').innerHTML = defs.map(f =>
+    `<div class="field-group">
+      <label class="field-label" for="${f.id}">${esc(f.label)}</label>
+      <input id="${f.id}" type="${f.type || 'text'}" placeholder="${esc(f.placeholder || '')}" spellcheck="false" />
+    </div>`
+  ).join('');
+  $('#integrationModal').dataset.integId = id;
+  $('#integrationModal').hidden = false;
+}
 async function saveSettings() {
   const data = {
     defaultModel: $('#settingModel')?.value || '',
@@ -3583,23 +3642,98 @@ async function saveSettings() {
 }
 
 // Add-item modals
-function addRepoPrompt() {
-  const url = prompt('Repository URL or owner/repo:');
-  if (!url) return;
-  const name = prompt('Name (optional):') || '';
-  api('/api/config/repos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url, name, branch: 'main' }) })
-    .then(() => loadRepos()).catch(e => toast(e.message, 'error'));
-}
-function addDomainPrompt() {
-  const domain = prompt('Domain (e.g. app.example.com):');
-  if (!domain) return;
-  api('/api/config/domains', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ domain }) })
-    .then(() => loadDomains()).catch(e => toast(e.message, 'error'));
-}
-function addNetworkPrompt() {
-  const cidr = prompt('Network CIDR or host (e.g. 10.0.0.0/24):');
-  if (!cidr) return;
-  const name = prompt('Name (optional):') || '';
-  api('/api/config/networks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cidr, name }) })
-    .then(() => loadNetworks()).catch(e => toast(e.message, 'error'));
-}
+function openModal(id) { $(id).hidden = false; }
+function closeModal(id) { $(id).hidden = true; }
+
+$('#btnAddRepo')?.addEventListener('click', () => {
+  $('#repoUrl').value = '';
+  $('#repoName').value = '';
+  $('#repoBranch').value = 'main';
+  $('#repoDesc').value = '';
+  openModal('#repoModal');
+});
+$('#btnAddDomain')?.addEventListener('click', () => {
+  $('#domainName').value = '';
+  $('#domainDesc').value = '';
+  if ($('#domainScope')) $('#domainScope').value = 'in-scope';
+  openModal('#domainModal');
+});
+$('#btnAddNetwork')?.addEventListener('click', () => {
+  $('#networkCidr').value = '';
+  $('#networkName').value = '';
+  $('#networkDesc').value = '';
+  $('#networkTransport').value = '';
+  openModal('#networkModal');
+});
+
+$('#btnRepoSubmit')?.addEventListener('click', async () => {
+  const url = $('#repoUrl')?.value?.trim();
+  if (!url) { toast('Repository URL is required', 'error'); return; }
+  try {
+    await api('/api/config/repos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+      url,
+      name: $('#repoName')?.value?.trim() || '',
+      branch: $('#repoBranch')?.value?.trim() || 'main',
+      description: $('#repoDesc')?.value?.trim() || '',
+    })});
+    closeModal('#repoModal');
+    toast('Repository added', 'ok');
+    loadRepos();
+  } catch (e) { toast(e.message, 'error'); }
+});
+
+$('#btnDomainSubmit')?.addEventListener('click', async () => {
+  const domain = $('#domainName')?.value?.trim();
+  if (!domain) { toast('Domain is required', 'error'); return; }
+  try {
+    await api('/api/config/domains', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+      domain,
+      description: $('#domainDesc')?.value?.trim() || '',
+      scope: $('#domainScope')?.value || 'in-scope',
+    })});
+    closeModal('#domainModal');
+    toast('Domain added', 'ok');
+    loadDomains();
+  } catch (e) { toast(e.message, 'error'); }
+});
+
+$('#btnNetworkSubmit')?.addEventListener('click', async () => {
+  const cidr = $('#networkCidr')?.value?.trim();
+  if (!cidr) { toast('CIDR or host is required', 'error'); return; }
+  try {
+    await api('/api/config/networks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+      cidr,
+      name: $('#networkName')?.value?.trim() || '',
+      description: $('#networkDesc')?.value?.trim() || '',
+      transport: $('#networkTransport')?.value?.trim() || '',
+    })});
+    closeModal('#networkModal');
+    toast('Network added', 'ok');
+    loadNetworks();
+  } catch (e) { toast(e.message, 'error'); }
+});
+
+$('#btnIntegSubmit')?.addEventListener('click', async () => {
+  const id = $('#integrationModal').dataset.integId;
+  if (!id) return;
+  const inputs = $('#integModalBody').querySelectorAll('input');
+  const config = {};
+  inputs.forEach(inp => { config[inp.id.replace('integ', '').toLowerCase()] = inp.value.trim(); });
+  try {
+    await api(`/api/config/integrations/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true, config }) });
+    closeModal('#integrationModal');
+    toast(`${id} integration saved`, 'ok');
+    loadIntegrations();
+  } catch (e) { toast(e.message, 'error'); }
+});
+
+['#repoModal', '#domainModal', '#networkModal', '#integrationModal'].forEach(sel => {
+  $(sel)?.addEventListener('click', (e) => { if (e.target === $(sel)) closeModal(sel); });
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    ['#repoModal', '#domainModal', '#networkModal', '#integrationModal'].forEach(sel => {
+      if (!$(sel)?.hidden) closeModal(sel);
+    });
+  }
+});

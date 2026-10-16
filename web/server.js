@@ -1967,7 +1967,9 @@ const server = http.createServer(async (req, res) => {
         try {
           const raw = await fsp.readFile(fp, 'utf8');
           const findings = JSON.parse(raw);
-          for (const f of findings) all.push({ ...f, run: d, target: f.target || d });
+          let runTarget = d;
+          try { const meta = JSON.parse(await fsp.readFile(path.join(RUNS_DIR, d, 'meta.json'), 'utf8')); runTarget = meta.target || d; } catch {}
+          for (const f of findings) all.push({ ...f, run: d, target: f.target || runTarget });
         } catch { /* skip */ }
       }
       const sRank = (s) => { s = (s || '').toLowerCase(); return s.includes('crit') ? 0 : s.includes('high') ? 1 : s.includes('med') ? 2 : s.includes('low') ? 3 : 4; };

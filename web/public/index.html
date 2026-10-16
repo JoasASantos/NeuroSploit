@@ -848,6 +848,121 @@
   </div>
 </div>
 
+<!-- ============ ADD REPOSITORY MODAL ============ -->
+<div class="modal-overlay" id="repoModal" hidden>
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <div class="title">Add Repository</div>
+      <button class="icon-btn" onclick="$('#repoModal').hidden=true">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field-group">
+        <label class="field-label" for="repoUrl">Repository URL or path</label>
+        <input id="repoUrl" type="text" placeholder="https://github.com/owner/repo or /path/to/repo" spellcheck="false" />
+        <div class="field-help">GitHub URL, owner/repo shorthand, GitLab URL, or a local path.</div>
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="repoName">Display name (optional)</label>
+        <input id="repoName" type="text" placeholder="My API" />
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="repoBranch">Default branch</label>
+        <input id="repoBranch" type="text" placeholder="main" value="main" />
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="repoDesc">Description (optional)</label>
+        <input id="repoDesc" type="text" placeholder="Production API service" />
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="$('#repoModal').hidden=true">Cancel</button>
+      <button class="btn btn-primary" id="btnRepoSubmit">Add Repository</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ ADD DOMAIN MODAL ============ -->
+<div class="modal-overlay" id="domainModal" hidden>
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <div class="title">Add Domain</div>
+      <button class="icon-btn" onclick="$('#domainModal').hidden=true">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field-group">
+        <label class="field-label" for="domainName">Domain</label>
+        <input id="domainName" type="text" placeholder="app.example.com" spellcheck="false" />
+        <div class="field-help">The target domain for black-box scanning. Subdomains will be discovered during recon.</div>
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="domainDesc">Description (optional)</label>
+        <input id="domainDesc" type="text" placeholder="Production web application" />
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="domainScope">Scope</label>
+        <select id="domainScope">
+          <option value="in-scope" selected>In scope</option>
+          <option value="observe-only">Observe only</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="$('#domainModal').hidden=true">Cancel</button>
+      <button class="btn btn-primary" id="btnDomainSubmit">Add Domain</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ ADD NETWORK MODAL ============ -->
+<div class="modal-overlay" id="networkModal" hidden>
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <div class="title">Add Network</div>
+      <button class="icon-btn" onclick="$('#networkModal').hidden=true">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field-group">
+        <label class="field-label" for="networkCidr">CIDR or host</label>
+        <input id="networkCidr" type="text" placeholder="10.0.0.0/24 or 192.168.1.10" spellcheck="false" />
+        <div class="field-help">Network range in CIDR notation, or a single IP/hostname.</div>
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="networkName">Name (optional)</label>
+        <input id="networkName" type="text" placeholder="Corporate LAN" />
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="networkDesc">Description (optional)</label>
+        <input id="networkDesc" type="text" placeholder="Internal network segment" />
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="networkTransport">Transport</label>
+        <input id="networkTransport" type="text" placeholder="direct / socks5://host:port / ssh://user@bastion" spellcheck="false" />
+        <div class="field-help">How to reach this network. Leave empty for direct access.</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="$('#networkModal').hidden=true">Cancel</button>
+      <button class="btn btn-primary" id="btnNetworkSubmit">Add Network</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ INTEGRATION CONFIG MODAL ============ -->
+<div class="modal-overlay" id="integrationModal" hidden>
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <div class="title" id="integModalTitle">Configure Integration</div>
+      <button class="icon-btn" onclick="$('#integrationModal').hidden=true">✕</button>
+    </div>
+    <div class="modal-body" id="integModalBody">
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="$('#integrationModal').hidden=true">Cancel</button>
+      <button class="btn btn-primary" id="btnIntegSubmit">Save</button>
+    </div>
+  </div>
+</div>
+
 <div class="toasts" id="toasts"></div>
 
 <script src="/vendor/xterm.js"></script>
