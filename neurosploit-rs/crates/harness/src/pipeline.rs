@@ -180,7 +180,7 @@ fn operator_directives(cfg: &RunConfig) -> String {
     // endpoints as surface to test directly. Parse errors are reported once at
     // launch (see the CLI), so render silently here.
     if let Some(col) = cfg.api_collection.as_deref().filter(|x| !x.trim().is_empty()) {
-        if let Ok(eps) = crate::collection::parse_file(col) {
+        if let Ok(eps) = crate::collection::parse_path(col) {
             s.push_str(&crate::collection::render_block(&eps, 200));
         }
     }

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * NeuroSploit v4.3.1 — web console backend.
+ * NeuroSploit v4.3.2 — web console backend.
  *
  * Zero-dependency Node HTTP server that:
  *  - serves the static SPA in ./public
@@ -57,6 +57,22 @@ function saveEngagementName(runId, name) {
 // interrupted run/whitebox/greybox job, RESUME it (relaunch the REPL, which
 // auto-recovers the harness's own on-disk checkpoint and carries findings
 // forward). Secrets (API keys, creds-file contents) are never written here.
+const CONFIG_DIR = path.join(ROOT, '.neurosploit');
+function configFile(name) { return path.join(CONFIG_DIR, `${name}.json`); }
+async function ensureConfigDir() { await fsp.mkdir(CONFIG_DIR, { recursive: true }); }
+async function readConfig(name) {
+  try { return JSON.parse(await fsp.readFile(configFile(name), 'utf8')); }
+  catch { return []; }
+}
+async function readConfigObj(name) {
+  try { return JSON.parse(await fsp.readFile(configFile(name), 'utf8')); }
+  catch { return {}; }
+}
+async function writeConfig(name, data) {
+  await ensureConfigDir();
+  await fsp.writeFile(configFile(name), JSON.stringify(data, null, 2));
+}
+
 const JOBS_DIR = path.join(ROOT, '.neurosploit', 'web-jobs');
 function jobFile(id) { return path.join(JOBS_DIR, `${id}.json`); }
 function persistJob(job) {
@@ -1940,6 +1956,99 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'DELETE' && m) {
       apiKeys.delete(decodeURIComponent(m[1]));
       return sendJson(res, 200, { ok: true });
+    }
+
+    // ---- Issues (aggregate findings across all runs) ----
+    if (req.method === 'GET' && p === '/api/issues') {
+      const dirs = await fsp.readdir(RUNS_DIR).catch(() => []);
+      const all = [];
+      for (const d of dirs) {
+        const fp = path.join(RUNS_DIR, d, 'findings.json');
+        try {
+          const raw = await fsp.readFile(fp, 'utf8');
+          const findings = JSON.parse(raw);
+          for (const f of findings) all.push({ ...f, run: d, target: f.target || d });
+        } catch { /* skip */ }
+      }
+      const sRank = (s) => { s = (s || '').toLowerCase(); return s.includes('crit') ? 0 : s.includes('high') ? 1 : s.includes('med') ? 2 : s.includes('low') ? 3 : 4; };
+      all.sort((a, b) => sRank(a.severity) - sRank(b.severity));
+      return sendJson(res, 200, all);
+    }
+
+    // ---- Config CRUD: repos ----
+    if (req.method === 'GET' && p === '/api/config/repos') return sendJson(res, 200, await readConfig('repos'));
+    if (req.method === 'POST' && p === '/api/config/repos') {
+      const body = await readBody(req);
+      const repos = await readConfig('repos');
+      const item = { id: crypto.randomUUID(), ...body, createdAt: new Date().toISOString() };
+      repos.push(item);
+      await writeConfig('repos', repos);
+      return sendJson(res, 200, item);
+    }
+    m = p.match(/^\/api\/config\/repos\/([^/]+)$/);
+    if (req.method === 'DELETE' && m) {
+      let repos = await readConfig('repos');
+      repos = repos.filter(r => r.id !== decodeURIComponent(m[1]));
+      await writeConfig('repos', repos);
+      return sendJson(res, 200, { ok: true });
+    }
+
+    // ---- Config CRUD: domains ----
+    if (req.method === 'GET' && p === '/api/config/domains') return sendJson(res, 200, await readConfig('domains'));
+    if (req.method === 'POST' && p === '/api/config/domains') {
+      const body = await readBody(req);
+      const domains = await readConfig('domains');
+      const item = { id: crypto.randomUUID(), ...body, createdAt: new Date().toISOString() };
+      domains.push(item);
+      await writeConfig('domains', domains);
+      return sendJson(res, 200, item);
+    }
+    m = p.match(/^\/api\/config\/domains\/([^/]+)$/);
+    if (req.method === 'DELETE' && m) {
+      let domains = await readConfig('domains');
+      domains = domains.filter(d => d.id !== decodeURIComponent(m[1]));
+      await writeConfig('domains', domains);
+      return sendJson(res, 200, { ok: true });
+    }
+
+    // ---- Config CRUD: networks ----
+    if (req.method === 'GET' && p === '/api/config/networks') return sendJson(res, 200, await readConfig('networks'));
+    if (req.method === 'POST' && p === '/api/config/networks') {
+      const body = await readBody(req);
+      const networks = await readConfig('networks');
+      const item = { id: crypto.randomUUID(), ...body, createdAt: new Date().toISOString() };
+      networks.push(item);
+      await writeConfig('networks', networks);
+      return sendJson(res, 200, item);
+    }
+    m = p.match(/^\/api\/config\/networks\/([^/]+)$/);
+    if (req.method === 'DELETE' && m) {
+      let networks = await readConfig('networks');
+      networks = networks.filter(n => n.id !== decodeURIComponent(m[1]));
+      await writeConfig('networks', networks);
+      return sendJson(res, 200, { ok: true });
+    }
+
+    // ---- Config CRUD: integrations ----
+    if (req.method === 'GET' && p === '/api/config/integrations') return sendJson(res, 200, await readConfig('integrations'));
+    m = p.match(/^\/api\/config\/integrations\/([^/]+)$/);
+    if (req.method === 'PUT' && m) {
+      const body = await readBody(req);
+      let integs = await readConfig('integrations');
+      const id = decodeURIComponent(m[1]);
+      const idx = integs.findIndex(i => i.id === id);
+      if (idx >= 0) integs[idx] = { ...integs[idx], ...body };
+      else integs.push({ id, ...body });
+      await writeConfig('integrations', integs);
+      return sendJson(res, 200, integs.find(i => i.id === id));
+    }
+
+    // ---- Config: settings ----
+    if (req.method === 'GET' && p === '/api/config/settings') return sendJson(res, 200, await readConfigObj('settings'));
+    if (req.method === 'PUT' && p === '/api/config/settings') {
+      const body = await readBody(req);
+      await writeConfig('settings', body);
+      return sendJson(res, 200, body);
     }
 
     sendJson(res, 404, { error: 'not found' });

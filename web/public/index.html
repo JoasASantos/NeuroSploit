@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>NeuroSploit v4.3.1 — Console</title>
+<title>NeuroSploit v4.3.2 — Console</title>
 <link rel="icon" type="image/svg+xml" href="logo.svg">
 <link rel="stylesheet" href="/vendor/xterm.css" />
 <link rel="stylesheet" href="/style.css" />
@@ -35,18 +35,33 @@
       <button class="icon-btn" id="btnThemeToggle" title="Toggle light / dark theme">☾</button>
     </div>
 
-    <button class="sb-new" id="btnNewEngagement">+ New engagement</button>
-    <button class="sb-link" id="btnDashboard">▤ Dashboard</button>
+    <button class="sb-new" id="btnNewEngagement">+ New Pentest</button>
 
-    <div class="sb-search">
-      <span class="search-icon" aria-hidden="true">⌕</span>
-      <input id="runFilter" type="text" autocomplete="off" placeholder="Filter runs" aria-label="Filter runs" />
+    <nav class="sb-nav" id="sbNav">
+      <button class="sb-nav-item active" data-view="dash"><span class="sb-nav-icon">▤</span> Dashboard</button>
+      <button class="sb-nav-item" data-view="pentests"><span class="sb-nav-icon">⊞</span> Pentests</button>
+      <button class="sb-nav-item" data-view="prreviews"><span class="sb-nav-icon">⎇</span> PR Reviews</button>
+      <button class="sb-nav-item" data-view="issues"><span class="sb-nav-icon">⚑</span> Issues</button>
+      <div class="sb-nav-separator"></div>
+      <button class="sb-nav-item" data-view="repos"><span class="sb-nav-icon">◎</span> Repositories</button>
+      <button class="sb-nav-item" data-view="domains"><span class="sb-nav-icon">◇</span> Domains</button>
+      <button class="sb-nav-item" data-view="networks"><span class="sb-nav-icon">⬡</span> Networks</button>
+      <div class="sb-nav-separator"></div>
+      <button class="sb-nav-item" data-view="integrations"><span class="sb-nav-icon">⚙</span> Integrations</button>
+      <button class="sb-nav-item" data-view="settings"><span class="sb-nav-icon">☰</span> Settings</button>
+    </nav>
+
+    <div class="sb-run-history" id="sbRunHistory">
+      <div class="sb-search">
+        <span class="search-icon" aria-hidden="true">⌕</span>
+        <input id="runFilter" type="text" autocomplete="off" placeholder="Filter runs" aria-label="Filter runs" />
+      </div>
+
+      <div class="sb-groups" id="sbGroups"><!-- populated by app.js --></div>
     </div>
 
-    <div class="sb-groups" id="sbGroups"><!-- populated by app.js --></div>
-
     <div class="sb-bottom">
-      <span class="sb-version" id="sbVersion">v4.3.1</span>
+      <span class="sb-version" id="sbVersion">v4.3.2</span>
       <div class="sb-bottom-actions">
         <button class="icon-btn" id="btnOpenAuth" title="Auth &amp; API keys">🔑</button>
         <button class="icon-btn" id="btnOpenRepl" title="Open terminal (Ctrl+`)">❭_</button>
@@ -78,11 +93,126 @@
       </div>
     </section>
 
+    <!-- ============ PENTESTS ============ -->
+    <section class="page-view" id="pentestsView" hidden>
+      <header class="topbar">
+        <div>
+          <div class="topbar-title">Pentests</div>
+          <div class="topbar-sub">All engagements — black-box, white-box, greybox, host, AI, mobile, container</div>
+        </div>
+        <div class="topbar-spacer"></div>
+        <input type="text" id="pentestSearch" class="topbar-search" placeholder="Search pentests…" />
+        <button class="btn btn-accent" id="btnNewPentest2">+ New Pentest</button>
+      </header>
+      <div class="page-body" id="pentestsBody"><div class="empty-state">Loading…</div></div>
+    </section>
+
+    <!-- ============ PR REVIEWS ============ -->
+    <section class="page-view" id="prreviewsView" hidden>
+      <header class="topbar">
+        <div>
+          <div class="topbar-title">PR Reviews</div>
+          <div class="topbar-sub">Security reviews of pull requests</div>
+        </div>
+        <div class="topbar-spacer"></div>
+        <button class="btn btn-accent" id="btnNewPrReview">+ New Review</button>
+      </header>
+      <div class="page-body" id="prreviewsBody"><div class="empty-state">No PR reviews yet. Run <code>neurosploit pr owner/repo 123</code> or use the MCP server.</div></div>
+    </section>
+
+    <!-- ============ ISSUES ============ -->
+    <section class="page-view" id="issuesView" hidden>
+      <header class="topbar">
+        <div>
+          <div class="topbar-title">Issues</div>
+          <div class="topbar-sub">All findings across every engagement</div>
+        </div>
+        <div class="topbar-spacer"></div>
+        <select id="issuesSevFilter" class="dash-range">
+          <option value="">All severities</option>
+          <option value="critical">Critical</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+        </select>
+        <select id="issuesStatusFilter" class="dash-range">
+          <option value="">All statuses</option>
+          <option value="open">Open</option>
+          <option value="fixed">Fixed</option>
+        </select>
+        <input type="text" id="issuesSearch" class="topbar-search" placeholder="Search issues…" />
+      </header>
+      <div class="page-body" id="issuesBody"><div class="empty-state">Loading…</div></div>
+    </section>
+
+    <!-- ============ REPOSITORIES ============ -->
+    <section class="page-view" id="reposView" hidden>
+      <header class="topbar">
+        <div>
+          <div class="topbar-title">Repositories</div>
+          <div class="topbar-sub">Connected source repositories for white-box, greybox, and PR reviews</div>
+        </div>
+        <div class="topbar-spacer"></div>
+        <button class="btn btn-accent" id="btnAddRepo">+ Add Repository</button>
+      </header>
+      <div class="page-body" id="reposBody"><div class="empty-state">No repositories connected yet.</div></div>
+    </section>
+
+    <!-- ============ DOMAINS ============ -->
+    <section class="page-view" id="domainsView" hidden>
+      <header class="topbar">
+        <div>
+          <div class="topbar-title">Domains</div>
+          <div class="topbar-sub">Target domains and subdomains for black-box engagements</div>
+        </div>
+        <div class="topbar-spacer"></div>
+        <button class="btn btn-accent" id="btnAddDomain">+ Add Domain</button>
+      </header>
+      <div class="page-body" id="domainsBody"><div class="empty-state">No domains configured yet.</div></div>
+    </section>
+
+    <!-- ============ NETWORKS ============ -->
+    <section class="page-view" id="networksView" hidden>
+      <header class="topbar">
+        <div>
+          <div class="topbar-title">Networks</div>
+          <div class="topbar-sub">Network ranges and hosts for infrastructure scanning</div>
+        </div>
+        <div class="topbar-spacer"></div>
+        <button class="btn btn-accent" id="btnAddNetwork">+ Add Network</button>
+      </header>
+      <div class="page-body" id="networksBody"><div class="empty-state">No networks configured yet.</div></div>
+    </section>
+
+    <!-- ============ INTEGRATIONS ============ -->
+    <section class="page-view" id="integrationsView" hidden>
+      <header class="topbar">
+        <div>
+          <div class="topbar-title">Integrations</div>
+          <div class="topbar-sub">Connect external services — GitHub, GitLab, Jira, Slack, CI/CD</div>
+        </div>
+        <div class="topbar-spacer"></div>
+      </header>
+      <div class="page-body" id="integrationsBody"><div class="empty-state">Loading…</div></div>
+    </section>
+
+    <!-- ============ SETTINGS ============ -->
+    <section class="page-view" id="settingsView" hidden>
+      <header class="topbar">
+        <div>
+          <div class="topbar-title">Settings</div>
+          <div class="topbar-sub">Console configuration, API keys, and preferences</div>
+        </div>
+        <div class="topbar-spacer"></div>
+      </header>
+      <div class="page-body" id="settingsBody"><div class="empty-state">Loading…</div></div>
+    </section>
+
     <!-- ============ WIZARD (new engagement) ============ -->
     <section class="wizard" id="wizardView">
       <header class="topbar">
         <div>
-          <div class="topbar-title">New engagement</div>
+          <div class="topbar-title">New Pentest</div>
           <div class="topbar-sub">Asset → Scope &amp; Auth → Leads → Model &amp; Run → Review</div>
         </div>
         <div class="topbar-spacer"></div>
@@ -350,7 +480,7 @@
           <a class="btn" id="btnDownloadLog" download>Download log</a>
           <button class="btn" id="btnReportNow" title="Write the report from what has been found so far">Report so far</button>
           <button class="btn btn-danger" id="btnStopRun">Stop</button>
-          <button class="btn" id="btnBackToBoard">← New engagement</button>
+          <button class="btn" id="btnBackToBoard">← Back</button>
         </div>
       </header>
       <div class="progress-wrap">
@@ -416,7 +546,7 @@
           <button class="btn" id="btnRetest" title="Re-run every finding's recorded proof (neurosploit poc) and see what still reproduces">⟳ Re-test</button>
           <a class="btn" id="detailOpenAudit" target="_blank" hidden title="Every action this run took, hash-chained">Audit trail</a>
           <button class="btn btn-danger" id="btnDeleteRun" title="Permanently delete this session and its report">🗑 Delete</button>
-          <button class="btn" id="btnDetailBack">← New engagement</button>
+          <button class="btn" id="btnDetailBack">← Back</button>
         </div>
       </header>
       <nav class="run-tabs">
@@ -639,9 +769,9 @@
         </div>
         <div class="field-group">
           <label class="field-label" for="collectionFile">API collection (Postman / OpenAPI / Swagger / HAR)</label>
-          <input id="collectionFile" type="file" accept=".json,application/json,.har" />
-          <input id="collectionPath" type="text" placeholder="…or a path on disk: api.postman_collection.json" />
-          <div class="field-help" id="collectionHelp">Imports the endpoints as known surface — every route is tested directly, alongside recon. JSON only (convert YAML specs first).</div>
+          <input id="collectionFile" type="file" accept=".json,application/json,.har" multiple />
+          <input id="collectionPath" type="text" placeholder="…or a path on disk: file.json or a directory of .json files" />
+          <div class="field-help" id="collectionHelp">Imports endpoints as known surface — file or directory of .json files. Every route is tested directly, alongside recon.</div>
         </div>
       </div>
     </div>

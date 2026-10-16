@@ -863,8 +863,12 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
                 } else if arg == "clear" {
                     s.collection = None; println!("  api collection cleared");
                 } else {
-                    match harness::collection::parse_file(arg) {
-                        Ok(eps) => { s.collection = Some(arg.to_string()); println!("  api collection: imported {} endpoint(s) from {arg} — tested as known surface", eps.len()); }
+                    match harness::collection::parse_path(arg) {
+                        Ok(eps) => {
+                            let kind = if std::path::Path::new(arg).is_dir() { "directory" } else { "file" };
+                            s.collection = Some(arg.to_string());
+                            println!("  api collection: imported {} endpoint(s) from {kind} {arg} — tested as known surface", eps.len());
+                        }
                         Err(e) => println!("  \x1b[33m⚠ {e}\x1b[0m"),
                     }
                 }
@@ -2724,7 +2728,7 @@ fn help() {
     h("/repo <path|url>",   "source repo (greybox) OR skill/n8n file/folder to audit (skills scope)");
     h("/auth <value>",      "auth header (Bearer/cookie/key). Roles: /auth admin <hdr> · /auth user <hdr>");
     h("/creds <file.yaml>", "creds: jwt/header/cookie/login + ssh/windows + aws/gcp/azure + roles");
-    h("/collection <file>", "import an API collection (Postman/OpenAPI/HAR, JSON) as known surface to test");
+    h("/collection <path>", "import API collection(s) — file or directory of .json (Postman/OpenAPI/HAR)");
     h("/focus <text>",      "steer the tests (or just type the instruction)");
     h("/objective <text>",  "engagement goal/context — shapes what agents prioritise & count as impact");
     h("/scope-out <text>",  "out-of-scope exclusions — host-shaped entries become ENFORCED denials");

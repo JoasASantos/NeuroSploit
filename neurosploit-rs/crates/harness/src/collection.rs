@@ -39,7 +39,50 @@ fn detect(v: &Value) -> &'static str {
     }
 }
 
-/// Parse a collection file into a de-duplicated endpoint list.
+/// Parse a path that is either a single collection file OR a directory of
+/// `.json` collection files.  When it is a directory every `.json` inside it
+/// (recursively) is parsed and the endpoints are merged and de-duplicated.
+pub fn parse_path(path: &str) -> Result<Vec<SeedEndpoint>> {
+    let p = std::path::Path::new(path);
+    if p.is_dir() {
+        parse_dir(path)
+    } else {
+        parse_file(path)
+    }
+}
+
+/// Walk a directory tree, parse every `.json` file as a collection, merge and
+/// de-duplicate.  Files that are not valid collections are reported on stderr
+/// but do not abort the import — at least one file must yield endpoints.
+pub fn parse_dir(dir: &str) -> Result<Vec<SeedEndpoint>> {
+    let mut all = Vec::new();
+    let mut ok_count = 0usize;
+    let mut err_count = 0usize;
+    for entry in walkdir::WalkDir::new(dir).follow_links(true).into_iter().filter_map(|e| e.ok()) {
+        let p = entry.path();
+        if !p.is_file() { continue; }
+        match p.extension().and_then(|x| x.to_str()) {
+            Some("json" | "har") => {}
+            _ => continue,
+        }
+        match parse_file(&p.to_string_lossy()) {
+            Ok(eps) => { ok_count += 1; all.extend(eps); }
+            Err(e) => { err_count += 1; eprintln!("  \x1b[33m⚠ skipping {}: {e}\x1b[0m", p.display()); }
+        }
+    }
+    if ok_count == 0 {
+        return Err(anyhow!(
+            "no valid collection files found in '{dir}' ({err_count} file(s) skipped)"
+        ));
+    }
+    dedup(&mut all);
+    if all.is_empty() {
+        return Err(anyhow!("collections in '{dir}' contained no endpoints"));
+    }
+    Ok(all)
+}
+
+/// Parse a single collection file into a de-duplicated endpoint list.
 pub fn parse_file(path: &str) -> Result<Vec<SeedEndpoint>> {
     let raw = std::fs::read_to_string(path)
         .map_err(|e| anyhow!("cannot read collection '{path}': {e}"))?;

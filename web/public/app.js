@@ -1,5 +1,5 @@
 'use strict';
-/* NeuroSploit v4.2.1 — web console frontend. Vanilla JS, no build step. */
+/* NeuroSploit v4.3.2 — web console frontend. Vanilla JS, no build step. */
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -43,6 +43,7 @@ const state = {
     live: { sort: 'severity', dir: 1, query: '', sev: null },
     detail: { sort: 'severity', dir: 1, query: '', sev: null },
   },
+  activeView: 'wizard',
 };
 
 // ---------------------------------------------------------------------------
@@ -95,6 +96,33 @@ function fieldError(id, msg) {
   show(el, !!msg);
 }
 function clearFieldErrors() { $$('.field-error').forEach((el) => { el.textContent = ''; el.hidden = true; }); }
+
+// ---------------------------------------------------------------------------
+// view navigation
+// ---------------------------------------------------------------------------
+
+const ALL_VIEWS = ['dashView','wizardView','liveView','detailView','pentestsView','prreviewsView','issuesView','reposView','domainsView','networksView','integrationsView','settingsView'];
+
+function switchView(viewName) {
+  state.activeView = viewName;
+  ALL_VIEWS.forEach(id => { const el = $(`#${id}`); if (el) el.hidden = true; });
+  const target = $(`#${viewName}View`);
+  if (target) target.hidden = false;
+  $$('.sb-nav-item').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.view === viewName);
+  });
+  const runHist = $('#sbRunHistory');
+  if (runHist) runHist.style.display = ['dash','pentests','wizard'].includes(viewName) ? '' : 'none';
+  if (viewName === 'pentests') loadPentests();
+  if (viewName === 'issues') loadIssues();
+  if (viewName === 'repos') loadRepos();
+  if (viewName === 'domains') loadDomains();
+  if (viewName === 'networks') loadNetworks();
+  if (viewName === 'integrations') loadIntegrations();
+  if (viewName === 'settings') loadSettings();
+  if (viewName === 'prreviews') loadPrReviews();
+  if (viewName === 'dash') renderDashboard();
+}
 
 function timeAgo(ts) {
   if (!ts) return '';
@@ -1029,7 +1057,7 @@ function leaveLiveJob() {
   state.currentJob = null;
   termSyncTargets();
 }
-$('#btnBackToBoard').addEventListener('click', () => { leaveLiveJob(); show($('#liveView'), false); show($('#dashView'), false); show($('#wizardView'), true); });
+$('#btnBackToBoard').addEventListener('click', () => { leaveLiveJob(); switchView('wizard'); });
 // Regenerating from the evidence already on disk, rather than re-running the
 // engagement: a run whose PDF was never produced (no `typst` at the time, or a
 // since-improved template) would otherwise be unreportable.
@@ -1074,8 +1102,9 @@ $('#btnDeleteRun').addEventListener('click', async () => {
   }
 });
 
-$('#btnDetailBack').addEventListener('click', () => { clearInterval(state.detailPoll); show($('#detailView'), false); show($('#dashView'), false); show($('#wizardView'), true); });
-$('#btnNewEngagement').addEventListener('click', () => { leaveLiveJob(); clearInterval(state.detailPoll); show($('#detailView'), false); show($('#liveView'), false); show($('#dashView'), false); show($('#wizardView'), true); });
+$('#btnDetailBack').addEventListener('click', () => { clearInterval(state.detailPoll); switchView('wizard'); });
+$('#btnNewEngagement')?.addEventListener('click', () => { leaveLiveJob(); clearInterval(state.detailPoll); switchView('wizard'); });
+if ($('#btnNewPentest2')) $('#btnNewPentest2').addEventListener('click', () => { leaveLiveJob(); clearInterval(state.detailPoll); switchView('wizard'); });
 
 // ---------------------------------------------------------------------------
 // Finding detail modal — full evidence/impact/remediation + any PoC script
@@ -2611,16 +2640,19 @@ function openFairParams(params) {
 function showDashboard() {
   leaveLiveJob();
   clearInterval(state.detailPoll);
-  show($('#wizardView'), false);
-  show($('#liveView'), false);
-  show($('#detailView'), false);
-  show($('#dashView'), true);
-  renderDashboard();
+  switchView('dash');
 }
-$('#btnDashboard').addEventListener('click', showDashboard);
-$('#btnDashRefresh').addEventListener('click', renderDashboard);
-$('#dashRange').addEventListener('change', renderDashboard);
-$('#runFilter').addEventListener('input', (e) => { state.runFilter = e.target.value; renderSidebar(); });
+// Sidebar nav items
+$$('.sb-nav-item').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (btn.dataset.view === 'wizard') { leaveLiveJob(); clearInterval(state.detailPoll); }
+    switchView(btn.dataset.view);
+    if (window.matchMedia(NARROW).matches) setSidebar(false);
+  });
+});
+$('#btnDashRefresh')?.addEventListener('click', renderDashboard);
+$('#dashRange')?.addEventListener('change', renderDashboard);
+$('#runFilter')?.addEventListener('input', (e) => { state.runFilter = e.target.value; renderSidebar(); });
 
 // ---------------------------------------------------------------------------
 // boot
@@ -2641,8 +2673,7 @@ $('#sidebarScrim').addEventListener('click', () => setSidebar(false));
 $('#sbGroups').addEventListener('click', (e) => {
   if (e.target.closest('.sb-run') && window.matchMedia(NARROW).matches) setSidebar(false);
 });
-$('#btnDashboard').addEventListener('click', () => { if (window.matchMedia(NARROW).matches) setSidebar(false); });
-$('#btnNewEngagement').addEventListener('click', () => { if (window.matchMedia(NARROW).matches) setSidebar(false); });
+$('#btnNewEngagement')?.addEventListener('click', () => { if (window.matchMedia(NARROW).matches) setSidebar(false); });
 // Growing the window past the breakpoint leaves a scrim over a sidebar that is
 // no longer a drawer.
 window.matchMedia(NARROW).addEventListener('change', (m) => { if (!m.matches) setSidebar(false); });
@@ -3365,3 +3396,210 @@ const adoptGraph = (r) => {
 $('#btnGraphRecompute')?.addEventListener('click', (e) => cliAction(e.currentTarget, 'Recompute graph', '/graph', {}, adoptGraph));
 $('#btnGraphPush')?.addEventListener('click', (e) => cliAction(e.currentTarget, 'Push to Neo4j', '/graph', { push: true }, adoptGraph));
 $('#btnRetest')?.addEventListener('click', (e) => cliAction(e.currentTarget, 'Re-test PoCs', '/retest', {}));
+
+// ---------------------------------------------------------------------------
+// new pages — pentests / PR reviews / issues / repos / domains / networks /
+//             integrations / settings
+// ---------------------------------------------------------------------------
+
+async function loadPentests() {
+  const body = $('#pentestsBody');
+  if (!body) return;
+  try {
+    const runs = await api('/api/runs');
+    if (!runs.length) { body.innerHTML = '<div class="empty-state">No pentests yet. Click <strong>+ New Pentest</strong> to start.</div>'; return; }
+    const rows = runs.map(r => {
+      const mode = (r.id || '').startsWith('ns-wb-') ? 'whitebox' : (r.id || '').startsWith('ns-gb-') ? 'greybox' : (r.id || '').startsWith('ns-host-') ? 'host' : 'blackbox';
+      const when = r.when ? timeAgo(Math.floor(new Date(r.when).getTime() / 1000)) : '';
+      return `<tr class="pentest-row" data-id="${esc(r.id)}">
+        <td class="mono">${esc(r.id)}</td>
+        <td>${esc(r.target || r.name || '')}</td>
+        <td>${esc(mode)}</td>
+        <td>${r.findings ?? 0}</td>
+        <td>${esc(r.state || 'done')}</td>
+        <td>${when}</td>
+      </tr>`;
+    }).join('');
+    body.innerHTML = `<table class="data-table"><thead><tr><th>ID</th><th>Target</th><th>Mode</th><th>Findings</th><th>Status</th><th>When</th></tr></thead><tbody>${rows}</tbody></table>`;
+    $$('.pentest-row', body).forEach(row => {
+      row.style.cursor = 'pointer';
+      row.addEventListener('click', () => { const run = runs.find(r => r.id === row.dataset.id); if (run) openRun(run); });
+    });
+  } catch (e) { body.innerHTML = `<div class="empty-state">Failed to load: ${esc(e.message)}</div>`; }
+}
+
+async function loadPrReviews() {
+  const body = $('#prreviewsBody');
+  if (!body) return;
+  try {
+    const runs = await api('/api/runs');
+    const prs = runs.filter(r => r.id && r.id.includes('-pr-'));
+    if (!prs.length) { body.innerHTML = '<div class="empty-state">No PR reviews yet. Run <code>neurosploit pr owner/repo 123</code> or use the MCP server.</div>'; return; }
+    const rows = prs.map(r => {
+      const when = r.when ? timeAgo(Math.floor(new Date(r.when).getTime() / 1000)) : '';
+      return `<tr class="pentest-row" data-id="${esc(r.id)}"><td class="mono">${esc(r.id)}</td><td>${esc(r.target || r.name || '')}</td><td>${r.findings ?? 0}</td><td>${esc(r.state || 'done')}</td><td>${when}</td></tr>`;
+    }).join('');
+    body.innerHTML = `<table class="data-table"><thead><tr><th>ID</th><th>Repository</th><th>Findings</th><th>Status</th><th>When</th></tr></thead><tbody>${rows}</tbody></table>`;
+  } catch (e) { body.innerHTML = `<div class="empty-state">Failed to load: ${esc(e.message)}</div>`; }
+}
+
+async function loadIssues() {
+  const body = $('#issuesBody');
+  if (!body) return;
+  try {
+    const data = await api('/api/issues');
+    if (!data.length) { body.innerHTML = '<div class="empty-state">No findings across any engagement yet.</div>'; return; }
+    const rows = data.map(f => {
+      const sc = sevClass(f.severity);
+      return `<tr><td><span class="pill ${sc}">${esc(f.severity)}</span></td><td>${esc(f.title)}</td><td class="mono">${esc(f.target || '')}</td><td class="mono">${esc(f.run || '')}</td><td>${esc(f.status || 'open')}</td></tr>`;
+    }).join('');
+    body.innerHTML = `<table class="data-table"><thead><tr><th>Severity</th><th>Title</th><th>Target</th><th>Run</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`;
+  } catch (e) { body.innerHTML = `<div class="empty-state">Failed to load: ${esc(e.message)}</div>`; }
+}
+
+async function loadRepos() {
+  const body = $('#reposBody');
+  if (!body) return;
+  try {
+    const repos = await api('/api/config/repos');
+    if (!repos.length) { body.innerHTML = '<div class="empty-state">No repositories connected yet. Click <strong>+ Add Repository</strong> to connect one.</div>'; return; }
+    body.innerHTML = '<div class="config-grid">' + repos.map(r => `<div class="config-card">
+      <div class="config-card-title">${esc(r.name || r.url)}</div>
+      <div class="config-card-desc">${esc(r.description || r.url)}</div>
+      <div class="config-card-meta">${esc(r.provider || 'git')} · ${esc(r.branch || 'main')}</div>
+      <div class="config-card-actions"><button class="btn btn-danger" onclick="deleteRepo('${esc(r.id)}')">Remove</button></div>
+    </div>`).join('') + '</div>';
+  } catch { body.innerHTML = '<div class="empty-state">No repositories connected yet. Click <strong>+ Add Repository</strong> to connect one.</div>'; }
+}
+
+async function loadDomains() {
+  const body = $('#domainsBody');
+  if (!body) return;
+  try {
+    const domains = await api('/api/config/domains');
+    if (!domains.length) { body.innerHTML = '<div class="empty-state">No domains configured yet. Click <strong>+ Add Domain</strong> to add one.</div>'; return; }
+    body.innerHTML = '<div class="config-grid">' + domains.map(d => `<div class="config-card">
+      <div class="config-card-title">${esc(d.domain)}</div>
+      <div class="config-card-desc">${esc(d.description || 'Target domain')}</div>
+      <div class="config-card-meta">${d.subdomains ? d.subdomains.length + ' subdomains' : 'No subdomains'} · ${esc(d.scope || 'in-scope')}</div>
+      <div class="config-card-actions"><button class="btn btn-danger" onclick="deleteDomain('${esc(d.id)}')">Remove</button></div>
+    </div>`).join('') + '</div>';
+  } catch { body.innerHTML = '<div class="empty-state">No domains configured yet. Click <strong>+ Add Domain</strong> to add one.</div>'; }
+}
+
+async function loadNetworks() {
+  const body = $('#networksBody');
+  if (!body) return;
+  try {
+    const nets = await api('/api/config/networks');
+    if (!nets.length) { body.innerHTML = '<div class="empty-state">No networks configured yet. Click <strong>+ Add Network</strong> to add one.</div>'; return; }
+    body.innerHTML = '<div class="config-grid">' + nets.map(n => `<div class="config-card">
+      <div class="config-card-title">${esc(n.name || n.cidr)}</div>
+      <div class="config-card-desc">${esc(n.description || n.cidr)}</div>
+      <div class="config-card-meta">${esc(n.cidr)} · ${esc(n.transport || 'direct')}</div>
+      <div class="config-card-actions"><button class="btn btn-danger" onclick="deleteNetwork('${esc(n.id)}')">Remove</button></div>
+    </div>`).join('') + '</div>';
+  } catch { body.innerHTML = '<div class="empty-state">No networks configured yet. Click <strong>+ Add Network</strong> to add one.</div>'; }
+}
+
+async function loadIntegrations() {
+  const body = $('#integrationsBody');
+  if (!body) return;
+  try {
+    const integs = await api('/api/config/integrations');
+    const defs = [
+      { id: 'github', name: 'GitHub', desc: 'Pull request reviews, commit status checks, and repository scanning' },
+      { id: 'gitlab', name: 'GitLab', desc: 'Merge request reviews and repository scanning' },
+      { id: 'jira', name: 'Jira', desc: 'Create Jira tickets for confirmed findings' },
+      { id: 'slack', name: 'Slack', desc: 'Notifications for completed engagements and critical findings' },
+      { id: 'mcp', name: 'MCP Server', desc: 'Model Context Protocol — drive NeuroSploit from Claude Code, Codex, Cursor, Windsurf' },
+    ];
+    body.innerHTML = '<div class="config-grid">' + defs.map(c => {
+      const cfg = integs.find(i => i.id === c.id) || {};
+      const on = cfg.enabled;
+      return `<div class="config-card">
+        <div class="config-card-title">${esc(c.name)}</div>
+        <div class="config-card-desc">${esc(c.desc)}</div>
+        <div class="config-card-meta"><span class="integration-dot ${on ? 'connected' : 'disconnected'}"></span> ${on ? 'Connected' : 'Not configured'}</div>
+        <div class="config-card-actions"><button class="btn" onclick="configureIntegration('${c.id}')">${on ? 'Configure' : 'Connect'}</button></div>
+      </div>`;
+    }).join('') + '</div>';
+  } catch { body.innerHTML = '<div class="empty-state">Failed to load integrations.</div>'; }
+}
+
+async function loadSettings() {
+  const body = $('#settingsBody');
+  if (!body) return;
+  try {
+    const cfg = await api('/api/config/settings');
+    body.innerHTML = `<div class="config-grid">
+      <div class="config-card">
+        <div class="config-card-title">General</div>
+        <div class="form-group"><label>Default model</label><input type="text" id="settingModel" value="${esc(cfg.defaultModel || '')}" placeholder="anthropic:claude-opus-4-8" /></div>
+        <div class="form-group"><label>Default environment</label><select id="settingEnv">
+          <option value="lab" ${cfg.environment === 'lab' ? 'selected' : ''}>Lab</option>
+          <option value="development" ${cfg.environment === 'development' ? 'selected' : ''}>Development</option>
+          <option value="staging" ${cfg.environment === 'staging' ? 'selected' : ''}>Staging</option>
+          <option value="production" ${!cfg.environment || cfg.environment === 'production' ? 'selected' : ''}>Production</option>
+        </select></div>
+        <div class="form-group"><label>TypeSafe</label><select id="settingTypesafe">
+          <option value="auto" ${!cfg.typesafe || cfg.typesafe === 'auto' ? 'selected' : ''}>Auto</option>
+          <option value="on" ${cfg.typesafe === 'on' ? 'selected' : ''}>On</option>
+          <option value="off" ${cfg.typesafe === 'off' ? 'selected' : ''}>Off</option>
+        </select></div>
+        <div class="config-card-actions"><button class="btn btn-accent" onclick="saveSettings()">Save</button></div>
+      </div>
+      <div class="config-card">
+        <div class="config-card-title">Network</div>
+        <div class="form-group"><label>Default transport</label><input type="text" id="settingTransport" value="${esc(cfg.transport || '')}" placeholder="direct / socks5://host:port" /></div>
+        <div class="form-group"><label>OOB domain</label><input type="text" id="settingOob" value="${esc(cfg.oobDomain || '')}" placeholder="oob.yourdomain.com" /></div>
+        <div class="form-group"><label>Intercept proxy</label><input type="text" id="settingIntercept" value="${esc(cfg.intercept || '')}" placeholder="burp / caido / http://host:port" /></div>
+        <div class="config-card-actions"><button class="btn btn-accent" onclick="saveSettings()">Save</button></div>
+      </div>
+      <div class="config-card">
+        <div class="config-card-title">MCP Server</div>
+        <div class="config-card-desc">Run NeuroSploit as an MCP server for Claude Code, Codex, Cursor, Windsurf and other MCP clients.</div>
+        <div class="config-card-meta" style="margin-top:var(--sp-2)"><code>neurosploit mcp</code><br/>Config: <code>{"command":"neurosploit","args":["mcp"]}</code></div>
+      </div>
+    </div>`;
+  } catch { body.innerHTML = '<div class="empty-state">Failed to load settings.</div>'; }
+}
+
+function deleteRepo(id) { api(`/api/config/repos/${id}`, { method: 'DELETE' }).then(() => loadRepos()).catch(e => toast(e.message, 'error')); }
+function deleteDomain(id) { api(`/api/config/domains/${id}`, { method: 'DELETE' }).then(() => loadDomains()).catch(e => toast(e.message, 'error')); }
+function deleteNetwork(id) { api(`/api/config/networks/${id}`, { method: 'DELETE' }).then(() => loadNetworks()).catch(e => toast(e.message, 'error')); }
+function configureIntegration(id) { toast('Integration configuration — coming soon', 'info'); }
+async function saveSettings() {
+  const data = {
+    defaultModel: $('#settingModel')?.value || '',
+    environment: $('#settingEnv')?.value || 'production',
+    typesafe: $('#settingTypesafe')?.value || 'auto',
+    transport: $('#settingTransport')?.value || '',
+    oobDomain: $('#settingOob')?.value || '',
+    intercept: $('#settingIntercept')?.value || '',
+  };
+  try { await api('/api/config/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }); toast('Settings saved', 'ok'); }
+  catch (e) { toast(`Failed: ${e.message}`, 'error'); }
+}
+
+// Add-item modals
+function addRepoPrompt() {
+  const url = prompt('Repository URL or owner/repo:');
+  if (!url) return;
+  const name = prompt('Name (optional):') || '';
+  api('/api/config/repos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url, name, branch: 'main' }) })
+    .then(() => loadRepos()).catch(e => toast(e.message, 'error'));
+}
+function addDomainPrompt() {
+  const domain = prompt('Domain (e.g. app.example.com):');
+  if (!domain) return;
+  api('/api/config/domains', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ domain }) })
+    .then(() => loadDomains()).catch(e => toast(e.message, 'error'));
+}
+function addNetworkPrompt() {
+  const cidr = prompt('Network CIDR or host (e.g. 10.0.0.0/24):');
+  if (!cidr) return;
+  const name = prompt('Name (optional):') || '';
+  api('/api/config/networks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cidr, name }) })
+    .then(() => loadNetworks()).catch(e => toast(e.message, 'error'));
+}

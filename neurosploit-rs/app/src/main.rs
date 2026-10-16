@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 #[command(
     name = "neurosploit",
     version,
-    about = "NeuroSploit v4.3.1 — multi-model autonomous pentest harness",
-    long_about = "NeuroSploit v4.3.1 — a Rust multi-model harness that drives a pool of LLMs \
+    about = "NeuroSploit v4.3.2 — multi-model autonomous pentest harness",
+    long_about = "NeuroSploit v4.3.2 — a Rust multi-model harness that drives a pool of LLMs \
 (API key or local subscription: Claude/Codex/Gemini/Grok/OpenCode/Hermes) to autonomously test a target. \
 After recon it INTELLIGENTLY selects only the agents matching the discovered surface, runs \
 them in parallel, then validates every finding by cross-model voting before reporting.\n\n\
@@ -2252,9 +2252,10 @@ fn apply_quick(cfg: &mut RunConfig) {
 /// sees how many endpoints were seeded.
 fn apply_collection(cfg: &mut RunConfig, path: Option<&str>) -> anyhow::Result<()> {
     let Some(path) = path.filter(|p| !p.trim().is_empty()) else { return Ok(()) };
-    let eps = harness::collection::parse_file(path)
+    let eps = harness::collection::parse_path(path)
         .map_err(|e| anyhow::anyhow!("--collection {path}: {e}"))?;
-    println!("  \x1b[2mcollection: imported {} endpoint(s) from {} — tested as known surface\x1b[0m", eps.len(), path);
+    let kind = if std::path::Path::new(path).is_dir() { "directory" } else { "file" };
+    println!("  \x1b[2mcollection: imported {} endpoint(s) from {kind} {} — tested as known surface\x1b[0m", eps.len(), path);
     cfg.api_collection = Some(path.to_string());
     Ok(())
 }
