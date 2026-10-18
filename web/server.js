@@ -787,6 +787,10 @@ async function runDetail(id) {
     flows: exists('flows.jsonl'),
     deliverables: await listTree(path.join(dir, 'deliverables'), 'deliverables'),
   };
+  if (status.state === 'running') {
+    const liveRunIds = new Set([...jobs.values()].filter((j) => !j.done && j.runId).map((j) => j.runId));
+    if (!liveRunIds.has(id)) status.state = 'interrupted';
+  }
   return { id, name: engagementNames.get(id) || '', meta, status, findings, assets, pocs, extras };
 }
 
