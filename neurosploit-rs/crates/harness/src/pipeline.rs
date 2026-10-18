@@ -952,6 +952,7 @@ async fn authz_matrix_pass(cfg: &RunConfig, recon: &str, tx: &Sender<String>) ->
 
 pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<String>) -> RunOutput {
     pool.set_progress(tx.clone());
+    pool.set_token_limit(cfg.budget.token_limit);
 
     // A broad DEFAULT objective for a black-box web engagement when the operator
     // set none — so a plain `/run` already does a comprehensive web assessment
@@ -1360,6 +1361,22 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
     let shots = if evidence_dir.is_empty() { String::new() } else { screenshot_doctrine(&evidence_dir) };
     // Token economy: each agent gets a capped recon context, not the full blob.
     let recon_ctx: String = recon.chars().take(3500).collect();
+
+    // Resume support: skip agents that already ran in a previous invocation.
+    let snapshot = cfg.workdir.as_deref().and_then(crate::resilience::RunSnapshot::load);
+    let mut run_snap = if let Some(ref snap) = snapshot {
+        let _ = tx.send(format!("📂 resuming from snapshot: {} agents done, {} findings carried", snap.agents_completed.len(), snap.findings_so_far.len())).await;
+        snap.clone()
+    } else {
+        crate::resilience::RunSnapshot::new(&cfg.target, &recon_ctx)
+    };
+    run_snap.agents_pending = selected.iter().map(|a| a.name.clone()).collect();
+    run_snap.set_phase("exploit");
+
+    // Budget warnings: progressive alerts.
+    let budget_warner = std::sync::Arc::new(crate::resilience::BudgetWarner::new());
+
+    let snap_ref = snapshot.as_ref();
     let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(selected.iter().cloned())
         .map(|ag| {
             let target = target.clone();
@@ -1370,7 +1387,25 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
             let txc = tx.clone();
             let wd = cfg.workdir.clone();
             async move {
+                // Resume: skip agents already completed in a prior run.
+                if let Some(snap) = snap_ref {
+                    if snap.already_ran(&ag.name) {
+                        let _ = txc.send(format!("⏩ skipping {} (already ran in prior run)", ag.name)).await;
+                        let prior: Vec<Finding> = snap.findings_so_far.iter()
+                            .filter(|f| f.agent == ag.name)
+                            .cloned().collect();
+                        return (ag.name.clone(), String::new(), prior);
+                    }
+                }
                 if pool.stop_exploiting() {
+                    return (ag.name.clone(), String::new(), vec![]);
+                }
+                // Budget gate: stop spawning new agents at 95%.
+                if crate::resilience::BudgetWarner::should_stop_new_agents(
+                    pool.tokens_used(),
+                    pool.token_limit(),
+                ) {
+                    let _ = txc.send(format!("🛑 budget exhausted — skipping agent {}", ag.name)).await;
                     return (ag.name.clone(), String::new(), vec![]);
                 }
                 if verbose {
@@ -1445,6 +1480,15 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
                         } else {
                             let _ = txc.send(format!("exploit {} failed: {e}", ag.name)).await;
                         }
+                        // Nudge: retry with simplified prompt (skip for auth failures).
+                        if !is_auth && !pool.stop_exploiting() {
+                            let _ = txc.send(format!("🔄 nudging {} with simplified prompt...", ag.name)).await;
+                            let nudged = crate::resilience::nudge_agent(pool, &ag.name, &ag.system, &user, Task::Exploit).await;
+                            if !nudged.is_empty() {
+                                let _ = txc.send(format!("✓ nudge recovered {} finding(s) from {}", nudged.len(), ag.name)).await;
+                                return (ag.name.clone(), String::new(), nudged);
+                            }
+                        }
                         let error_text = format!("ERROR: {e}");
                         let salvaged = crate::resilience::salvage_findings(&ag.name, &error_text, wd.as_deref());
                         if !salvaged.is_empty() {
@@ -1458,6 +1502,21 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
         .buffer_unordered(cfg.concurrency)
         .collect()
         .await;
+
+    // Update snapshot with completed agents.
+    for (name, _, findings) in &raw {
+        run_snap.mark_agent_done(name, findings);
+    }
+    run_snap.set_phase("validation");
+    if let Some(ref wd) = cfg.workdir {
+        let _ = run_snap.save(wd);
+    }
+
+    // Budget warning after exploit phase.
+    if let Some(threshold) = budget_warner.check(pool.tokens_used(), pool.token_limit()) {
+        let msg = crate::resilience::BudgetWarner::message(threshold, pool.tokens_used(), pool.token_limit(), 0);
+        let _ = tx.send(format!("notify: {msg}")).await;
+    }
 
     // Merge any previously salvaged findings from prior crashed runs.
     let mut prior_salvaged = if let Some(ref wd) = cfg.workdir {

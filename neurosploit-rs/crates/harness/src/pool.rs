@@ -90,6 +90,10 @@ pub struct ModelPool {
     /// Backends already tried as an automatic fallback, so a failing one is not
     /// retried in a loop.
     tried_auto: Arc<Mutex<Vec<String>>>,
+    /// Approximate tokens consumed (tracked by response length * 4 heuristic).
+    tokens_used: Arc<std::sync::atomic::AtomicU64>,
+    /// Token budget ceiling (0 = unlimited).
+    token_limit: std::sync::atomic::AtomicU64,
 }
 
 impl ModelPool {
@@ -124,6 +128,8 @@ impl ModelPool {
             fallback: Arc::new(Mutex::new(Vec::new())),
             consecutive_auth_fails: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             tried_auto: Arc::new(Mutex::new(Vec::new())),
+            tokens_used: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            token_limit: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -165,6 +171,27 @@ impl ModelPool {
     pub fn stop_exploiting(&self) -> bool {
         self.cancel.load(std::sync::atomic::Ordering::Relaxed)
             || self.soft.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Set the token budget ceiling for progressive budget warnings.
+    pub fn set_token_limit(&self, limit: u64) {
+        self.token_limit.store(limit, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Approximate tokens consumed so far.
+    pub fn tokens_used(&self) -> u64 {
+        self.tokens_used.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Token budget ceiling (0 = unlimited).
+    pub fn token_limit(&self) -> u64 {
+        self.token_limit.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Record approximate token usage from a response.
+    pub fn record_tokens(&self, response_chars: usize) {
+        let approx = (response_chars / 4) as u64;
+        self.tokens_used.fetch_add(approx, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Handle to the PAUSE flag (observe whether the run is parked on exhaustion).
@@ -385,7 +412,8 @@ impl ModelPool {
                 }
                 match self.one(label, m, system, user).await {
                     Ok(text) => {
-                        self.reset_auth_fails(); // success resets circuit breaker
+                        self.reset_auth_fails();
+                        self.record_tokens(text.len());
                         return Ok((m.clone(), text));
                     }
                     Err(e) => {
