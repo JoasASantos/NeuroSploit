@@ -1202,6 +1202,9 @@ function buildArgs(body) {
   if (body.chainDepth !== undefined) args.push('--chain-depth', String(body.chainDepth));
   if (body.recon) args.push('--recon', String(body.recon));
   if (body.maxAgents) args.push('--max-agents', String(body.maxAgents));
+  const hasQuick = ['run', 'whitebox', 'greybox'].includes(mode);
+  if (body.quick && hasQuick) args.push('--quick');
+  if (body.research && (mode === 'whitebox' || mode === 'greybox')) args.push('--research');
   if (body.offline) args.push('--offline');
   if (body.subscription) args.push('--subscription');
   if (body.mcp) args.push('--mcp');
@@ -1337,6 +1340,7 @@ function sanitizeLaunch(body) {
     typesafe: body.typesafe,
     quick: !!body.quick,
     research: !!body.research,
+    maxAgents: body.maxAgents || undefined,
   };
 }
 
@@ -1353,6 +1357,7 @@ function buildReplScript(body) {
   if (body.votes) lines.push(`/votes ${body.votes}`);
   if (body.chainDepth !== undefined) lines.push(`/chain ${body.chainDepth}`);
   if (body.recon) lines.push(`/recon ${body.recon}`);
+  if (body.maxAgents) lines.push(`/agents ${body.maxAgents}`);
   if (body.focus) lines.push(`/focus ${body.focus}`);
   if (body.objective) lines.push(`/objective ${body.objective}`);
   if (body.outOfScope) lines.push(`/scope-out ${body.outOfScope}`);
