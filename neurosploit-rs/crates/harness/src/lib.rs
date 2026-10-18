@@ -47,6 +47,7 @@ pub mod pool;
 pub mod probe;
 pub mod replay;
 pub mod report;
+pub mod resilience;
 pub mod rl;
 pub mod sandbox;
 pub mod sarif;

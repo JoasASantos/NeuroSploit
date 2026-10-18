@@ -1445,7 +1445,12 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
                         } else {
                             let _ = txc.send(format!("exploit {} failed: {e}", ag.name)).await;
                         }
-                        (ag.name.clone(), format!("ERROR: {e}"), vec![])
+                        let error_text = format!("ERROR: {e}");
+                        let salvaged = crate::resilience::salvage_findings(&ag.name, &error_text, wd.as_deref());
+                        if !salvaged.is_empty() {
+                            let _ = txc.send(format!("🔧 salvaged {} finding(s) from crashed agent {}", salvaged.len(), ag.name)).await;
+                        }
+                        (ag.name.clone(), error_text, salvaged)
                     }
                 }
             }
@@ -1454,9 +1459,16 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
         .collect()
         .await;
 
+    // Merge any previously salvaged findings from prior crashed runs.
+    let mut prior_salvaged = if let Some(ref wd) = cfg.workdir {
+        crate::resilience::load_salvaged(wd)
+    } else { Vec::new() };
+
     crate::traces::record_all(cfg.workdir.as_deref(), &raw);
     let transcript = transcript_of(&raw);
-    let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
+    let mut all_findings: Vec<Finding> = raw.iter().flat_map(|(_, _, f)| f.clone()).collect();
+    all_findings.append(&mut prior_salvaged);
+    let candidates = dedup_findings(all_findings);
     let _ = tx.send(format!("{} candidate finding(s) (deduped) — validating by {}-model vote", candidates.len(), cfg.vote_n)).await;
     if pool.candidates.len() == 1 && effective_vote_n(&cfg) <= 1 {
         let _ = tx.send("⚠ single-model panel with vote_n=1 — validation is weaker (same model validates its own findings). Consider --vote-n 2 or adding a second model for cross-validation.".into()).await;
@@ -1528,10 +1540,12 @@ pub async fn run_whitebox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: S
         return RunOutput { target: cfg.target.clone(), workdir: cfg.workdir.clone().unwrap_or_default(), findings: vec![], agents_ran: selected.iter().map(|a| a.name.clone()).collect(), candidates: 0, recon: String::new(), artifacts, denied: None };
     }
 
+    let wb_workdir = cfg.workdir.clone();
     let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(selected.iter().cloned())
         .map(|ag| {
             let ctx = context.clone();
             let txc = tx.clone();
+            let wd = wb_workdir.clone();
             async move {
                 let user = format!(
                     "{}\n\nSOURCE CODE TO REVIEW:\n```\n{}\n```\n\nReply ONLY with a JSON array of findings (may be empty []). \
@@ -1541,9 +1555,6 @@ pub async fn run_whitebox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: S
                     ag.user.replace("{target}", "the provided repository").replace("{recon_json}", "{}"),
                     ctx
                 );
-                // Prepend the white-box doctrine so code agents stay in static
-                // source-review mode and never hallucinate live/black-box actions.
-                // In research mode, add the novelty/patch-diff hunting doctrine.
                 let sys = if research {
                     format!("{}{}{}", WHITEBOX_DOCTRINE, WHITEBOX_RESEARCH_DOCTRINE, ag.system)
                 } else {
@@ -1557,7 +1568,12 @@ pub async fn run_whitebox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: S
                     }
                     Err(e) => {
                         let _ = txc.send(format!("analyze {} failed: {e}", ag.name)).await;
-                        (ag.name.clone(), format!("ERROR: {e}"), vec![])
+                        let error_text = format!("ERROR: {e}");
+                        let salvaged = crate::resilience::salvage_findings(&ag.name, &error_text, wd.as_deref());
+                        if !salvaged.is_empty() {
+                            let _ = txc.send(format!("🔧 salvaged {} finding(s) from crashed agent {}", salvaged.len(), ag.name)).await;
+                        }
+                        (ag.name.clone(), error_text, salvaged)
                     }
                 }
             }
@@ -1682,6 +1698,7 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
     let ops = engagement_ops(&cfg);
     let recon_ctx: String = recon.chars().take(3000).collect();
     let leads_ctx = code_leads.clone();
+    let gb_workdir = cfg.workdir.clone();
     let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(selected.iter().cloned())
         .map(|ag| {
             let target = target.clone();
@@ -1690,6 +1707,7 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
             let ops = ops.clone();
             let leads = leads_ctx.clone();
             let txc = tx.clone();
+            let wd = gb_workdir.clone();
             async move {
                 if pool.stop_exploiting() {
                     return (ag.name.clone(), String::new(), vec![]);
@@ -1711,8 +1729,15 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
                     Ok((m, text)) => { let f = extract_findings(&text, &ag.name);
                         let _ = txc.send(format!("exploit {} via {} → {} candidate(s)", ag.name, m.label(), f.len())).await;
                         (ag.name.clone(), text, f) }
-                    Err(e) => { let _ = txc.send(format!("exploit {} failed: {e}", ag.name)).await;
-                        (ag.name.clone(), format!("ERROR: {e}"), vec![]) }
+                    Err(e) => {
+                        let _ = txc.send(format!("exploit {} failed: {e}", ag.name)).await;
+                        let error_text = format!("ERROR: {e}");
+                        let salvaged = crate::resilience::salvage_findings(&ag.name, &error_text, wd.as_deref());
+                        if !salvaged.is_empty() {
+                            let _ = txc.send(format!("🔧 salvaged {} finding(s) from crashed agent {}", salvaged.len(), ag.name)).await;
+                        }
+                        (ag.name.clone(), error_text, salvaged)
+                    }
                 }
             }
         })
@@ -3633,7 +3658,7 @@ fn findings_items(val: serde_json::Value) -> Vec<serde_json::Value> {
 /// runs (`JSON parse failed` and `no JSON array/object found`) now collapse into
 /// one honest outcome: either we recover a value, or the reply held no JSON.
 /// The recovered value's *shape* is then normalised by [`findings_items`].
-fn extract_findings(text: &str, agent: &str) -> Vec<Finding> {
+pub(crate) fn extract_findings(text: &str, agent: &str) -> Vec<Finding> {
     let val = match crate::json_extract::parse_reply(text) {
         Some(v) => v,
         None => {
@@ -4247,12 +4272,14 @@ pub async fn run_container(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: 
     let verbose = cfg.verbose;
     let directives = operator_directives(&cfg);
     let recon_ctx: String = recon.chars().take(3000).collect();
+    let ct_workdir = cfg.workdir.clone();
     let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(selected.iter().cloned())
         .map(|ag| {
             let target = target.clone();
             let recon = recon_ctx.clone();
             let directives = directives.clone();
             let txc = tx.clone();
+            let wd = ct_workdir.clone();
             async move {
                 if pool.stop_exploiting() { return (ag.name.clone(), String::new(), vec![]); }
                 if verbose { let _ = txc.send(format!("  launching agent: {} ({})", ag.name, ag.title.replace(" Agent", ""))).await; }
@@ -4268,7 +4295,15 @@ pub async fn run_container(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: 
                         for c in &f { if let Ok(j) = serde_json::to_string(c) { let _ = txc.send(format!("finding_json: {j}")).await; } }
                         (ag.name.clone(), text, f)
                     }
-                    Err(e) => { let _ = txc.send(format!("scan {} failed: {e}", ag.name)).await; (ag.name.clone(), format!("ERROR: {e}"), vec![]) }
+                    Err(e) => {
+                        let _ = txc.send(format!("scan {} failed: {e}", ag.name)).await;
+                        let error_text = format!("ERROR: {e}");
+                        let salvaged = crate::resilience::salvage_findings(&ag.name, &error_text, wd.as_deref());
+                        if !salvaged.is_empty() {
+                            let _ = txc.send(format!("🔧 salvaged {} finding(s) from crashed agent {}", salvaged.len(), ag.name)).await;
+                        }
+                        (ag.name.clone(), error_text, salvaged)
+                    }
                 }
             }
         })
@@ -4338,12 +4373,14 @@ pub async fn run_mobile(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sen
     let verbose = cfg.verbose;
     let directives = operator_directives(&cfg);
     let recon_ctx: String = recon.chars().take(3000).collect();
+    let mob_workdir = cfg.workdir.clone();
     let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(selected.iter().cloned())
         .map(|ag| {
             let target = target.clone();
             let recon = recon_ctx.clone();
             let directives = directives.clone();
             let txc = tx.clone();
+            let wd = mob_workdir.clone();
             async move {
                 if pool.stop_exploiting() { return (ag.name.clone(), String::new(), vec![]); }
                 if verbose { let _ = txc.send(format!("  launching agent: {} ({})", ag.name, ag.title.replace(" Agent", ""))).await; }
@@ -4359,7 +4396,13 @@ pub async fn run_mobile(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sen
                         for c in &f { if let Ok(j) = serde_json::to_string(c) { let _ = txc.send(format!("finding_json: {j}")).await; } }
                         (ag.name.clone(), text, f)
                     }
-                    Err(e) => { let _ = txc.send(format!("test {} failed: {e}", ag.name)).await; (ag.name.clone(), format!("ERROR: {e}"), vec![]) }
+                    Err(e) => {
+                        let _ = txc.send(format!("test {} failed: {e}", ag.name)).await;
+                        let error_text = format!("ERROR: {e}");
+                        let salvaged = crate::resilience::salvage_findings(&ag.name, &error_text, wd.as_deref());
+                        if !salvaged.is_empty() { let _ = txc.send(format!("🔧 salvaged {} finding(s) from crashed agent {}", salvaged.len(), ag.name)).await; }
+                        (ag.name.clone(), error_text, salvaged)
+                    }
                 }
             }
         })
@@ -4428,12 +4471,14 @@ pub async fn run_host(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sende
     let verbose = cfg.verbose;
     let directives = operator_directives(&cfg);
     let recon_ctx: String = recon.chars().take(3000).collect();
+    let host_workdir = cfg.workdir.clone();
     let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(selected.iter().cloned())
         .map(|ag| {
             let target = target.clone();
             let recon = recon_ctx.clone();
             let directives = directives.clone();
             let txc = tx.clone();
+            let wd = host_workdir.clone();
             async move {
                 if pool.stop_exploiting() { return (ag.name.clone(), String::new(), vec![]); }
                 if verbose {
@@ -4454,8 +4499,13 @@ pub async fn run_host(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sende
                         }
                         (ag.name.clone(), text, f)
                     }
-                    Err(e) => { let _ = txc.send(format!("test {} failed: {e}", ag.name)).await;
-                        (ag.name.clone(), format!("ERROR: {e}"), vec![]) }
+                    Err(e) => {
+                        let _ = txc.send(format!("test {} failed: {e}", ag.name)).await;
+                        let error_text = format!("ERROR: {e}");
+                        let salvaged = crate::resilience::salvage_findings(&ag.name, &error_text, wd.as_deref());
+                        if !salvaged.is_empty() { let _ = txc.send(format!("🔧 salvaged {} finding(s) from crashed agent {}", salvaged.len(), ag.name)).await; }
+                        (ag.name.clone(), error_text, salvaged)
+                    }
                 }
             }
         })
@@ -4948,9 +4998,11 @@ pub async fn run_ai(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<
     let target = cfg.target.clone();
     let directives = operator_directives(&cfg);
     let recon_ctx: String = recon.chars().take(3500).collect();
+    let ai_workdir = cfg.workdir.clone();
     let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(selected.iter().cloned())
         .map(|ag| {
             let (target, recon, directives, txc) = (target.clone(), recon_ctx.clone(), directives.clone(), tx.clone());
+            let wd = ai_workdir.clone();
             async move {
                 if pool.stop_exploiting() { return (ag.name.clone(), String::new(), vec![]); }
                 let _ = txc.send(format!("  ▶ AI test: {} ({})", ag.name, ag.title.replace(" Agent", ""))).await;
@@ -4969,7 +5021,13 @@ pub async fn run_ai(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<
                         }
                         (ag.name.clone(), text, f)
                     }
-                    Err(e) => { let _ = txc.send(format!("ai {} failed: {e}", ag.name)).await; (ag.name.clone(), format!("ERROR: {e}"), vec![]) }
+                    Err(e) => {
+                        let _ = txc.send(format!("ai {} failed: {e}", ag.name)).await;
+                        let error_text = format!("ERROR: {e}");
+                        let salvaged = crate::resilience::salvage_findings(&ag.name, &error_text, wd.as_deref());
+                        if !salvaged.is_empty() { let _ = txc.send(format!("🔧 salvaged {} finding(s) from crashed agent {}", salvaged.len(), ag.name)).await; }
+                        (ag.name.clone(), error_text, salvaged)
+                    }
                 }
             }
         })
@@ -5008,9 +5066,11 @@ pub async fn run_skills_audit(cfg: RunConfig, lib: &Library, pool: &ModelPool, t
         return finish(cfg, lib, pool, "{}".into(), String::new(), vec![], agents, &mut rl, crate::grounding::GroundMode::Symbolic, String::new(), tx).await;
     }
     let directives = operator_directives(&cfg);
+    let sk_workdir = cfg.workdir.clone();
     let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(agents.iter().cloned())
         .map(|ag| {
             let (ctx, dir, txc) = (context.clone(), directives.clone(), tx.clone());
+            let wd = sk_workdir.clone();
             async move {
                 if pool.stop_exploiting() { return (ag.name.clone(), String::new(), vec![]); }
                 let _ = txc.send(format!("  ▶ skill audit: {}", ag.name)).await;
@@ -5026,7 +5086,13 @@ pub async fn run_skills_audit(cfg: RunConfig, lib: &Library, pool: &ModelPool, t
                         for c in &f { if let Ok(j) = serde_json::to_string(c) { let _ = txc.send(format!("finding_json: {j}")).await; } }
                         (ag.name.clone(), text, f)
                     }
-                    Err(e) => { let _ = txc.send(format!("skill {} failed: {e}", ag.name)).await; (ag.name.clone(), format!("ERROR: {e}"), vec![]) }
+                    Err(e) => {
+                        let _ = txc.send(format!("skill {} failed: {e}", ag.name)).await;
+                        let error_text = format!("ERROR: {e}");
+                        let salvaged = crate::resilience::salvage_findings(&ag.name, &error_text, wd.as_deref());
+                        if !salvaged.is_empty() { let _ = txc.send(format!("🔧 salvaged {} finding(s) from crashed agent {}", salvaged.len(), ag.name)).await; }
+                        (ag.name.clone(), error_text, salvaged)
+                    }
                 }
             }
         })

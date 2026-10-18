@@ -276,18 +276,20 @@ impl ModelPool {
     /// HTTP API, with a short retry/backoff. `label` (e.g. the agent name) tags
     /// the streamed activity so each command/tool is attributable.
     async fn one(&self, label: &str, m: &ModelRef, system: &str, user: &str) -> Result<String> {
+        use crate::resilience::{classify_error, ErrorClass, MAX_TRANSIENT_RETRIES, retry_delay};
+
         if self.is_cancelled() {
             return Err(anyhow!("cancelled"));
         }
         let use_cli = self.subscription && cli_binary_for(&m.provider).is_some();
         let progress = self.progress();
         let mut last = anyhow::anyhow!("no attempt");
-        for attempt in 0..3u64 {
+        for attempt in 0..MAX_TRANSIENT_RETRIES {
             if self.is_cancelled() {
                 return Err(anyhow!("cancelled"));
             }
             if attempt > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(1500 * attempt * attempt.max(1))).await;
+                tokio::time::sleep(retry_delay(attempt)).await;
             }
             let call = async {
                 if use_cli {
@@ -298,10 +300,6 @@ impl ModelPool {
                     self.client.chat(m, system, user).await
                 }
             };
-            // Race the in-flight call against a HARD cancel: when the user picks
-            // "report raw" / "discard" on /stop, drop the call future so the
-            // CLI child (spawned with kill_on_drop) is terminated immediately
-            // instead of finishing its whole command sequence.
             let r = tokio::select! {
                 biased;
                 _ = wait_cancelled(&self.cancel) => return Err(anyhow!("cancelled")),
@@ -309,10 +307,23 @@ impl ModelPool {
             };
             match r {
                 Ok(t) => return Ok(t),
-                // Don't burn retries on exhaustion or auth failure — surface
-                // immediately so the caller can park and let the user /continue.
-                Err(e) if is_exhaustion(&e) || is_auth_failure(&e) => return Err(e),
-                Err(e) => last = e,
+                Err(e) => {
+                    let class = classify_error(&format!("{e:#}"));
+                    match class {
+                        ErrorClass::Auth | ErrorClass::Exhaustion |
+                        ErrorClass::Permanent | ErrorClass::ContentRefusal => return Err(e),
+                        ErrorClass::ContextOverflow => {
+                            return Err(anyhow!("context_overflow: {e}"));
+                        }
+                        ErrorClass::ImageRejection => {
+                            return Err(anyhow!("image_rejection: {e}"));
+                        }
+                        ErrorClass::Transient => {
+                            // transient — retry with backoff
+                            last = e;
+                        }
+                    }
+                }
             }
         }
         Err(last)
