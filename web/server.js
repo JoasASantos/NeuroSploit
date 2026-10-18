@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * NeuroSploit v4.3.2 — web console backend.
+ * NeuroSploit v4.4.0 — web console backend.
  *
  * Zero-dependency Node HTTP server that:
  *  - serves the static SPA in ./public
@@ -109,7 +109,7 @@ const BIN = findBinary();
 // string. This keeps the web UI and the CLI binary in lockstep: bump the crate,
 // rebuild, and the title/badge/UA all move together with no web edit. Falls back
 // to the package string only when the binary is missing.
-const FALLBACK_VERSION = '4.3.1';
+const FALLBACK_VERSION = '4.4.0';
 function binaryVersion() {
   if (!BIN) return FALLBACK_VERSION;
   try {
