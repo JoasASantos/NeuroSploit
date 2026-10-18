@@ -98,7 +98,7 @@
 
 #let counts = (:)
 #for f in findings {
-  if f.status != "needs-review" { counts.insert(f.severity, counts.at(f.severity, default: 0) + 1) }
+  counts.insert(f.severity, counts.at(f.severity, default: 0) + 1)
 }
 #if findings.len() == 0 [
 ] else [

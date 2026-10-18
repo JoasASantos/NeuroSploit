@@ -970,7 +970,7 @@ function renderFindings(which) {
   show($(cfg.empty), rows.length === 0);
   $(cfg.empty).textContent = all.length && !rows.length
     ? 'No finding matches this filter.'
-    : (which === 'live' ? 'No validated findings yet.' : 'No validated findings.');
+    : (which === 'live' ? 'No findings yet.' : 'No findings.');
 
   const counts = {};
   for (const f of all) { const s = SEV_ORDER[sevRank(f.severity)]; counts[s] = (counts[s] || 0) + 1; }
@@ -2804,7 +2804,7 @@ function renderKpis(sel, all) {
   const sev = (s) => by((f) => SEV_ORDER[sevRank(f.severity)] === s);
   const cards = [
     { k: 'Findings', v: all.length, sub: `${sev('critical')} critical · ${sev('high')} high · ${sev('medium')} medium · ${sev('low')} low` },
-    { k: 'Confirmed', v: by((f) => reviewStatus(f) === 'confirmed'), sub: `${by((f) => reviewStatus(f) === 'needs-review')} need review`, cls: 'kpi-ok' },
+    { k: 'Validated', v: by((f) => reviewStatus(f) === 'confirmed' || reviewStatus(f) === 'needs-review'), sub: `${by((f) => reviewStatus(f) === 'confirmed')} confirmed · ${by((f) => reviewStatus(f) === 'needs-review')} in review`, cls: 'kpi-ok' },
     { k: 'Wire-verified', v: by((f) => wireState(f).key === 'verified'), sub: 'evidence re-observed on the wire', cls: 'kpi-ok' },
     { k: 'Contradicted', v: by((f) => wireState(f).key === 'contradicted'), sub: 'the wire disagreed with the agent', cls: 'kpi-bad' },
   ];
