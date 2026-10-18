@@ -1,4 +1,4 @@
-<h1 align="center">🧠 NeuroSploit v4.3.1</h1>
+<h1 align="center">🧠 NeuroSploit v4.4.0</h1>
 
 <p align="center">
   <a href="https://github.com/JoasASantos/NeuroSploit/stargazers"><img src="https://img.shields.io/github/stars/JoasASantos/NeuroSploit?style=for-the-badge&logo=github&color=8b5cf6" alt="Stars"></a>
@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-4.3.1-blue?style=flat-square">
+  <img src="https://img.shields.io/badge/Version-4.4.0-blue?style=flat-square">
   <img src="https://img.shields.io/badge/Harness-Rust%20%7C%20tokio-e6b673?style=flat-square">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
   <img src="https://img.shields.io/badge/MD%20Agents-486-red?style=flat-square">
@@ -123,6 +123,13 @@ No subscription? Use an **API key** for any provider instead — see [TUTORIAL.m
 - **Secrets never leak the report** — credentials the agents observe become
   `$SECRET_n` in every human-facing report; raw values stay in the run's vault for
   re-testing only.
+- **Execution resilience** — classified error handling (7 error types), exponential
+  backoff (5 retries, 2s–90s), crash-state salvage (partial findings survive agent
+  failure), agent lifecycle nudge (3 retries with simplified prompts), progressive
+  budget warnings (70/85/95%), and run snapshot/resume so interrupted engagements
+  pick up where they left off.
+- **LLM-powered dedup** — deterministic fast-path for exact matches, plus a
+  semantic LLM judge for findings with different wording but the same root cause.
 - **486 markdown agents** across web, code (SAST), AI, infra/AD/cloud, chains and
   recon — each a self-contained playbook you can read, edit or add to.
 - **Run via API key or subscription**, 19 providers, including local & CPU-only
