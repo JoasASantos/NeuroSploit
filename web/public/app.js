@@ -3791,12 +3791,27 @@ function configureIntegration(id) {
   const defs = fields[id] || [];
   const title = { github: 'GitHub', gitlab: 'GitLab', jira: 'Jira', slack: 'Slack', mcp: 'MCP Server', aws: 'AWS', gcp: 'GCP', azure: 'Azure' }[id] || id;
   $('#integModalTitle').textContent = `Configure ${title}`;
-  $('#integModalBody').innerHTML = defs.map(f =>
-    `<div class="field-group">
-      <label class="field-label" for="${f.id}">${esc(f.label)}</label>
-      <input id="${f.id}" type="${f.type || 'text'}" placeholder="${esc(f.placeholder || '')}" spellcheck="false" />
-    </div>`
-  ).join('');
+  api('/api/config/integrations').then(integs => {
+    const existing = (integs || []).find(i => i.id === id);
+    const cfg = existing?.config || {};
+    const v = existing?.validation;
+    $('#integModalBody').innerHTML = defs.map(f => {
+      const key = f.id.replace('integ', '').toLowerCase();
+      const val = cfg[key] || '';
+      return `<div class="field-group">
+        <label class="field-label" for="${f.id}">${esc(f.label)}</label>
+        <input id="${f.id}" type="${f.type || 'text'}" value="${esc(val)}" placeholder="${esc(f.placeholder || '')}" spellcheck="false" />
+      </div>`;
+    }).join('') + (v ? `<div class="integ-validation ${v.ok ? 'ok' : 'bad'}">${v.ok ? '✓' : '✗'} ${esc(v.message)}</div>` : '');
+    $('#btnIntegSubmit').textContent = 'Save & Validate';
+  }).catch(() => {
+    $('#integModalBody').innerHTML = defs.map(f =>
+      `<div class="field-group">
+        <label class="field-label" for="${f.id}">${esc(f.label)}</label>
+        <input id="${f.id}" type="${f.type || 'text'}" placeholder="${esc(f.placeholder || '')}" spellcheck="false" />
+      </div>`
+    ).join('');
+  });
   $('#integrationModal').dataset.integId = id;
   $('#integrationModal').hidden = false;
 }
@@ -4064,15 +4079,35 @@ $('#btnNetworkSubmit')?.addEventListener('click', async () => {
 $('#btnIntegSubmit')?.addEventListener('click', async () => {
   const id = $('#integrationModal').dataset.integId;
   if (!id) return;
+  const btn = $('#btnIntegSubmit');
   const inputs = $('#integModalBody').querySelectorAll('input');
   const config = {};
   inputs.forEach(inp => { config[inp.id.replace('integ', '').toLowerCase()] = inp.value.trim(); });
+  btn.disabled = true; btn.textContent = 'Validating…';
+  let statusEl = $('#integModalBody').querySelector('.integ-validation');
+  if (!statusEl) {
+    $('#integModalBody').insertAdjacentHTML('beforeend', '<div class="integ-validation"></div>');
+    statusEl = $('#integModalBody').querySelector('.integ-validation');
+  }
+  statusEl.className = 'integ-validation checking';
+  statusEl.textContent = 'Verifying credentials…';
   try {
-    await api(`/api/config/integrations/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true, config }) });
-    closeModal('#integrationModal');
-    toast(`${id} integration saved`, 'ok');
+    const result = await api(`/api/config/integrations/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true, config }) });
+    const v = result.validation || { ok: true, message: 'saved' };
+    statusEl.className = `integ-validation ${v.ok ? 'ok' : 'bad'}`;
+    statusEl.textContent = v.ok ? `✓ ${v.message}` : `✗ ${v.message}`;
+    if (v.ok) {
+      toast(`${id}: ${v.message}`, 'ok');
+      setTimeout(() => { closeModal('#integrationModal'); }, 1200);
+    } else {
+      toast(`${id}: ${v.message}`, 'error');
+    }
     loadIntegrations();
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) {
+    statusEl.className = 'integ-validation bad';
+    statusEl.textContent = `✗ ${e.message}`;
+    toast(e.message, 'error');
+  } finally { btn.disabled = false; btn.textContent = 'Save & Validate'; }
 });
 
 ['#repoModal', '#domainModal', '#networkModal', '#integrationModal'].forEach(sel => {

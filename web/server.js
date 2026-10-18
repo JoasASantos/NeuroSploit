@@ -251,6 +251,113 @@ async function cloudEnvOverrides(cloudProvider) {
   return env;
 }
 
+async function validateIntegration(id, cfg) {
+  const https = require('https');
+  const http = require('http');
+  const fetch = (url, opts = {}) => new Promise((resolve, reject) => {
+    const mod = url.startsWith('https') ? https : http;
+    const req = mod.request(url, { method: 'GET', timeout: 8000, ...opts }, (res) => {
+      let body = '';
+      res.on('data', c => body += c);
+      res.on('end', () => resolve({ status: res.statusCode, body }));
+    });
+    req.on('error', e => reject(e));
+    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+    req.end(opts.body || undefined);
+  });
+  try {
+    if (id === 'github') {
+      const token = cfg.token || cfg.pat || '';
+      if (!token) return { ok: false, message: 'Token is required' };
+      const r = await fetch('https://api.github.com/user', { headers: { Authorization: `token ${token}`, 'User-Agent': 'NeuroSploit', Accept: 'application/json' } });
+      if (r.status === 200) { const u = JSON.parse(r.body); return { ok: true, message: `Authenticated as ${u.login}` }; }
+      if (r.status === 401) return { ok: false, message: 'Invalid token — 401 Unauthorized' };
+      return { ok: false, message: `GitHub returned ${r.status}` };
+    }
+    if (id === 'gitlab') {
+      const token = cfg.token || cfg.pat || '';
+      const url = cfg.url || 'https://gitlab.com';
+      if (!token) return { ok: false, message: 'Token is required' };
+      const r = await fetch(`${url.replace(/\/$/, '')}/api/v4/user`, { headers: { 'PRIVATE-TOKEN': token, Accept: 'application/json' } });
+      if (r.status === 200) { const u = JSON.parse(r.body); return { ok: true, message: `Authenticated as ${u.username}` }; }
+      if (r.status === 401) return { ok: false, message: 'Invalid token — 401 Unauthorized' };
+      return { ok: false, message: `GitLab returned ${r.status}` };
+    }
+    if (id === 'jira') {
+      const domain = cfg.domain || cfg.url || '';
+      const email = cfg.email || '';
+      const token = cfg.token || cfg.apitoken || '';
+      if (!domain || !email || !token) return { ok: false, message: 'Domain, email and API token are required' };
+      const base = domain.startsWith('http') ? domain.replace(/\/$/, '') : `https://${domain}`;
+      const auth = Buffer.from(`${email}:${token}`).toString('base64');
+      const r = await fetch(`${base}/rest/api/3/myself`, { headers: { Authorization: `Basic ${auth}`, Accept: 'application/json' } });
+      if (r.status === 200) { const u = JSON.parse(r.body); return { ok: true, message: `Authenticated as ${u.displayName || u.emailAddress}` }; }
+      if (r.status === 401) return { ok: false, message: 'Invalid credentials — 401 Unauthorized' };
+      return { ok: false, message: `Jira returned ${r.status}` };
+    }
+    if (id === 'slack') {
+      const token = cfg.token || cfg.bottoken || '';
+      if (!token) return { ok: false, message: 'Bot token is required' };
+      const r = await fetch('https://slack.com/api/auth.test', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/x-www-form-urlencoded' } });
+      if (r.status === 200) {
+        const j = JSON.parse(r.body);
+        if (j.ok) return { ok: true, message: `Connected to ${j.team} as ${j.user}` };
+        return { ok: false, message: `Slack: ${j.error}` };
+      }
+      return { ok: false, message: `Slack returned ${r.status}` };
+    }
+    if (id === 'aws') {
+      const key = cfg.accesskey || '';
+      const secret = cfg.secretkey || '';
+      if (!key && !cfg.profile) return { ok: false, message: 'Access Key or Profile is required' };
+      if (key && !secret) return { ok: false, message: 'Secret Access Key is required when Access Key is set' };
+      const { execSync } = require('child_process');
+      const env = { ...process.env };
+      if (key) { env.AWS_ACCESS_KEY_ID = key; env.AWS_SECRET_ACCESS_KEY = secret; }
+      if (cfg.region) env.AWS_DEFAULT_REGION = cfg.region;
+      if (cfg.profile) env.AWS_PROFILE = cfg.profile;
+      try {
+        const out = execSync('aws sts get-caller-identity --output json 2>&1', { env, timeout: 10000, encoding: 'utf8' });
+        const j = JSON.parse(out);
+        return { ok: true, message: `Account ${j.Account} — ${j.Arn}` };
+      } catch (e) {
+        const raw = (e.stdout || e.stderr || e.message || '').trim();
+        const msg = raw.split('\n').pop();
+        return { ok: false, message: msg || 'AWS CLI validation failed' };
+      }
+    }
+    if (id === 'gcp') {
+      const sa = cfg.serviceaccount || '';
+      const project = cfg.project || '';
+      if (!sa && !project) return { ok: false, message: 'Service Account key path or Project ID is required' };
+      if (sa) {
+        const fs = require('fs');
+        if (!fs.existsSync(sa)) return { ok: false, message: `Service Account key file not found: ${sa}` };
+        try { const j = JSON.parse(fs.readFileSync(sa, 'utf8')); return { ok: true, message: `SA: ${j.client_email || 'valid JSON key'}` }; }
+        catch { return { ok: false, message: 'Service Account key file is not valid JSON' }; }
+      }
+      return { ok: true, message: `Project: ${project} (credentials not verified)` };
+    }
+    if (id === 'azure') {
+      const tenant = cfg.tenantid || '';
+      const client = cfg.clientid || '';
+      const secret = cfg.clientsecret || '';
+      if (!tenant || !client || !secret) return { ok: false, message: 'Tenant ID, Client ID and Client Secret are all required' };
+      const body = `grant_type=client_credentials&client_id=${encodeURIComponent(client)}&client_secret=${encodeURIComponent(secret)}&scope=https%3A%2F%2Fmanagement.azure.com%2F.default`;
+      const r = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenant)}/oauth2/v2.0/token`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+      if (r.status === 200) { return { ok: true, message: 'Token acquired — credentials valid' }; }
+      try { const j = JSON.parse(r.body); return { ok: false, message: j.error_description?.split('\r\n')[0] || j.error || `Azure returned ${r.status}` }; }
+      catch { return { ok: false, message: `Azure returned ${r.status}` }; }
+    }
+    if (id === 'mcp') {
+      return { ok: true, message: 'MCP config saved' };
+    }
+    return { ok: true, message: 'Saved (no validation available)' };
+  } catch (e) {
+    return { ok: false, message: e.message || 'Validation failed' };
+  }
+}
+
 /// Build a minimal creds.yaml-compatible file (see neurosploit-rs/creds.example.yaml)
 /// from a raw auth header and/or named roles, so the CLI's --creds flag can be
 /// used to carry web-entered auth material without a real file on disk.
@@ -2065,13 +2172,16 @@ const server = http.createServer(async (req, res) => {
     m = p.match(/^\/api\/config\/integrations\/([^/]+)$/);
     if (req.method === 'PUT' && m) {
       const body = await readBody(req);
-      let integs = await readConfig('integrations');
       const id = decodeURIComponent(m[1]);
+      const cfg = body.config || {};
+      const validation = await validateIntegration(id, cfg);
+      let integs = await readConfig('integrations');
       const idx = integs.findIndex(i => i.id === id);
-      if (idx >= 0) integs[idx] = { ...integs[idx], ...body };
-      else integs.push({ id, ...body });
+      const entry = { id, ...body, validation };
+      if (idx >= 0) integs[idx] = { ...integs[idx], ...entry };
+      else integs.push(entry);
       await writeConfig('integrations', integs);
-      return sendJson(res, 200, integs.find(i => i.id === id));
+      return sendJson(res, 200, { ...integs.find(i => i.id === id), validation });
     }
 
     // ---- Config: settings ----

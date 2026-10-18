@@ -682,6 +682,11 @@ textarea { resize: vertical; min-height: 72px; }
 .key-verify.unknown { color: var(--text-faint); font-weight: 500; }
 .key-verify.checking { color: var(--text-dim); font-weight: 500; }
 
+.integ-validation { margin-top: var(--sp-3); padding: var(--sp-2) var(--sp-3); border-radius: var(--radius-sm); font-size: var(--fs-sm); font-weight: 600; }
+.integ-validation.ok { color: var(--sev-low-fg); background: rgba(46,204,113,.08); border: 1px solid rgba(46,204,113,.2); }
+.integ-validation.bad { color: var(--sev-critical-fg); background: rgba(231,76,60,.08); border: 1px solid rgba(231,76,60,.2); }
+.integ-validation.checking { color: var(--text-dim); font-weight: 500; }
+
 /* floating config popover for provider keys */
 .provider-popover { position: absolute; top: calc(100% + 4px); right: 0; z-index: var(--z-overlay); background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-md); box-shadow: 0 8px 24px rgba(0,0,0,.12); padding: var(--sp-4); min-width: 340px; max-width: 420px; }
 .provider-popover .pop-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-3); }
