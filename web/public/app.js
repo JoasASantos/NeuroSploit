@@ -3188,25 +3188,28 @@ function renderGraphMemory(x) {
     // was proven on (the vulnerability / service / endpoint hops stay in the
     // full graph).
     const trav = (data.edges || []).filter((e) => GM_TRAVERSAL.has(e.type));
-    const outTrav = new Set(trav.map((e) => eid(e.from)));
     const onPath = new Set();
-    for (const e of trav) for (const end of [e.from, e.to]) {
-      if (end.label === 'AttackStep' && !outTrav.has(eid(end))) continue;
-      onPath.add(eid(end));
-    }
-    const parent = {};
+    for (const e of trav) for (const end of [e.from, e.to]) onPath.add(eid(end));
+    const parentOf = new Map();
+    const observedIn = new Map();
     for (const e of data.edges || []) {
-      if (['HAS_FINDING', 'HAS_VULNERABILITY', 'HAS_ENDPOINT', 'EXPOSES'].includes(e.type)) (parent[e.type] = parent[e.type] || new Map()).set(eid(e.to), eid(e.from));
+      const STRUCT = ['HAS_FINDING', 'HAS_VULNERABILITY', 'HAS_ENDPOINT', 'EXPOSES', 'HAS_ASSET', 'HAS_SERVICE', 'RESOLVES_TO'];
+      if (STRUCT.includes(e.type)) parentOf.set(eid(e.to), eid(e.from));
+      if (e.type === 'OBSERVED_IN') observedIn.set(eid(e.from), eid(e.to));
     }
-    const hostOf = (fid) => {
-      const v = parent.HAS_FINDING?.get(fid); const ep = v && parent.HAS_VULNERABILITY?.get(v);
-      const sv = ep && parent.HAS_ENDPOINT?.get(ep); return sv && parent.EXPOSES?.get(sv);
+    const climb = (start) => {
+      const chain = [start];
+      let cur = start;
+      for (let i = 0; i < 6; i++) { cur = parentOf.get(cur); if (!cur) break; chain.push(cur); }
+      return chain;
     };
     const virtual = [];
     for (const nid of [...onPath]) {
       if (!nid.startsWith('Finding|')) continue;
-      const h = hostOf(nid);
-      if (h) { onPath.add(h); virtual.push({ type: 'PROVEN_ON', from: { label: 'Host', key: h.slice(5) }, to: { label: 'Finding', key: nid.slice(8) }, status: 'confirmed', confidence: 1 }); }
+      const ep = observedIn.get(nid);
+      if (ep) { onPath.add(ep); virtual.push({ type: 'OBSERVED_IN', from: { label: 'Finding', key: nid.slice(8) }, to: { label: ep.split('|')[0], key: ep.split('|').slice(1).join('|') }, status: 'confirmed', confidence: 1 }); }
+      const chain = climb(ep || nid);
+      for (const ancestor of chain) onPath.add(ancestor);
     }
     if (onPath.size) {
       nodes = data.nodes.filter((n) => onPath.has(id(n)));
