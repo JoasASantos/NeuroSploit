@@ -273,7 +273,7 @@ a { color: var(--accent); text-decoration: none; }
 .form-modal { max-width: 520px; }
 .form-group { margin-bottom: var(--sp-4); }
 .form-group label { display: block; font-size: var(--fs-sm); font-weight: 600; margin-bottom: var(--sp-1); }
-.form-group input, .form-group select, .form-group textarea {
+.form-group input:not([type="checkbox"]):not([type="radio"]), .form-group select, .form-group textarea {
   width: 100%; padding: var(--sp-2) var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--surface); color: var(--text); font-size: var(--fs-sm);
 }
@@ -469,6 +469,16 @@ textarea { resize: vertical; min-height: 72px; }
 .auth-mode-toggle button:disabled { opacity: .45; cursor: not-allowed; }
 
 .check-row { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); color: var(--text-dim); }
+.check-row input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none; width: 36px; height: 20px; flex-shrink: 0;
+  border-radius: 10px; background: var(--border-strong); position: relative; cursor: pointer; transition: background .2s;
+}
+.check-row input[type="checkbox"]::after {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+  border-radius: 50%; background: #fff; transition: transform .2s;
+}
+.check-row input[type="checkbox"]:checked { background: var(--accent); }
+.check-row input[type="checkbox"]:checked::after { transform: translateX(16px); }
 /* a column of full-width checkbox rows (no squeezing into flex columns) */
 .check-col { display: flex; flex-direction: column; gap: 4px; margin-bottom: var(--sp-4); }
 .check-col .check-row { align-items: flex-start; }
