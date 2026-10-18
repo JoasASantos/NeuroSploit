@@ -671,7 +671,7 @@ async function startExploitation() {
     research: $('#fieldResearch') ? $('#fieldResearch').checked : false,
     subscription: state.authMode === 'subscription',
     mcp: $('#fieldMcp').checked,
-    agents: [...state.selected],
+    agents: state.selected.size && state.selected.size < allAgents().length ? [...state.selected] : [],
     focus: focusParts.join('; ') || undefined,
     objective: $('#fieldObjective').value.trim() || undefined,
     classes: $('#fieldClasses') ? ($('#fieldClasses').value.trim() || undefined) : undefined,
@@ -746,10 +746,9 @@ function attachLiveJob(id, target, name, pinnedAgents) {
   if ($('#agentGrid')) $('#agentGrid').innerHTML = '';
   if ($('#agentPanel')) $('#agentPanel').hidden = true;
 
-  show($('#wizardView'), false);
-  show($('#detailView'), false);
-  show($('#dashView'), false);
+  ALL_VIEWS.forEach(v => { const el = $(`#${v}`); if (el) el.hidden = true; });
   show($('#liveView'), true);
+  window.scrollTo(0, 0);
   $('#liveTarget').textContent = name || target || '—';
   $('#liveTargetSub').textContent = name ? target : '';
   $('#livePhase').textContent = 'starting';
@@ -1691,6 +1690,7 @@ function openRun(run) {
       if (!jid) { // no live job (server restarted): fall back to static detail
         ALL_VIEWS.forEach(id => { const el = $(`#${id}`); if (el) el.hidden = true; });
         show($('#detailView'), true);
+        window.scrollTo(0, 0);
         loadDetail(run.id); renderSidebar(); return;
       }
       localStorage.setItem(ACTIVE_JOB_KEY, jid);
@@ -1706,6 +1706,7 @@ function openRun(run) {
   }
   ALL_VIEWS.forEach(id => { const el = $(`#${id}`); if (el) el.hidden = true; });
   show($('#detailView'), true);
+  window.scrollTo(0, 0);
   loadDetail(run.id);
   renderSidebar();
 }
