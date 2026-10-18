@@ -3147,7 +3147,11 @@ function renderGraphFindingList(x) {
   const findings = (data.nodes || []).filter(n => n.label === 'Finding');
   findings.sort((a, b) => sevRank(a.props?.local_severity) - sevRank(b.props?.local_severity));
   const sel = x.view.filterFinding || 'overview';
+  const runIds = new Set();
+  for (const f of findings) for (const part of (f.key || '').split(':')) { if (part.startsWith('ns-')) runIds.add(part); }
+  const cumulative = runIds.size > 1;
   list.innerHTML = `<div class="gfl-header">Attack Paths</div>
+    ${cumulative ? '<div class="gfl-note">Cumulative — includes findings from previous runs of this target.</div>' : ''}
     <button class="gfl-item ${sel === 'overview' ? 'active' : ''}" data-gf="overview">Overview (${findings.length})</button>
     ${findings.map(f => {
       const sev = f.props?.local_severity || 'info';
