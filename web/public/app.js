@@ -779,7 +779,20 @@ function attachLiveJob(id, target, name, pinnedAgents) {
     clearInterval(state.currentJob.pocPoll);
     refreshRuns();
   });
-  es.onerror = () => { /* EventSource auto-retries; the server replays its buffer on reconnect */ };
+  es.onerror = () => {
+    if (es.readyState === EventSource.CLOSED) return;
+    api(`/api/exploit/${id}`).catch(() => {
+      es.close();
+      clearInterval(state.currentJob?.pocPoll);
+      localStorage.removeItem(ACTIVE_JOB_KEY);
+      if (state.currentJob?.runId) {
+        show($('#liveView'), false); show($('#detailView'), true);
+        loadDetail(state.currentJob.runId);
+      } else { show($('#liveView'), false); show($('#dashView'), true); }
+      state.currentJob = null;
+      refreshRuns();
+    });
+  };
 
   // PoC scripts land in runs/<id>/pocs/ during the run — poll for them once
   // the CLI's own run id is known (see applySnapshot), so the finding modal
