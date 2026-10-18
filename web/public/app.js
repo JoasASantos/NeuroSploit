@@ -1148,6 +1148,41 @@ $('#btnDeleteRun').addEventListener('click', async () => {
   }
 });
 
+$('#btnRerun')?.addEventListener('click', () => {
+  clearInterval(state.detailPoll);
+  const target = $('#detailTarget').textContent || '';
+  const sub = $('#detailTargetSub').textContent || '';
+  const launch = state.detailLaunch;
+  switchView('wizard');
+  goToStep(0);
+  if (launch) {
+    if (launch.target) $('#fieldTarget').value = launch.target;
+    if (launch.name) $('#fieldName').value = launch.name + ' (re-run)';
+    if (launch.repo) $('#fieldRepo').value = launch.repo;
+    if (launch.mode) { const sel = $('#fieldMode'); if (sel) sel.value = launch.mode; }
+    if (launch.votes) $('#fieldVotes').value = launch.votes;
+    if (launch.chainDepth !== undefined) $('#fieldChain').value = launch.chainDepth;
+    if (launch.recon) $('#fieldRecon').value = launch.recon;
+    if (launch.maxAgents) $('#fieldMaxAgents').value = launch.maxAgents;
+    if (launch.quick && $('#fieldQuick')) $('#fieldQuick').checked = true;
+    if (launch.research && $('#fieldResearch')) $('#fieldResearch').checked = true;
+    if (launch.subscription) state.authMode = 'subscription';
+    if (launch.mcp && $('#fieldMcp')) $('#fieldMcp').checked = launch.mcp;
+    if (launch.models?.length) {
+      const parts = launch.models[0].split(':');
+      if (parts.length >= 2) {
+        $('#fieldProvider').value = parts[0];
+        $('#fieldProvider').dispatchEvent(new Event('change'));
+        setTimeout(() => { $('#fieldModelSelect').value = parts.slice(1).join(':'); }, 100);
+      }
+    }
+  } else {
+    $('#fieldTarget').value = sub || target;
+    $('#fieldName').value = (target || '') + ' (re-run)';
+  }
+  toast('Settings loaded from previous run. Adjust and launch.', 'ok', 4000);
+});
+
 $('#btnDetailBack').addEventListener('click', () => { clearInterval(state.detailPoll); switchView('wizard'); });
 $('#btnNewEngagement')?.addEventListener('click', () => { leaveLiveJob(); clearInterval(state.detailPoll); switchView('wizard'); });
 if ($('#btnNewPentest2')) $('#btnNewPentest2').addEventListener('click', () => { leaveLiveJob(); clearInterval(state.detailPoll); switchView('wizard'); });
@@ -1758,6 +1793,7 @@ async function loadDetail(id) {
   $('#detailState').textContent = detail.status?.state || 'unknown';
   state.detailFindings = detail.findings;
   state.detailPocs = detail.pocs || [];
+  state.detailLaunch = detail.launch || null;
   // Regression vs the previous run of this target — new / recurring badges and a
   // "fixed since" banner. Best-effort: it never blocks the findings table.
   state.detailRegression = null;

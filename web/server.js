@@ -791,7 +791,19 @@ async function runDetail(id) {
     const liveRunIds = new Set([...jobs.values()].filter((j) => !j.done && j.runId).map((j) => j.runId));
     if (!liveRunIds.has(id)) status.state = 'interrupted';
   }
-  return { id, name: engagementNames.get(id) || '', meta, status, findings, assets, pocs, extras };
+  let launch = null;
+  const liveJob = [...jobs.values()].find((j) => j.runId === id);
+  if (liveJob?.launch) launch = liveJob.launch;
+  else {
+    try {
+      const jfiles = await fsp.readdir(JOBS_DIR);
+      for (const jf of jfiles) {
+        const rec = JSON.parse(await fsp.readFile(path.join(JOBS_DIR, jf), 'utf8'));
+        if (rec.runId === id && rec.launch) { launch = rec.launch; break; }
+      }
+    } catch { /* no job files */ }
+  }
+  return { id, name: engagementNames.get(id) || '', meta, status, findings, assets, pocs, extras, launch };
 }
 
 /// Relative file list under a directory (one level of nesting is enough for
