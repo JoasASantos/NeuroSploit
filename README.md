@@ -14,6 +14,11 @@
   <img src="https://img.shields.io/badge/Modes-Black%20%7C%20White%20%7C%20Grey%20%7C%20Host%20%7C%20AI%20%7C%20Mobile%20%7C%20Container-9cf?style=flat-square">
 </p>
 
+<p align="center">
+  <a href="https://neurosploitai.github.io/"><img src="https://img.shields.io/badge/Website-neurosploitai.github.io-8b5cf6?style=for-the-badge&logo=githubpages&logoColor=white" alt="Website"></a>
+  <a href="https://neurosploitai.github.io/docs.html"><img src="https://img.shields.io/badge/Docs-Tutorial%20%26%20Guide-22d3ee?style=for-the-badge&logo=readthedocs&logoColor=white" alt="Docs"></a>
+</p>
+
 <p align="center"><b>Autonomous, multi-model penetration-testing harness — Rust, CLI-first.</b><br>
 <i>by Joas A Santos &amp; Red Team Leaders</i></p>
 
@@ -55,6 +60,7 @@ It won't invent findings: **every claim needs a receipt** (raw tool output or a
 is adjudicated by a **second model** before it reaches the report.
 
 > ⭐ Useful? **Star the repo.**
+> 🌐 Website & live docs: **[neurosploitai.github.io](https://neurosploitai.github.io/)** · **[Tutorial & Guide](https://neurosploitai.github.io/docs.html)**
 > 📖 Deep dive: **[TUTORIAL.md](TUTORIAL.md)** · changelog: **[RELEASE.md](RELEASE.md)** · honest comparison: **[BENCHMARK.md](BENCHMARK.md)**
 
 ## Install
