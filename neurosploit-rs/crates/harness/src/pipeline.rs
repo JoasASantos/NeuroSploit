@@ -2735,14 +2735,21 @@ async fn validate_with_persist(candidates: Vec<Finding>, pool: &ModelPool, sys: 
         .buffer_unordered(pool.candidates.len().max(2))
         .collect()
         .await;
-    // Keep confirmed AND needs-review (human decides); drop only zero-support noise.
-    // Persist vote-rejected findings for operator refinement.
-    let (kept, vote_rejected): (Vec<_>, Vec<_>) = validated.into_iter()
-        .partition(|f: &Finding| f.validated || f.review_status == "needs-review");
+    // Keep ALL findings — confirmed, needs-review, AND vote-rejected. Operators
+    // want to see what agents found even if the validation panel did not confirm
+    // it. Mark rejected ones so the UI can distinguish them visually.
+    let all: Vec<Finding> = validated.into_iter().map(|mut f| {
+        if !f.validated && f.review_status.is_empty() {
+            f.review_status = "rejected".into();
+            f.review_reason = "vote-rejected by validation panel".into();
+        }
+        f
+    }).collect();
+    let vote_rejected: Vec<Finding> = all.iter().filter(|f| f.review_status == "rejected").cloned().collect();
     if !vote_rejected.is_empty() {
         persist_rejected(workdir, &vote_rejected);
     }
-    flagged.extend(kept);
+    flagged.extend(all);
     flagged
 }
 

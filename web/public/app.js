@@ -3630,23 +3630,37 @@ async function loadPentests() {
   try {
     const runs = await api('/api/runs');
     if (!runs.length) { body.innerHTML = '<div class="empty-state">No pentests yet. Click <strong>+ New Pentest</strong> to start.</div>'; return; }
-    const rows = runs.map(r => {
-      const mode = (r.id || '').startsWith('ns-wb-') ? 'whitebox' : (r.id || '').startsWith('ns-gb-') ? 'greybox' : (r.id || '').startsWith('ns-host-') ? 'host' : 'blackbox';
-      const when = r.when ? timeAgo(Math.floor(new Date(r.when).getTime() / 1000)) : '';
-      return `<tr class="pentest-row" data-id="${esc(r.id)}">
-        <td class="mono">${esc(r.id)}</td>
-        <td>${esc(r.target || r.name || '')}</td>
-        <td>${esc(mode)}</td>
-        <td>${r.findings ?? 0}</td>
-        <td>${esc(r.state || 'done')}</td>
-        <td>${when}</td>
-      </tr>`;
-    }).join('');
-    body.innerHTML = `<table class="data-table"><thead><tr><th>ID</th><th>Target</th><th>Mode</th><th>Findings</th><th>Status</th><th>When</th></tr></thead><tbody>${rows}</tbody></table>`;
-    $$('.pentest-row', body).forEach(row => {
-      row.style.cursor = 'pointer';
-      row.addEventListener('click', () => { const run = runs.find(r => r.id === row.dataset.id); if (run) openRun(run); });
-    });
+    const renderRows = (q) => {
+      const lq = (q || '').trim().toLowerCase();
+      const filtered = lq ? runs.filter(r => {
+        const blob = `${r.id || ''} ${r.target || ''} ${r.name || ''} ${r.state || ''}`.toLowerCase();
+        return blob.includes(lq);
+      }) : runs;
+      const rows = filtered.map(r => {
+        const mode = (r.id || '').startsWith('ns-wb-') ? 'whitebox' : (r.id || '').startsWith('ns-gb-') ? 'greybox' : (r.id || '').startsWith('ns-host-') ? 'host' : 'blackbox';
+        const when = r.when ? timeAgo(Math.floor(new Date(r.when).getTime() / 1000)) : '';
+        return `<tr class="pentest-row" data-id="${esc(r.id)}">
+          <td class="mono">${esc(r.id)}</td>
+          <td>${esc(r.target || r.name || '')}</td>
+          <td>${esc(mode)}</td>
+          <td>${r.findings ?? 0}</td>
+          <td>${esc(r.state || 'done')}</td>
+          <td>${when}</td>
+        </tr>`;
+      }).join('');
+      body.innerHTML = rows
+        ? `<table class="data-table"><thead><tr><th>ID</th><th>Target</th><th>Mode</th><th>Findings</th><th>Status</th><th>When</th></tr></thead><tbody>${rows}</tbody></table>`
+        : `<div class="empty-state">No pentests matching "${esc(q)}".</div>`;
+      $$('.pentest-row', body).forEach(row => {
+        row.style.cursor = 'pointer';
+        row.addEventListener('click', () => { const run = runs.find(r => r.id === row.dataset.id); if (run) openRun(run); });
+      });
+    };
+    renderRows($('#pentestSearch')?.value || '');
+    const searchInput = $('#pentestSearch');
+    if (searchInput) {
+      searchInput.oninput = () => renderRows(searchInput.value);
+    }
   } catch (e) { body.innerHTML = `<div class="empty-state">Failed to load: ${esc(e.message)}</div>`; }
 }
 
@@ -3671,18 +3685,41 @@ async function loadIssues() {
   try {
     const data = await api('/api/issues');
     if (!data.length) { body.innerHTML = '<div class="empty-state">No findings across any engagement yet.</div>'; return; }
-    const rows = data.map(f => {
-      const sc = sevClass(f.severity);
-      return `<tr class="issue-row" data-run="${esc(f.run || '')}" data-title="${esc(f.title || '')}" data-cwe="${esc(f.cwe || '')}" style="cursor:pointer"><td><span class="sev ${sc}">${esc(f.severity)}</span></td><td>${esc(f.title)}</td><td class="mono">${esc(f.target || '')}</td><td class="mono">${esc(f.run || '')}</td><td>${esc(f.status || 'open')}</td></tr>`;
-    }).join('');
-    body.innerHTML = `<table class="data-table"><thead><tr><th>Severity</th><th>Title</th><th>Target</th><th>Run</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`;
-    $$('.issue-row', body).forEach(row => {
-      row.addEventListener('click', () => {
-        const runId = row.dataset.run;
-        if (!runId) return;
-        openContributorFinding(runId, row.dataset.title, row.dataset.cwe);
+    const renderRows = () => {
+      const q = ($('#issuesSearch')?.value || '').trim().toLowerCase();
+      const sevFilter = ($('#issuesSevFilter')?.value || '').toLowerCase();
+      const statusFilter = ($('#issuesStatusFilter')?.value || '').toLowerCase();
+      const filtered = data.filter(f => {
+        if (sevFilter && (f.severity || '').toLowerCase() !== sevFilter) return false;
+        if (statusFilter && (f.status || 'open').toLowerCase() !== statusFilter) return false;
+        if (q) {
+          const blob = `${f.title || ''} ${f.target || ''} ${f.cwe || ''} ${f.run || ''} ${f.severity || ''} ${f.agent || ''}`.toLowerCase();
+          if (!blob.includes(q)) return false;
+        }
+        return true;
       });
-    });
+      const rows = filtered.map(f => {
+        const sc = sevClass(f.severity);
+        return `<tr class="issue-row" data-run="${esc(f.run || '')}" data-title="${esc(f.title || '')}" data-cwe="${esc(f.cwe || '')}" style="cursor:pointer"><td><span class="sev ${sc}">${esc(f.severity)}</span></td><td>${esc(f.title)}</td><td class="mono">${esc(f.target || '')}</td><td class="mono">${esc(f.run || '')}</td><td>${esc(f.status || 'open')}</td></tr>`;
+      }).join('');
+      body.innerHTML = rows
+        ? `<table class="data-table"><thead><tr><th>Severity</th><th>Title</th><th>Target</th><th>Run</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`
+        : '<div class="empty-state">No issues matching current filters.</div>';
+      $$('.issue-row', body).forEach(row => {
+        row.addEventListener('click', () => {
+          const runId = row.dataset.run;
+          if (!runId) return;
+          openContributorFinding(runId, row.dataset.title, row.dataset.cwe);
+        });
+      });
+    };
+    renderRows();
+    const searchInput = $('#issuesSearch');
+    if (searchInput) searchInput.oninput = renderRows;
+    const sevSelect = $('#issuesSevFilter');
+    if (sevSelect) sevSelect.onchange = renderRows;
+    const statusSelect = $('#issuesStatusFilter');
+    if (statusSelect) statusSelect.onchange = renderRows;
   } catch (e) { body.innerHTML = `<div class="empty-state">Failed to load: ${esc(e.message)}</div>`; }
 }
 
