@@ -2226,7 +2226,17 @@ fn extract_chain(text: &str, agent: &str) -> (Vec<Finding>, Vec<String>) {
 
 // --------------------------------------------------------------------------- shared
 
-const SELECT_SYS: &str = "You are a penetration-test orchestrator. Given recon of a target and a catalog of specialist agents, choose the agents whose preconditions match the target's attack surface. Be selective, but COVER THE SURFACE — do NOT collapse the run into one vuln family. Rules: (1) pick a DIVERSE set spanning the classes the recon supports, not 4 variants of the same bug; (2) whenever recon shows ANY authentication/login/signup/account/session surface, an OAuth/OIDC/SSO/SAML flow, or JWTs/tokens, you MUST include the relevant auth/identity agents (login/auth-bypass, oauth/oidc misconfig, jwt, session, password-reset, mfa) — that surface holds the high-impact bugs and is the one most often missed; (3) include business-logic / access-control / IDOR-BOLA agents whenever there is an authenticated or multi-step flow; (4) cover BOTH client-side and back-end classes when both surfaces exist. Reply with a JSON array of agent names (strings) drawn exactly from the catalog. No prose.";
+const SELECT_SYS: &str = "You are a penetration-test orchestrator. Given recon of a target and a catalog of specialist agents, choose ONLY the agents whose preconditions match the target's OBSERVED attack surface. Be selective and surgical — quality over quantity.
+
+SELECTION RULES:
+1. MATCH TO SURFACE: Only pick agents for technologies, protocols, and patterns ACTUALLY FOUND in the recon. If recon shows no GraphQL endpoint, do NOT pick graphql agents. If no JWT/token is seen, skip jwt agents. If no file upload exists, skip upload agents.
+2. ELIMINATE BY STACK: If the target is behind a WAF/CDN (Akamai, Cloudflare, AWS WAF), PRIORITIZE WAF-bypass, cache-poisoning, and header-manipulation agents. De-prioritize blind command injection and basic SQLi (WAFs block trivial payloads).
+3. DIVERSITY: Pick a diverse set spanning the classes the recon supports — not 4 variants of the same bug family. One SQLi variant is enough unless recon shows multiple injection surfaces.
+4. AUTH SURFACE: When recon shows login/signup/session/OAuth/OIDC/SAML/JWT, ALWAYS include auth agents. This surface holds the high-impact bugs.
+5. BUSINESS LOGIC: Include IDOR/BOLA/BFLA/access-control agents when authenticated or multi-step flows exist.
+6. HARD EXCLUSIONS: NEVER pick agents for databases (postgres, mysql, redis, mongo) unless recon PROVES the database is directly reachable. NEVER pick cloud-infra agents (aws/gcp/azure/k8s) unless recon shows cloud metadata or cloud-specific endpoints. NEVER pick agents for frameworks not detected (e.g., no Django = no Django agents).
+
+Reply with a JSON array of agent names (strings) drawn exactly from the catalog. No prose.";
 
 /// Ask the model which agents to run for this recon. Returns chosen agent names
 /// (empty on failure → caller falls back to RL-ranked agents).
@@ -2236,8 +2246,8 @@ async fn select_agents(pool: &ModelPool, recon: &str, focus: &str, catalog: &[Ag
         .map(|a| format!("{} — {} [{}]", a.name, a.title.replace(" Agent", ""), a.cwe))
         .collect::<Vec<_>>()
         .join("\n");
-    // Token economy: cap the recon blob fed to the selector.
-    let recon_trim: String = recon.chars().take(3000).collect();
+    // Feed more recon context so the selector sees the full technology stack.
+    let recon_trim: String = recon.chars().take(6000).collect();
     let focus_line = if focus.trim().is_empty() {
         String::new()
     } else {
@@ -2367,71 +2377,252 @@ fn parse_string_array(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Fallback agent selection when the LLM selector fails: score each agent by
-/// keyword overlap between its name/title and the recon text, always seed a
-/// black-box baseline of high-yield web classes, and take the top `cap`.
+/// Recon-driven agent selection with negative filtering. Scores each agent by
+/// how well its preconditions match the observed attack surface, penalizes
+/// agents for technologies NOT present, and caps output to `cap`.
 fn heuristic_select(ranked: &[Agent], recon: &str, focus: &str, cap: usize) -> Vec<Agent> {
-    const BASELINE: &[&str] = &[
-        "sqli_error", "sqli_blind", "sqli_union", "xss_reflected", "xss_stored", "xss_dom",
-        "command_injection", "lfi", "path_traversal", "ssrf", "idor", "open_redirect",
-        "auth_bypass", "csrf", "ssti", "file_upload", "xxe", "information_disclosure",
-        "security_headers", "cors_misconfig",
-    ];
     let r = recon.to_lowercase();
     let f = focus.to_lowercase();
-    // Recon signal → agent-name substrings. Only agents whose surface the recon
-    // actually identified get the signal boost; the rest rely on the baseline.
+
+    // --- Surface detection flags ---
+    let has_web = r.contains("http") || r.contains("html") || r.contains("server:");
+    let has_login = r.contains("login") || r.contains("signin") || r.contains("sign-in")
+        || r.contains("auth") || r.contains("password") || r.contains("session");
+    let has_api = r.contains("/api") || r.contains("rest") || r.contains("openapi")
+        || r.contains("swagger") || r.contains("json") || r.contains("endpoint");
+    let has_graphql = r.contains("graphql") || r.contains("/graphql") || r.contains("introspection");
+    let has_jwt = r.contains("jwt") || r.contains("bearer") || r.contains("authorization:");
+    let has_oauth = r.contains("oauth") || r.contains("oidc") || r.contains("openid")
+        || r.contains("saml") || r.contains("/authorize") || r.contains("sso");
+    let has_upload = r.contains("upload") || r.contains("multipart") || r.contains("file");
+    let has_websocket = r.contains("websocket") || r.contains("ws://") || r.contains("wss://")
+        || r.contains("socket.io");
+    let has_waf = r.contains("akamai") || r.contains("cloudflare") || r.contains("incapsula")
+        || r.contains("aws waf") || r.contains("waf") || r.contains("imperva")
+        || r.contains("f5 ") || r.contains("barracuda");
+    let has_cdn = r.contains("cdn") || r.contains("akamai") || r.contains("cloudfront")
+        || r.contains("fastly") || r.contains("cloudflare");
+    let has_spa = r.contains("react") || r.contains("angular") || r.contains("vue")
+        || r.contains("next.js") || r.contains("nuxt") || r.contains("webpack")
+        || r.contains("single-page") || r.contains("spa");
+    let has_php = r.contains("php") || r.contains(".php") || r.contains("laravel")
+        || r.contains("wordpress") || r.contains("drupal");
+    let has_java = r.contains("java") || r.contains("spring") || r.contains("tomcat")
+        || r.contains("struts") || r.contains(".jsp");
+    let has_dotnet = r.contains(".net") || r.contains("aspnet") || r.contains("asp.net")
+        || r.contains(".aspx") || r.contains("iis");
+    let has_python = r.contains("python") || r.contains("django") || r.contains("flask")
+        || r.contains("fastapi") || r.contains("gunicorn") || r.contains("uvicorn");
+    let has_node = r.contains("node") || r.contains("express") || r.contains("koa")
+        || r.contains("next") || r.contains("npm");
+    let has_cloud_aws = r.contains("aws") || r.contains("amazonaws") || r.contains("s3")
+        || r.contains("ec2") || r.contains("lambda");
+    let has_cloud_gcp = r.contains("gcp") || r.contains("googleapis") || r.contains("gcs");
+    let has_cloud_azure = r.contains("azure") || r.contains("microsoft.com") || r.contains("blob.core");
+    let has_k8s = r.contains("kubernetes") || r.contains("k8s") || r.contains("kubelet")
+        || r.contains("kubectl");
+    let has_docker = r.contains("docker") || r.contains("container") || r.contains("registry");
+    let has_db_direct = r.contains(":5432") || r.contains(":3306") || r.contains(":1433")
+        || r.contains(":27017") || r.contains(":6379") || r.contains("postgres")
+        || r.contains("mysql") || r.contains("redis") || r.contains("mongo");
+    let has_ai = r.contains("openai") || r.contains("llm") || r.contains("chatbot")
+        || r.contains("ai") || r.contains("prompt") || r.contains("vector");
+    let has_cors = r.contains("cors") || r.contains("access-control-allow");
+    let has_template = r.contains("template") || r.contains("jinja") || r.contains("twig")
+        || r.contains("mustache") || r.contains("handlebars");
+    let has_cache = r.contains("cache") || r.contains("varnish") || r.contains("x-cache");
+    let has_xml = r.contains("xml") || r.contains("soap") || r.contains("wsdl");
+    let _has_redirect = r.contains("redirect") || r.contains("302") || r.contains("location:");
+    let _has_mail = r.contains("smtp") || r.contains("mail") || r.contains("email");
+    let _has_crypto = r.contains("tls") || r.contains("ssl") || r.contains("certificate")
+        || r.contains("cipher") || r.contains("x509");
+
+    // Positive signal mappings: recon keyword → agent name substrings to boost (+6)
     let signals: &[(&str, &[&str])] = &[
+        // API surface
         ("graphql", &["graphql"]),
         ("jwt", &["jwt"]),
+        ("bearer", &["jwt", "auth"]),
         ("oauth", &["oauth", "oidc", "saml"]),
-        ("\"jwt\"", &["jwt"]),
-        ("api", &["api_", "bola", "bfla", "idor", "mass_assign", "rate_limit"]),
+        ("openid", &["oauth", "oidc"]),
+        ("saml", &["saml", "oauth"]),
+        ("/api", &["api_", "bola", "bfla", "idor", "mass_assign", "rate_limit"]),
+        ("swagger", &["api_", "idor", "bola", "bfla"]),
+        ("openapi", &["api_", "idor", "bola"]),
         ("upload", &["file_upload", "zip_slip"]),
+        ("multipart", &["file_upload"]),
         ("websocket", &["websocket"]),
-        ("\"ws\"", &["websocket"]),
-        ("graphql", &["graphql"]),
-        ("aws", &["aws_", "s3_", "imds", "cloud_"]),
-        ("gcp", &["gcp_", "gcs_", "metadata"]),
+        ("socket.io", &["websocket"]),
+        // Cloud
+        ("amazonaws", &["aws_", "s3_", "imds", "cloud_"]),
+        ("s3", &["s3_", "aws_"]),
+        ("lambda", &["aws_", "cloud_"]),
+        ("googleapis", &["gcp_", "gcs_", "metadata"]),
         ("azure", &["azure_"]),
         ("kubernetes", &["k8s_", "kubelet"]),
         ("docker", &["docker_", "container_"]),
-        ("ai_features", &["llm_", "prompt_injection", "rag", "vector_db"]),
-        ("chat", &["llm_", "prompt_injection"]),
+        // Frameworks
         ("jinja", &["ssti"]),
+        ("twig", &["ssti"]),
         ("flask", &["ssti", "ssrf", "command_injection"]),
+        ("django", &["ssti", "ssrf", "csrf"]),
+        ("spring", &["ssrf", "deserial", "sqli"]),
+        ("struts", &["command_injection", "deserial"]),
         ("php", &["lfi", "rfi", "sqli", "command_injection"]),
+        ("wordpress", &["sqli", "xss", "lfi", "auth"]),
+        ("laravel", &["sqli", "ssti", "csrf"]),
+        ("express", &["ssrf", "xss", "nosql"]),
+        ("asp.net", &["deserial", "sqli", "xss"]),
+        ("tomcat", &["deserial", "path_traversal"]),
+        // Patterns
         ("template", &["ssti", "csti"]),
         ("redirect", &["open_redirect"]),
-        ("login", &["auth_bypass", "brute_force", "sqli", "default_credentials"]),
+        ("login", &["auth_bypass", "brute_force", "sqli", "default_credentials", "mfa", "password"]),
+        ("signup", &["auth_bypass", "account", "idor"]),
+        ("register", &["account", "auth"]),
         ("search", &["xss", "sqli"]),
         ("cache", &["cache", "smuggl"]),
+        ("varnish", &["cache", "smuggl"]),
+        ("x-cache", &["cache"]),
+        ("cors", &["cors"]),
+        ("xml", &["xxe"]),
+        ("soap", &["xxe", "sqli"]),
+        ("smtp", &["ssrf", "header_inject"]),
+        ("chatbot", &["llm_", "prompt_injection"]),
+        ("openai", &["llm_", "prompt_injection"]),
+        // WAF/CDN — boost bypass agents
+        ("akamai", &["waf", "smuggl", "cache", "header", "bypass"]),
+        ("cloudflare", &["waf", "smuggl", "cache", "bypass"]),
+        ("incapsula", &["waf", "bypass"]),
+        // SPA/client-side
+        ("react", &["xss_dom", "csti", "cors", "postmessage"]),
+        ("angular", &["xss_dom", "csti", "cors"]),
+        ("vue", &["xss_dom", "csti"]),
+        ("webpack", &["information_disclosure", "source_map"]),
     ];
+
+    // Negative exclusion rules: agent name substrings that get penalized heavily
+    // when the corresponding technology is NOT detected in recon.
+    let negatives: &[(&[&str], bool)] = &[
+        (&["graphql"], has_graphql),
+        (&["jwt"], has_jwt),
+        (&["oauth", "oidc", "saml"], has_oauth),
+        (&["websocket"], has_websocket),
+        (&["aws_", "s3_", "imds"], has_cloud_aws),
+        (&["gcp_", "gcs_"], has_cloud_gcp),
+        (&["azure_"], has_cloud_azure),
+        (&["k8s_", "kubelet"], has_k8s),
+        (&["docker_", "container_escape"], has_docker),
+        (&["postgres", "mysql", "redis", "mongo", "nosql", "mssql"], has_db_direct),
+        (&["llm_", "prompt_injection", "rag", "vector_db"], has_ai),
+        (&["xxe"], has_xml),
+    ];
+
     let mut scored: Vec<(i32, &Agent)> = ranked
         .iter()
         .map(|a| {
-            let mut score = 0;
-            if BASELINE.contains(&a.name.as_str()) {
-                score += 4;
+            let name_lower = a.name.to_lowercase();
+            let mut score: i32 = 0;
+
+            // Baseline: only give +4 to web-universal agents if target IS web
+            if has_web {
+                const WEB_BASELINE: &[&str] = &[
+                    "xss_reflected", "xss_stored", "ssrf", "idor", "open_redirect",
+                    "auth_bypass", "csrf", "information_disclosure", "security_headers",
+                    "cors_misconfig",
+                ];
+                if WEB_BASELINE.contains(&a.name.as_str()) {
+                    score += 4;
+                }
             }
-            // recon-signal mapping: boost agents matching identified surface
-            for (sig, names) in signals {
-                if r.contains(sig) && names.iter().any(|n| a.name.contains(n)) {
+            // Conditional baseline: injection agents only if web + no strong WAF
+            if has_web && !has_waf {
+                const INJECTION_BASELINE: &[&str] = &[
+                    "sqli_error", "sqli_blind", "sqli_union", "command_injection",
+                    "lfi", "path_traversal", "ssti", "file_upload",
+                ];
+                if INJECTION_BASELINE.contains(&a.name.as_str()) {
+                    score += 3;
+                }
+            }
+            // Behind WAF: injection agents get reduced baseline but WAF-aware agents get boosted
+            if has_web && has_waf {
+                const WAF_REDUCED: &[&str] = &[
+                    "sqli_error", "sqli_union", "command_injection",
+                ];
+                if WAF_REDUCED.contains(&a.name.as_str()) {
+                    score += 1; // still possible but much harder behind WAF
+                }
+                if name_lower.contains("waf") || name_lower.contains("smuggl")
+                    || name_lower.contains("bypass") || name_lower.contains("cache") {
+                    score += 8;
+                }
+            }
+            // Auth surface detected: boost auth agents
+            if has_login {
+                const AUTH_AGENTS: &[&str] = &[
+                    "auth_bypass", "brute_force", "default_credentials", "session",
+                    "password", "mfa", "csrf", "account",
+                ];
+                if AUTH_AGENTS.iter().any(|k| name_lower.contains(k)) {
                     score += 6;
                 }
             }
-            // direct keyword overlap with recon text
+            // API surface: boost API-specific agents
+            if has_api {
+                if name_lower.contains("api") || name_lower.contains("bola")
+                    || name_lower.contains("bfla") || name_lower.contains("mass_assign")
+                    || name_lower.contains("rate_limit") {
+                    score += 5;
+                }
+            }
+            // SPA/client-side: boost DOM/client agents
+            if has_spa {
+                if name_lower.contains("dom") || name_lower.contains("csti")
+                    || name_lower.contains("postmessage") || name_lower.contains("cors") {
+                    score += 5;
+                }
+            }
+            // CDN/cache: boost cache-related attacks
+            if has_cdn || has_cache {
+                if name_lower.contains("cache") || name_lower.contains("smuggl") {
+                    score += 5;
+                }
+            }
+            // Template engine: boost SSTI
+            if has_template {
+                if name_lower.contains("ssti") || name_lower.contains("csti") {
+                    score += 5;
+                }
+            }
+
+            // Positive signal mapping: boost agents matching identified surface
+            for (sig, names) in signals {
+                if r.contains(sig) && names.iter().any(|n| name_lower.contains(n)) {
+                    score += 6;
+                }
+            }
+
+            // Negative filtering: penalize agents for tech NOT in recon
+            for (agent_substrings, detected) in negatives {
+                if !detected && agent_substrings.iter().any(|s| name_lower.contains(s)) {
+                    score -= 10;
+                }
+            }
+
+            // Direct keyword overlap with recon text
             for tok in a.name.split('_') {
                 if tok.len() >= 4 && r.contains(tok) {
                     score += 2;
                 }
             }
-            // operator focus: strongly boost agents matching the requested classes
+            // Operator focus: strongly boost agents matching requested classes
             if !f.is_empty() {
                 let blob = format!("{} {}", a.name, a.title).to_lowercase();
                 let hit = ["inject", "sqli", "xss", "ssrf", "ssti", "rce", "command", "lfi", "rfi",
                            "idor", "bola", "bfla", "access", "auth", "privilege", "csrf", "redirect",
-                           "deserial", "xxe", "traversal", "upload", "jwt", "secret", "crypto"]
+                           "deserial", "xxe", "traversal", "upload", "jwt", "secret", "crypto",
+                           "waf", "bypass", "smuggl", "cache", "cors"]
                     .iter()
                     .any(|kw| f.contains(kw) && blob.contains(kw));
                 if hit {
@@ -2442,6 +2633,7 @@ fn heuristic_select(ranked: &[Agent], recon: &str, focus: &str, cap: usize) -> V
         })
         .collect();
     scored.sort_by_key(|x| std::cmp::Reverse(x.0));
+    // Only keep agents with positive score — negative means recon actively excluded them
     let mut out: Vec<Agent> = scored.iter().filter(|(s, _)| *s > 0).map(|(_, a)| (*a).clone()).collect();
     if out.is_empty() {
         out = ranked.to_vec();
