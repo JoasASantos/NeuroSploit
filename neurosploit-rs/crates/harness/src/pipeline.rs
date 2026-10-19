@@ -195,6 +195,23 @@ fn operator_directives(cfg: &RunConfig) -> String {
     if !recalled.is_empty() {
         s.push_str(&recalled);
     }
+    // Reference methodology files: operator-supplied .md files injected as
+    // supplementary testing guidance. Each file is capped at 8000 chars to
+    // keep prompt budgets reasonable.
+    for path in &cfg.reference_prompts {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            let fname = std::path::Path::new(path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(path);
+            let truncated: String = content.chars().take(8000).collect();
+            s.push_str(&format!(
+                "\nREFERENCE METHODOLOGY ({fname}) — use as supplementary testing guidance:\n{truncated}\n"
+            ));
+        }
+    }
+    // Autonomy directives: shape how aggressively agents explore.
+    s.push_str(&autonomy_directives(&cfg.autonomy));
     // The live attack graph — refreshed at every graph checkpoint of the test.
     let graph = crate::graph_memory::live_context(&run_id(cfg));
     if !graph.is_empty() {
@@ -206,6 +223,42 @@ fn operator_directives(cfg: &RunConfig) -> String {
         s.push('\n');
     }
     s
+}
+
+/// Generate autonomy directives based on the configured level.
+fn autonomy_directives(level: &str) -> String {
+    match level.trim().to_lowercase().as_str() {
+        "cautious" => String::new(),
+        "aggressive" => "\n\
+            AUTONOMY: AGGRESSIVE — you have maximum latitude to find vulnerabilities:\n\
+            - Install ANY tool you need without hesitation (apt, pip, npm, cargo, go install, git clone). Time-box installs to 120s.\n\
+            - Try CREATIVE and LATERAL attack vectors beyond the standard checklist: parser differentials, race conditions, \
+              type juggling, deserialization gadgets, second-order injections, cache poisoning, request smuggling.\n\
+            - Chain findings aggressively: every foothold is a pivot opportunity. Explore what you can reach from each finding.\n\
+            - Do NOT stop at the first test per category. Vary payloads, encodings, HTTP methods, content-types, and injection points.\n\
+            - Research the identified technology stack for known CVEs and test each one specifically.\n\
+            - Probe pre-production and staging environments if discovered — they often have weaker controls.\n\
+            - When WAF blocks a payload, try at least 3 bypass techniques before moving on.\n\
+            - Test business logic exhaustively: state transitions, race conditions, price manipulation, privilege boundaries.\n\
+            ".to_string(),
+        "full" => "\n\
+            AUTONOMY: FULL — zero restrictions on testing methodology:\n\
+            - Install ANY tool, download ANY PoC, clone ANY exploit repo. No hesitation, no confirmation needed.\n\
+            - You are an elite researcher doing ORIGINAL vulnerability discovery, not just running checklists.\n\
+            - Think like a zero-day hunter: understand the system deeply, question every assumption, explore every edge case.\n\
+            - EVERY parser is a target: JSON, XML, URL, header, query string, cookie, multipart, protobuf. Fuzz each one.\n\
+            - Chain EVERYTHING: SSRF to cloud metadata, XSS to account takeover, IDOR to data exfiltration, SQLi to RCE.\n\
+            - Test timing attacks, race conditions, TOCTOU, and concurrency issues on every state-changing endpoint.\n\
+            - Explore the FULL attack surface: subdomains, pre-prod environments, exposed APIs, internal services, \
+              debug endpoints, cloud metadata, CI/CD artifacts.\n\
+            - When one approach fails, try at least 5 alternatives before concluding an endpoint is not vulnerable.\n\
+            - WAF bypass is expected: encoding tricks, HTTP verb tampering, header injection, chunked encoding, \
+              Unicode normalization, double encoding, null bytes, comment injection.\n\
+            - Document zero-day discoveries with full methodology: observation, hypothesis, test, result, exploitation, confirmation.\n\
+            - Use the REFERENCE METHODOLOGY (if provided) as your comprehensive testing playbook.\n\
+            ".to_string(),
+        _ => String::new(), // "standard" = no extra directives
+    }
 }
 
 /// Where this project's durable state lives. The app already points
@@ -1182,6 +1235,24 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
             Err(e) => { let _ = tx.send(format!("notify: ⚠ {e}")).await; }
         }
     }
+
+    // MCP hot-reload: watch mcp.servers.json for mid-run changes so the
+    // operator can add/remove MCP servers (e.g. Playwright) without stopping.
+    let _mcp_watcher = if pool.mcp_config.is_some() {
+        if let Some(wd) = cfg.workdir.as_deref() {
+            let config_dir = std::path::PathBuf::from(wd);
+            let proj_dir = config_dir.parent().unwrap_or(&config_dir);
+            let watch_path = proj_dir.join("mcp.servers.json");
+            let reloader = std::sync::Arc::new(
+                crate::mcp_hot_reload::McpReloader::new(config_dir, watch_path),
+            );
+            Some(reloader.clone().spawn(Some(tx.clone()), pool.cancel_handle()))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     let _ = tx
         .send(format!(

@@ -31,6 +31,7 @@ pub mod integrity;
 pub mod internal;
 pub mod json_extract;
 pub mod knowledge_graph;
+pub mod mcp_hot_reload;
 pub mod memory;
 pub mod policy;
 pub mod poc;
@@ -64,6 +65,7 @@ pub mod waf;
 pub mod wire;
 
 pub use agents::{Agent, Library};
+pub use mcp_hot_reload::{McpReloader, add_server as mcp_add_server, remove_server as mcp_remove_server};
 pub use models::{
     cli_binary_for, ensure_playwright_mcp, installed_cli_backends, mcp_supported, provider_for,
     providers, write_mcp_config, ChatClient, ModelRef, Provider,

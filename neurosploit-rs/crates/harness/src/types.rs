@@ -308,6 +308,21 @@ pub struct RunConfig {
     /// they are tested directly, in addition to what recon discovers.
     #[serde(default)]
     pub api_collection: Option<String>,
+    /// Paths to reference methodology files (.md) injected into every agent
+    /// prompt as supplementary material. Agents use these as additional
+    /// testing guidance alongside their own specialist playbook.
+    #[serde(default)]
+    pub reference_prompts: Vec<String>,
+    /// Agent autonomy level: "cautious" (default safety, minimal installs),
+    /// "standard" (balanced), "aggressive" (install tools freely, creative
+    /// lateral testing, deeper chaining, longer timeouts), "full" (maximum
+    /// autonomy — no guardrails on tool installs, research, creative attacks).
+    #[serde(default = "default_autonomy")]
+    pub autonomy: String,
+}
+
+fn default_autonomy() -> String {
+    "standard".to_string()
 }
 
 fn default_vote() -> usize {
@@ -369,6 +384,8 @@ impl RunConfig {
             creds_file: None,
             neo4j: None,
             api_collection: None,
+            reference_prompts: Vec::new(),
+            autonomy: default_autonomy(),
         }
     }
 }
