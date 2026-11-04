@@ -190,7 +190,7 @@ impl ChatClient {
         let body = serde_json::json!({
             "model": m.model,
             "max_tokens": max_tokens_for(&m.model),
-            "temperature": 0.2,
+            "temperature": temperature_for(),
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user}
@@ -951,6 +951,23 @@ impl Default for ChatClient {
     }
 }
 
+/// Sampling temperature for an API chat completion. The default (0.2) keeps the
+/// agent consistent and low-"creativity"; raise it for more exploratory runs
+/// (0.7) or drop it to 0.0 for deterministic output. Override with
+/// `NEUROSPLOIT_TEMPERATURE` (the `--temperature` CLI flag sets this). Values
+/// outside the accepted 0.0..=2.0 range are ignored and fall back to the default.
+///
+/// Only the HTTP API path honours this; the subscription-CLI backends
+/// (`chat_claude_stream` / `chat_codex_stream`) drive agentic CLIs that expose
+/// no temperature knob.
+fn temperature_for() -> f32 {
+    std::env::var("NEUROSPLOIT_TEMPERATURE")
+        .ok()
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .filter(|&v| (0.0..=2.0).contains(&v))
+        .unwrap_or(0.2)
+}
+
 /// Default output budget for a chat completion, keyed off the model family.
 ///
 /// Reasoning models (GLM, DeepSeek, Qwen "thinking", the o-series, …) spend a
@@ -1110,6 +1127,35 @@ mod response_tests {
     fn plain_models_keep_default() {
         for m in ["gpt-5.5", "claude-opus-5-5", "anthropic/claude-opus-4-8", "gemini-3-pro", "grok-4.7", "meta-llama/llama-3.3-70b-instruct"] {
             assert_eq!(max_tokens_for(m), 4096, "{m} should keep the default cap");
+        }
+    }
+
+    #[test]
+    fn temperature_defaults_and_overrides() {
+        // Env var drives the whole process, so keep this test self-contained and
+        // restore the prior value to avoid cross-test interference.
+        let prev = std::env::var("NEUROSPLOIT_TEMPERATURE").ok();
+
+        std::env::remove_var("NEUROSPLOIT_TEMPERATURE");
+        assert_eq!(temperature_for(), 0.2, "default temperature");
+
+        std::env::set_var("NEUROSPLOIT_TEMPERATURE", "0.0");
+        assert_eq!(temperature_for(), 0.0, "deterministic override");
+
+        std::env::set_var("NEUROSPLOIT_TEMPERATURE", "0.7");
+        assert_eq!(temperature_for(), 0.7, "exploratory override");
+
+        // Out-of-range and garbage fall back to the default.
+        std::env::set_var("NEUROSPLOIT_TEMPERATURE", "2.5");
+        assert_eq!(temperature_for(), 0.2, "above range → default");
+        std::env::set_var("NEUROSPLOIT_TEMPERATURE", "-1");
+        assert_eq!(temperature_for(), 0.2, "below range → default");
+        std::env::set_var("NEUROSPLOIT_TEMPERATURE", "hot");
+        assert_eq!(temperature_for(), 0.2, "unparseable → default");
+
+        match prev {
+            Some(v) => std::env::set_var("NEUROSPLOIT_TEMPERATURE", v),
+            None => std::env::remove_var("NEUROSPLOIT_TEMPERATURE"),
         }
     }
 

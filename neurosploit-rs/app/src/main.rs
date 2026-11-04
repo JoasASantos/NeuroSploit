@@ -102,6 +102,12 @@ struct Cli {
     /// box). Default: whichever is configured. See tools/laya_shim.py.
     #[arg(long = "decision-backend", global = true)]
     decision_backend: Option<String>,
+    /// Sampling temperature for model API calls (0.0..=2.0, default 0.2). Lower
+    /// is more deterministic/consistent, higher more exploratory (e.g. 0.0 fully
+    /// deterministic, 0.7 creative). Applies to the HTTP API path only; the
+    /// subscription-CLI backends (claude/codex/…) expose no temperature knob.
+    #[arg(long = "temperature", global = true)]
+    temperature: Option<f32>,
 }
 
 #[derive(Subcommand)]
@@ -815,6 +821,15 @@ async fn main() -> anyhow::Result<()> {
         Some(ref m) if m == "off" || m == "false" || m == "0" => std::env::set_var("NEUROSPLOIT_TYPESAFE", "off"),
         Some(ref m) if m == "on" || m == "true" || m == "1" || m == "auto" => std::env::set_var("NEUROSPLOIT_TYPESAFE", "on"),
         _ => {}
+    }
+    // Sampling temperature → NEUROSPLOIT_TEMPERATURE, read at call time by the
+    // model client (so both `run` and the REPL honour it). Set before dispatch.
+    if let Some(t) = cli.temperature {
+        if (0.0..=2.0).contains(&t) {
+            std::env::set_var("NEUROSPLOIT_TEMPERATURE", t.to_string());
+        } else {
+            eprintln!("  \x1b[33m⚠ --temperature {t} out of range (0.0..=2.0) — ignoring, using default 0.2\x1b[0m");
+        }
     }
 
     // No subcommand → launch the Claude-Code-style interactive session.
