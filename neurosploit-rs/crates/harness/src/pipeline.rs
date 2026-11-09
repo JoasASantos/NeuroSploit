@@ -142,6 +142,12 @@ const RECON_SYS: &str = "You are an elite web recon specialist on an AUTHORIZED 
   Prioritise auth/reset/payment/upload/admin/export flows and the less-hardened subdomains.\n\
 Base everything on real observed responses — never assume. Reply with a COMPACT JSON object with keys {tech, versions, endpoints, params, apis, auth, js_findings, secrets, hosts, subdomains, wayback_hits, notes}. No prose.";
 
+/// `NEUROSPLOIT_PROMPT_PREFIX=1` moves the block shared by every exploit agent
+/// to the front of the system message so provider prompt caches can hit on it.
+fn prompt_prefix_enabled() -> bool {
+    std::env::var("NEUROSPLOIT_PROMPT_PREFIX").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false)
+}
+
 /// Operator directives (focus instructions + auth material) prepended to
 /// recon/exploit prompts so the engagement is steered as the user asked.
 fn operator_directives(cfg: &RunConfig) -> String {
@@ -1448,8 +1454,21 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
     let budget_warner = std::sync::Arc::new(crate::resilience::BudgetWarner::new());
 
     let snap_ref = snapshot.as_ref();
+    // Everything every exploit agent receives identically (directives, doctrines,
+    // evidence contract). Providers cache by identical prefix from the first
+    // token, so with NEUROSPLOIT_PROMPT_PREFIX=1 this block leads the system
+    // message instead of sitting behind each agent's own system prompt. Off by
+    // default: the prompt is then byte-for-byte what it was.
+    let shared_block = format!(
+        "{directives}{react}{depth}{decision}{explore}{spa}{safety}{ops}{doctrine}{shots}",
+        directives = directives, react = REACT_DOCTRINE, depth = DEPTH_DOCTRINE, decision = DECISION_DOCTRINE,
+        explore = EXPLORE_DOCTRINE, spa = spa, safety = SAFETY_DOCTRINE, ops = ops,
+        doctrine = tool_doctrine(mcp_on), shots = shots,
+    );
+    let prefix_on = prompt_prefix_enabled();
     let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(selected.iter().cloned())
         .map(|ag| {
+            let shared_block = shared_block.clone();
             let target = target.clone();
             let recon = recon_ctx.clone();
             let directives = directives.clone();
@@ -1482,10 +1501,15 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
                 if verbose {
                     let _ = txc.send(format!("  ▶ launching agent: {} ({})", ag.name, ag.title.replace(" Agent", ""))).await;
                 }
+                let (system_eff, shared_in_user) = if prefix_on {
+                    (format!("{shared_block}\n\n{}", ag.system), String::new())
+                } else {
+                    (ag.system.clone(), shared_block.clone())
+                };
                 let user = format!(
                     "AUTHORIZED engagement — you have explicit permission to test {target}. \
                      Do not ask for confirmation — proceed and PROVE each issue.\n\n\
-                     {directives}{react}{depth}{decision}{explore}{spa}{safety}{ops}{doctrine}{shots}{body}\n\nWhen done, reply with ONLY a JSON array of confirmed findings (may be empty []). \
+                     {shared_in_user}{body}\n\nWhen done, reply with ONLY a JSON array of confirmed findings (may be empty []). \
                      Each item: {{id,title,severity,cwe,endpoint,location,payload,evidence,repro_steps,impact,remediation,confidence,auth_context,account,secret,screenshots}}. \
                      Write for a developer who has never seen this app and has to fix it today:\n\
                      - `location`: EXACTLY where it is — the parameter, form field, header, JSON key, or flow step (e.g. \"POST /api/orders, JSON field `role`\"). An endpoint alone sends them hunting.\n\
@@ -1505,15 +1529,10 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
                      Set `auth_context` to \"authenticated\" or \"unauthenticated\"; set `account` to the test user/role you used (if any); \
                      for a created test account set `secret` to its generated password (it is stored in the run vault and masked in the report).",
                     target = target,
-                    directives = directives,
-                    react = REACT_DOCTRINE,
-                    depth = DEPTH_DOCTRINE, decision = DECISION_DOCTRINE, spa = spa, safety = SAFETY_DOCTRINE, explore = EXPLORE_DOCTRINE,
-                    ops = ops,
-                    doctrine = tool_doctrine(mcp_on),
-                    shots = shots,
+                    shared_in_user = shared_in_user,
                     body = ag.user.replace("{target}", &target).replace("{recon_json}", &recon),
                 );
-                match pool.complete_routed(Task::Exploit, &ag.name, &ag.system, &user).await {
+                match pool.complete_routed(Task::Exploit, &ag.name, &system_eff, &user).await {
                     Ok((m, text)) => {
                         let f = extract_findings(&text, &ag.name);
                         let _ = txc.send(format!("exploit {} via {} → {} candidate(s)", ag.name, m.label(), f.len())).await;
@@ -1554,7 +1573,7 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
                         // Nudge: retry with simplified prompt (skip for auth failures).
                         if !is_auth && !pool.stop_exploiting() {
                             let _ = txc.send(format!("🔄 nudging {} with simplified prompt...", ag.name)).await;
-                            let nudged = crate::resilience::nudge_agent(pool, &ag.name, &ag.system, &user, Task::Exploit).await;
+                            let nudged = crate::resilience::nudge_agent(pool, &ag.name, &system_eff, &user, Task::Exploit).await;
                             if !nudged.is_empty() {
                                 let _ = txc.send(format!("✓ nudge recovered {} finding(s) from {}", nudged.len(), ag.name)).await;
                                 return (ag.name.clone(), String::new(), nudged);
@@ -3596,6 +3615,16 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
     if !artifacts.is_empty() {
         let _ = tx.send(format!("notify: evidence saved → {}", cfg.workdir.clone().unwrap_or_default())).await;
         let _ = tx.send(format!("artifacts saved: {}", artifacts.join(", "))).await;
+    }
+    // Provider-reported token usage per agent (observational; see `usage`).
+    {
+        let rep = crate::usage::report();
+        if !rep.is_empty() {
+            let _ = tx.send(rep).await;
+        }
+        if let Some(d) = cfg.workdir.as_deref() {
+            crate::usage::write_json(Path::new(d));
+        }
     }
     // Automatic partial summary (phase complete).
     {
