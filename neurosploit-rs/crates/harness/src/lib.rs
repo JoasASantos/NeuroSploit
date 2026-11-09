@@ -57,6 +57,7 @@ pub mod taint;
 pub mod traces;
 pub mod transport;
 pub mod types;
+pub mod usage;
 pub mod typesafe;
 pub mod typesafe_agent;
 pub mod uncertainty;

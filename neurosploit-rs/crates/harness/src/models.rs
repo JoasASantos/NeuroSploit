@@ -158,6 +158,12 @@ impl ChatClient {
     /// One chat completion. Errors (missing key, network, non-2xx) propagate so
     /// the pool can fail over to the next candidate model.
     pub async fn chat(&self, m: &ModelRef, system: &str, user: &str) -> Result<String> {
+        self.chat_labeled("", m, system, user).await
+    }
+
+    /// Same as [`chat`], attributing the provider-reported usage to `label` in
+    /// the [`crate::usage`] ledger.
+    pub async fn chat_labeled(&self, label: &str, m: &ModelRef, system: &str, user: &str) -> Result<String> {
         let p = provider_for(&m.provider)
             .ok_or_else(|| anyhow!("unknown provider '{}'", m.provider))?;
         let key = resolve_key(&p);
@@ -250,6 +256,9 @@ impl ChatClient {
                 ));
             }
         };
+        if let Some((i, o, c)) = v.get("usage").and_then(crate::usage::parse) {
+            crate::usage::record(label, i, o, c);
+        }
         let choice = &v["choices"][0];
         if choice.is_null() {
             // Some providers signal a soft failure with an empty `choices` and an
@@ -532,6 +541,11 @@ impl ChatClient {
                         let ti = v.pointer("/usage/input_tokens").and_then(|x| x.as_u64());
                         let to = v.pointer("/usage/output_tokens").and_then(|x| x.as_u64());
                         let cost = v.get("total_cost_usd").and_then(|x| x.as_f64());
+                        if let Some(u) = v.get("usage") {
+                            if let Some((i, o, c)) = crate::usage::parse(u) {
+                                crate::usage::record(label, i, o, c);
+                            }
+                        }
                         if ti.is_some() || to.is_some() || cost.is_some() {
                             emit(format!("tokens: in={} out={} cost=${:.4}",
                                 ti.unwrap_or(0), to.unwrap_or(0), cost.unwrap_or(0.0)));
@@ -656,6 +670,11 @@ impl ChatClient {
                     "turn.completed" => {
                         let ti = v.pointer("/usage/input_tokens").and_then(|x| x.as_u64());
                         let to = v.pointer("/usage/output_tokens").and_then(|x| x.as_u64());
+                        if let Some(u) = v.get("usage") {
+                            if let Some((i, o, c)) = crate::usage::parse(u) {
+                                crate::usage::record(label, i, o, c);
+                            }
+                        }
                         if ti.is_some() || to.is_some() {
                             emit(format!("tokens: in={} out={}", ti.unwrap_or(0), to.unwrap_or(0)));
                         }

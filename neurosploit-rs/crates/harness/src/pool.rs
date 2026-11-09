@@ -324,7 +324,7 @@ impl ModelPool {
                         .chat_cli(label, &m.provider, &m.model, system, user, self.mcp_config.as_deref(), progress.clone())
                         .await
                 } else {
-                    self.client.chat(m, system, user).await
+                    self.client.chat_labeled(label, m, system, user).await
                 }
             };
             let r = tokio::select! {
