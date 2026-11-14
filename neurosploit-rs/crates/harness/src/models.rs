@@ -120,7 +120,13 @@ pub struct ModelRef {
 impl ModelRef {
     pub fn parse(s: &str) -> ModelRef {
         match s.split_once(':') {
-            Some((p, m)) => ModelRef { provider: p.to_string(), model: m.to_string() },
+            Some((p, m)) if !m.is_empty() => ModelRef { provider: p.to_string(), model: m.to_string() },
+            Some((p, _)) => {
+                let model = provider_for(p)
+                    .and_then(|prov| prov.models.first().map(|s| s.to_string()))
+                    .unwrap_or_default();
+                ModelRef { provider: p.to_string(), model }
+            }
             None => ModelRef { provider: "anthropic".into(), model: s.to_string() },
         }
     }
@@ -187,7 +193,11 @@ impl ChatClient {
             // Allow an env base-URL override (LiteLLM gateway, self-hosted proxies, …).
             let base = match p.key {
                 "litellm" => std::env::var("LITELLM_BASE_URL").unwrap_or_else(|_| p.base_url.to_string()),
-                "ollama" => std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| p.base_url.to_string()),
+                "ollama" => {
+                    let raw = std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| p.base_url.to_string());
+                    let trimmed = raw.trim_end_matches('/');
+                    if trimmed.ends_with("/v1") { raw } else { format!("{trimmed}/v1") }
+                }
                 "llamacpp" => std::env::var("LLAMACPP_BASE_URL").unwrap_or_else(|_| p.base_url.to_string()),
                 _ => p.base_url.to_string(),
             };
