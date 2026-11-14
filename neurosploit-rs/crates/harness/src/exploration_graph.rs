@@ -498,6 +498,93 @@ impl DualGraph {
         serde_json::from_str(&json)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
     }
+
+    // ── Checkpoint / Rollback ──
+
+    /// Create a named checkpoint (snapshot) of the entire dual-graph state.
+    /// Checkpoints are stored as `<dir>/checkpoints/<label>.json`.
+    /// Use before risky exploration branches so you can roll back if they fail.
+    pub fn checkpoint(&self, dir: &Path, label: &str) -> std::io::Result<()> {
+        let cp_dir = dir.join("checkpoints");
+        std::fs::create_dir_all(&cp_dir)?;
+        let json = serde_json::to_string(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let safe_label: String = label.chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .collect();
+        std::fs::write(cp_dir.join(format!("{safe_label}.json")), json)
+    }
+
+    /// Restore from a named checkpoint. Returns the restored graph.
+    /// The caller replaces `self` with the result.
+    pub fn rollback(dir: &Path, label: &str) -> std::io::Result<Self> {
+        let safe_label: String = label.chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .collect();
+        let path = dir.join("checkpoints").join(format!("{safe_label}.json"));
+        let json = std::fs::read_to_string(&path)?;
+        serde_json::from_str(&json)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+    }
+
+    /// List available checkpoints with their labels and timestamps.
+    pub fn list_checkpoints(dir: &Path) -> Vec<(String, u64)> {
+        let cp_dir = dir.join("checkpoints");
+        let Ok(rd) = std::fs::read_dir(&cp_dir) else { return vec![] };
+        let mut checkpoints = Vec::new();
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.ends_with(".json") {
+                let label = name.trim_end_matches(".json").to_string();
+                let modified = entry.metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                checkpoints.push((label, modified));
+            }
+        }
+        checkpoints.sort_by(|a, b| b.1.cmp(&a.1));
+        checkpoints
+    }
+
+    /// Delete a checkpoint.
+    pub fn delete_checkpoint(dir: &Path, label: &str) -> std::io::Result<()> {
+        let safe_label: String = label.chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .collect();
+        std::fs::remove_file(dir.join("checkpoints").join(format!("{safe_label}.json")))
+    }
+
+    /// Auto-checkpoint: saves a checkpoint named `phase-<N>` where N is the
+    /// exploration graph version. Called automatically between pipeline phases.
+    pub fn auto_checkpoint(&self, dir: &Path) -> std::io::Result<()> {
+        let label = format!("phase-{}", self.exploration.version);
+        self.checkpoint(dir, &label)
+    }
+
+    /// Rollback to the latest checkpoint that passes a predicate.
+    /// Useful for "rollback to before this exploration branch failed".
+    pub fn rollback_before(dir: &Path, predicate: impl Fn(&Self) -> bool) -> Option<Self> {
+        let checkpoints = Self::list_checkpoints(dir);
+        for (label, _) in &checkpoints {
+            if let Ok(graph) = Self::rollback(dir, label) {
+                if predicate(&graph) {
+                    return Some(graph);
+                }
+            }
+        }
+        None
+    }
+
+    /// Rollback to the latest checkpoint where an exploration node doesn't exist.
+    /// This lets the planner undo a failed branch of exploration.
+    pub fn rollback_before_node(dir: &Path, node_id: &str) -> Option<Self> {
+        Self::rollback_before(dir, |g| {
+            !g.exploration.nodes.iter().any(|n| n.id == node_id)
+        })
+    }
 }
 
 // ── Helpers ──

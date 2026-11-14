@@ -97,7 +97,7 @@ pub use validation::{judge as judge_finding, CweValidator, Evidence, Verdict};
 pub use adaptive::{AdaptiveEngine, AdaptivePayload, Encoding, Outcome, PayloadRecord};
 pub use request_analyzer::{analyze as analyze_response, diff as diff_responses, ResponseAnalysis, ResponseDiff};
 pub use exploration_graph::{AssetGraph, AssetKind, DualGraph, ExplorationGraph, ExplorationKind};
-pub use planner::{Planner, PlannerConfig, PlannerIntent, IntentAction, TodoList};
+pub use planner::{Planner, PlannerConfig, PlannerIntent, IntentAction, TodoList, Negotiator, AgentBid, AgentProfile, NegotiationResult};
 pub use noise_governor::{NoiseGovernor, GovernorConfig, RequestDecision, GovernorStats};
 
 

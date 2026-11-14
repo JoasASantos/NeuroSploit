@@ -16,7 +16,7 @@
 use crate::exploration_graph::{DualGraph, ExplorationKind, ExplorationStatus, AssetKind};
 use crate::adaptive::AdaptiveEngine;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// A planner decision: what to do next.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -464,6 +464,307 @@ impl Planner {
     }
 }
 
+// ── Collaborative Intent Negotiation ──
+
+/// Bid from an agent wanting to claim an intent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentBid {
+    pub agent: String,
+    pub intent_id: String,
+    pub score: u32,
+    pub specialization: Vec<String>,
+    pub current_load: u32,
+}
+
+/// Outcome of a negotiation round.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NegotiationResult {
+    pub assignments: Vec<NegotiationAssignment>,
+    pub unassigned: Vec<String>,
+    pub conflicts_resolved: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NegotiationAssignment {
+    pub intent_id: String,
+    pub agent: String,
+    pub score: u32,
+    pub reason: String,
+}
+
+/// Agent capability profile for negotiation scoring.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentProfile {
+    pub name: String,
+    pub specializations: Vec<String>,
+    pub completed: u32,
+    pub failed: u32,
+    pub active: u32,
+    pub max_concurrent: u32,
+}
+
+impl AgentProfile {
+    pub fn new(name: &str, specializations: Vec<String>) -> Self {
+        Self {
+            name: name.to_string(),
+            specializations,
+            completed: 0,
+            failed: 0,
+            active: 0,
+            max_concurrent: 3,
+        }
+    }
+
+    fn success_rate(&self) -> f64 {
+        let total = self.completed + self.failed;
+        if total == 0 { return 0.5; }
+        self.completed as f64 / total as f64
+    }
+
+    fn capacity_remaining(&self) -> u32 {
+        self.max_concurrent.saturating_sub(self.active)
+    }
+}
+
+/// Negotiation engine — resolves multi-agent contention for intents.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct Negotiator {
+    pub profiles: HashMap<String, AgentProfile>,
+    pub history: Vec<NegotiationResult>,
+}
+
+impl Negotiator {
+    pub fn new() -> Self { Self::default() }
+
+    pub fn register(&mut self, profile: AgentProfile) {
+        self.profiles.insert(profile.name.clone(), profile);
+    }
+
+    pub fn unregister(&mut self, agent: &str) {
+        self.profiles.remove(agent);
+    }
+
+    /// Score a bid: how well does this agent fit this intent?
+    fn score_bid(&self, bid: &AgentBid, intent: &PlannerIntent) -> u32 {
+        let profile = match self.profiles.get(&bid.agent) {
+            Some(p) => p,
+            None => return bid.score,
+        };
+
+        let mut score = bid.score;
+
+        // Specialization match bonus (0-40 points)
+        let spec_match = profile.specializations.iter()
+            .any(|s| intent.agent_hint.contains(s) || s.contains(&intent.agent_hint));
+        if spec_match { score += 40; }
+
+        // Action-type match bonus (0-20 points)
+        let action_specs: Vec<&str> = match intent.action {
+            IntentAction::Exploit => vec!["exploit", "attack", "injection", "xss", "sqli"],
+            IntentAction::Recon => vec!["recon", "scan", "discover", "enumerate"],
+            IntentAction::Probe => vec!["probe", "fuzz", "test", "param"],
+            IntentAction::Chain => vec!["chain", "pivot", "escalate", "privesc"],
+            IntentAction::Validate => vec!["validate", "verify", "confirm"],
+            IntentAction::Fuzz => vec!["fuzz", "brute", "mutate"],
+            IntentAction::Retry => vec!["retry", "fallback"],
+        };
+        if profile.specializations.iter().any(|s| {
+            let sl = s.to_lowercase();
+            action_specs.iter().any(|a| sl.contains(a))
+        }) {
+            score += 20;
+        }
+
+        // Success rate bonus (0-30 points)
+        score += (profile.success_rate() * 30.0) as u32;
+
+        // Load penalty: busy agents score lower
+        if profile.capacity_remaining() == 0 {
+            score = score.saturating_sub(50);
+        } else {
+            score += profile.capacity_remaining() * 5;
+        }
+
+        // Historical penalty: agent already failed this target
+        let target_lower = intent.target.to_lowercase();
+        if profile.specializations.iter().any(|s| target_lower.contains(&s.to_lowercase())) {
+            score += 10;
+        }
+
+        score
+    }
+
+    /// Run a negotiation round: given bids from multiple agents for multiple intents,
+    /// resolve contention and produce assignments.
+    pub fn negotiate(&mut self, bids: Vec<AgentBid>, intents: &[PlannerIntent]) -> NegotiationResult {
+        let intent_map: HashMap<&str, &PlannerIntent> = intents.iter()
+            .map(|i| (i.id.as_str(), i))
+            .collect();
+
+        // Score all bids
+        let mut scored: Vec<(AgentBid, u32)> = bids.into_iter()
+            .filter_map(|bid| {
+                let intent = intent_map.get(bid.intent_id.as_str())?;
+                let score = self.score_bid(&bid, intent);
+                Some((bid, score))
+            })
+            .collect();
+
+        // Sort by score descending
+        scored.sort_by(|a, b| b.1.cmp(&a.1));
+
+        let mut assignments = Vec::new();
+        let mut assigned_intents: HashSet<String> = HashSet::new();
+        let mut assigned_agents: HashMap<String, u32> = HashMap::new();
+        let mut conflicts = 0u32;
+
+        for (bid, score) in &scored {
+            if assigned_intents.contains(&bid.intent_id) {
+                conflicts += 1;
+                continue;
+            }
+
+            let agent_load = assigned_agents.get(&bid.agent).copied().unwrap_or(0);
+            let max = self.profiles.get(&bid.agent)
+                .map(|p| p.max_concurrent)
+                .unwrap_or(3);
+            if agent_load >= max { continue; }
+
+            let reason = if let Some(profile) = self.profiles.get(&bid.agent) {
+                let spec = profile.specializations.iter()
+                    .find(|s| bid.intent_id.to_lowercase().contains(&s.to_lowercase())
+                        || intent_map.get(bid.intent_id.as_str())
+                            .map(|i| i.agent_hint.contains(s.as_str()))
+                            .unwrap_or(false))
+                    .cloned()
+                    .unwrap_or_default();
+                if !spec.is_empty() {
+                    format!("specialization match '{}', score {}", spec, score)
+                } else {
+                    format!("best available, score {}", score)
+                }
+            } else {
+                format!("score {}", score)
+            };
+
+            assignments.push(NegotiationAssignment {
+                intent_id: bid.intent_id.clone(),
+                agent: bid.agent.clone(),
+                score: *score,
+                reason,
+            });
+
+            assigned_intents.insert(bid.intent_id.clone());
+            *assigned_agents.entry(bid.agent.clone()).or_insert(0) += 1;
+        }
+
+        let unassigned: Vec<String> = intents.iter()
+            .filter(|i| !assigned_intents.contains(&i.id))
+            .map(|i| i.id.clone())
+            .collect();
+
+        let result = NegotiationResult {
+            assignments,
+            unassigned,
+            conflicts_resolved: conflicts,
+        };
+
+        self.history.push(result.clone());
+        result
+    }
+
+    /// Generate prompt block describing negotiation state.
+    pub fn prompt_block(&self) -> String {
+        if self.profiles.is_empty() { return String::new(); }
+
+        let mut s = String::from("NEGOTIATION STATE:\n");
+        s.push_str(&format!("  Registered agents: {}\n", self.profiles.len()));
+
+        for (name, profile) in &self.profiles {
+            s.push_str(&format!("  {} — specs: [{}], load: {}/{}, success: {:.0}%\n",
+                name,
+                profile.specializations.join(", "),
+                profile.active,
+                profile.max_concurrent,
+                profile.success_rate() * 100.0));
+        }
+
+        if let Some(last) = self.history.last() {
+            s.push_str(&format!("  Last round: {} assigned, {} unassigned, {} conflicts\n",
+                last.assignments.len(), last.unassigned.len(), last.conflicts_resolved));
+        }
+
+        s
+    }
+}
+
+impl Planner {
+    /// Negotiate intent assignments among multiple bidding agents.
+    /// Returns assignments and applies them to the todolist.
+    pub fn negotiate_and_assign(
+        &mut self,
+        bids: Vec<AgentBid>,
+        negotiator: &mut Negotiator,
+    ) -> NegotiationResult {
+        let queued_intents: Vec<PlannerIntent> = self.todo.items.iter()
+            .filter(|i| i.status == TodoStatus::Queued)
+            .map(|i| i.intent.clone())
+            .collect();
+
+        let result = negotiator.negotiate(bids, &queued_intents);
+
+        // Apply assignments to todolist
+        for assignment in &result.assignments {
+            if let Some(item) = self.todo.items.iter_mut()
+                .find(|i| i.id == assignment.intent_id && i.status == TodoStatus::Queued)
+            {
+                item.status = TodoStatus::Assigned;
+                item.assigned_agent = Some(assignment.agent.clone());
+                item.started_at = Some(now());
+            }
+
+            // Update agent profile load
+            if let Some(profile) = negotiator.profiles.get_mut(&assignment.agent) {
+                profile.active += 1;
+            }
+        }
+
+        result
+    }
+
+    /// Record agent task completion and update negotiator profile.
+    pub fn complete_with_profile(&mut self, id: &str, result: &str, negotiator: &mut Negotiator) {
+        let agent = self.todo.items.iter()
+            .find(|i| i.id == id)
+            .and_then(|i| i.assigned_agent.clone());
+
+        self.complete(id, result);
+
+        if let Some(agent) = agent {
+            if let Some(profile) = negotiator.profiles.get_mut(&agent) {
+                profile.completed += 1;
+                profile.active = profile.active.saturating_sub(1);
+            }
+        }
+    }
+
+    /// Record agent task failure and update negotiator profile.
+    pub fn fail_with_profile(&mut self, id: &str, reason: &str, negotiator: &mut Negotiator) {
+        let agent = self.todo.items.iter()
+            .find(|i| i.id == id)
+            .and_then(|i| i.assigned_agent.clone());
+
+        self.fail(id, reason);
+
+        if let Some(agent) = agent {
+            if let Some(profile) = negotiator.profiles.get_mut(&agent) {
+                profile.failed += 1;
+                profile.active = profile.active.saturating_sub(1);
+            }
+        }
+    }
+}
+
 // ── Helpers ──
 
 fn suggest_agent_for_endpoint(endpoint: &str) -> String {
@@ -549,6 +850,106 @@ mod tests {
         let mut planner = Planner::new(PlannerConfig::default());
         let intents = planner.wake(&graph, &AdaptiveEngine::new());
         assert!(intents.iter().any(|i| i.action == IntentAction::Chain));
+    }
+
+    #[test]
+    fn test_negotiation_resolves_contention() {
+        let mut negotiator = Negotiator::new();
+        negotiator.register(AgentProfile::new("xss_agent", vec!["xss".into(), "reflected".into()]));
+        negotiator.register(AgentProfile::new("sqli_agent", vec!["sqli".into(), "injection".into()]));
+
+        let intents = vec![
+            PlannerIntent {
+                id: "intent-xss-1".into(),
+                action: IntentAction::Exploit,
+                target: "/search".into(),
+                agent_hint: "xss_reflected".into(),
+                priority: 80,
+                rationale: "test".into(),
+                depends_on: vec![],
+                asset_id: None,
+            },
+        ];
+
+        let bids = vec![
+            AgentBid { agent: "xss_agent".into(), intent_id: "intent-xss-1".into(), score: 50, specialization: vec!["xss".into()], current_load: 0 },
+            AgentBid { agent: "sqli_agent".into(), intent_id: "intent-xss-1".into(), score: 50, specialization: vec!["sqli".into()], current_load: 0 },
+        ];
+
+        let result = negotiator.negotiate(bids, &intents);
+        assert_eq!(result.assignments.len(), 1);
+        assert_eq!(result.assignments[0].agent, "xss_agent");
+        assert_eq!(result.conflicts_resolved, 1);
+    }
+
+    #[test]
+    fn test_negotiation_respects_capacity() {
+        let mut negotiator = Negotiator::new();
+        let mut profile = AgentProfile::new("busy_agent", vec!["xss".into()]);
+        profile.active = 3;
+        profile.max_concurrent = 3;
+        negotiator.register(profile);
+        negotiator.register(AgentProfile::new("free_agent", vec!["generic".into()]));
+
+        let intents = vec![
+            PlannerIntent {
+                id: "intent-1".into(),
+                action: IntentAction::Probe,
+                target: "/api".into(),
+                agent_hint: "generic_probe".into(),
+                priority: 60,
+                rationale: "test".into(),
+                depends_on: vec![],
+                asset_id: None,
+            },
+        ];
+
+        let bids = vec![
+            AgentBid { agent: "busy_agent".into(), intent_id: "intent-1".into(), score: 80, specialization: vec!["xss".into()], current_load: 3 },
+            AgentBid { agent: "free_agent".into(), intent_id: "intent-1".into(), score: 40, specialization: vec!["generic".into()], current_load: 0 },
+        ];
+
+        let result = negotiator.negotiate(bids, &intents);
+        assert_eq!(result.assignments.len(), 1);
+        assert_eq!(result.assignments[0].agent, "free_agent");
+    }
+
+    #[test]
+    fn test_negotiate_and_assign_updates_todolist() {
+        let mut planner = Planner::new(PlannerConfig::default());
+        let mut negotiator = Negotiator::new();
+        negotiator.register(AgentProfile::new("agent_a", vec!["sqli".into()]));
+
+        planner.todo.items.push(TodoItem {
+            id: "neg-1".into(),
+            intent: PlannerIntent {
+                id: "neg-1".into(),
+                action: IntentAction::Exploit,
+                target: "/login".into(),
+                agent_hint: "sqli".into(),
+                priority: 90,
+                rationale: "test".into(),
+                depends_on: vec![],
+                asset_id: None,
+            },
+            status: TodoStatus::Queued,
+            created_at: 0,
+            started_at: None,
+            completed_at: None,
+            assigned_agent: None,
+            result: None,
+        });
+
+        let bids = vec![
+            AgentBid { agent: "agent_a".into(), intent_id: "neg-1".into(), score: 60, specialization: vec!["sqli".into()], current_load: 0 },
+        ];
+
+        let result = planner.negotiate_and_assign(bids, &mut negotiator);
+        assert_eq!(result.assignments.len(), 1);
+
+        let item = planner.todo.items.iter().find(|i| i.id == "neg-1").unwrap();
+        assert_eq!(item.status, TodoStatus::Assigned);
+        assert_eq!(item.assigned_agent.as_deref(), Some("agent_a"));
     }
 
     #[test]
