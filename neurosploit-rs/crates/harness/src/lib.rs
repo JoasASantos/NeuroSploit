@@ -1,4 +1,4 @@
-//! NeuroSploit v4.4.0 harness — a robust multi-model runtime for the
+//! NeuroSploit v4.4.1 harness — a robust multi-model runtime for the
 //! markdown-driven autonomous pentest engine.
 //!
 //! The harness loads the `agents_md/` library, drives a *pool* of LLM models
@@ -6,6 +6,7 @@
 //! the specialist agents in parallel, then validates every candidate finding by
 //! **N-model voting** before scoring and reporting.
 
+pub mod adaptive;
 pub mod agents;
 pub mod assurance;
 pub mod authz_matrix;
@@ -22,6 +23,7 @@ pub mod compliance;
 pub mod creds;
 pub mod cvss;
 pub mod deliverables;
+pub mod exploration_graph;
 pub mod graph_memory;
 pub mod grounding;
 pub mod hygiene;
@@ -39,11 +41,14 @@ pub mod pomdp;
 pub mod proxy;
 pub mod prosecutor;
 pub mod redact;
+pub mod request_analyzer;
 pub mod provenance;
 pub mod models;
 pub mod netguard;
+pub mod noise_governor;
 pub mod oob;
 pub mod pipeline;
+pub mod planner;
 pub mod pool;
 pub mod probe;
 pub mod replay;
@@ -89,6 +94,11 @@ pub use scope::{Action as ScopeAction, Decision as ScopeDecision, ScopePolicy};
 pub use types::{Finding, RunConfig};
 pub use uncertainty::{assess as assess_uncertainty, Assessment, Gap, Rounds};
 pub use validation::{judge as judge_finding, CweValidator, Evidence, Verdict};
+pub use adaptive::{AdaptiveEngine, AdaptivePayload, Encoding, Outcome, PayloadRecord};
+pub use request_analyzer::{analyze as analyze_response, diff as diff_responses, ResponseAnalysis, ResponseDiff};
+pub use exploration_graph::{AssetGraph, AssetKind, DualGraph, ExplorationGraph, ExplorationKind};
+pub use planner::{Planner, PlannerConfig, PlannerIntent, IntentAction, TodoList};
+pub use noise_governor::{NoiseGovernor, GovernorConfig, RequestDecision, GovernorStats};
 
 
 /// Download bytes over HTTPS with a bounded timeout. Used by the app to fetch

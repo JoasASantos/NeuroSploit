@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>NeuroSploit v4.4.0 — Console</title>
+<title>NeuroSploit v4.4.1 — Console</title>
 <link rel="icon" type="image/svg+xml" href="logo.svg">
 <link rel="stylesheet" href="/vendor/xterm.css" />
 <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
 
-<button class="sidebar-toggle" id="btnSidebarToggle" title="Show / hide run history" aria-label="Show or hide run history" aria-expanded="false" aria-controls="sidebar">☰</button>
+<button class="sidebar-toggle" id="btnSidebarToggle" title="Show / hide run history" aria-label="Show or hide run history" aria-expanded="false" aria-controls="sidebar"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
 <div class="sidebar-scrim" id="sidebarScrim" hidden></div>
 
 <div class="app">
@@ -32,45 +32,66 @@
         </svg>
         NeuroSploit
       </div>
-      <button class="icon-btn" id="btnThemeToggle" title="Toggle light / dark theme">☾</button>
+      <button class="icon-btn" id="btnThemeToggle" title="Toggle light / dark theme" aria-label="Toggle light / dark theme"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg></button>
     </div>
 
-    <button class="sb-new" id="btnNewEngagement">+ New Pentest</button>
+    <button class="sb-new" id="btnNewEngagement"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg> New pentest</button>
 
     <nav class="sb-nav" id="sbNav">
-      <button class="sb-nav-item active" data-view="dash"><span class="sb-nav-icon">▤</span> Dashboard</button>
-      <button class="sb-nav-item" data-view="pentests"><span class="sb-nav-icon">⊞</span> Pentests</button>
-      <button class="sb-nav-item" data-view="prreviews"><span class="sb-nav-icon">⎇</span> PR Reviews</button>
-      <button class="sb-nav-item" data-view="issues"><span class="sb-nav-icon">⚑</span> Issues</button>
+      <button class="sb-nav-item" data-view="home"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-5h4v5h4a1 1 0 0 0 1-1v-9"/></svg></span> Home</button>
+      <button class="sb-nav-item" data-view="dash"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 20V11M10 20V4M16 20v-6M21 20H3"/></svg></span> Dashboard</button>
+      <button class="sb-nav-item" data-view="pentests"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="7.5"/><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4"/></svg></span> Pentests</button>
+      <button class="sb-nav-item" data-view="prreviews"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="6" cy="5.5" r="2"/><circle cx="6" cy="18.5" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7.5v9M18 10c0 4-6 3-11 7"/></svg></span> PR Reviews</button>
+      <button class="sb-nav-item" data-view="issues"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 21V4M5 4.5h12l-2.2 3.5L17 11.5H5"/></svg></span> Issues</button>
       <div class="sb-nav-separator"></div>
-      <button class="sb-nav-item" data-view="repos"><span class="sb-nav-icon">◎</span> Repositories</button>
-      <button class="sb-nav-item" data-view="domains"><span class="sb-nav-icon">◇</span> Domains</button>
-      <button class="sb-nav-item" data-view="networks"><span class="sb-nav-icon">⬡</span> Networks</button>
+      <button class="sb-nav-item" data-view="repos"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3.5 7a2 2 0 0 1 2-2H10l2 2h6.5a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg></span> Repositories</button>
+      <button class="sb-nav-item" data-view="domains"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c3 2.6 3 14.4 0 17M12 3.5c-3 2.6-3 14.4 0 17"/></svg></span> Domains</button>
+      <button class="sb-nav-item" data-view="networks"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="5.5" r="2"/><circle cx="5.5" cy="18.5" r="2"/><circle cx="18.5" cy="18.5" r="2"/><path d="M12 7.5v4M12 11.5l-5.2 5.4M12 11.5l5.2 5.4"/></svg></span> Networks</button>
       <div class="sb-nav-separator"></div>
-      <button class="sb-nav-item" data-view="vault"><span class="sb-nav-icon">🔑</span> Vault</button>
-      <button class="sb-nav-item" data-view="guardrails"><span class="sb-nav-icon">⛨</span> Guardrails</button>
+      <button class="sb-nav-item" data-view="vault"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="8" cy="15" r="3.8"/><path d="m10.7 12.3 8.8-8.8M16 7l3 3M13.5 9.5l2 2"/></svg></span> Vault</button>
+      <button class="sb-nav-item" data-view="guardrails"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3.2 19.5 6v5.6c0 4.4-3.1 7.5-7.5 9.2-4.4-1.7-7.5-4.8-7.5-9.2V6z"/><path d="m9 12 2.2 2.2L15.2 10"/></svg></span> Guardrails</button>
       <div class="sb-nav-separator"></div>
-      <button class="sb-nav-item" id="sbTerminal"><span class="sb-nav-icon">❭_</span> Terminal</button>
-      <button class="sb-nav-item" data-view="integrations"><span class="sb-nav-icon">⚙</span> Integrations</button>
-      <button class="sb-nav-item" data-view="settings"><span class="sb-nav-icon">☰</span> Settings</button>
+      <button class="sb-nav-item" id="sbTerminal"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 7 5 5-5 5M12.5 18H19"/></svg></span> Terminal</button>
+      <button class="sb-nav-item" data-view="integrations"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 3v5M15 3v5M6.5 8h11v3.5a5.5 5.5 0 0 1-11 0zM12 17v4"/></svg></span> Integrations</button>
+      <button class="sb-nav-item" data-view="settings"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17" r="2"/></svg></span> Settings</button>
     </nav>
 
     <div class="sb-run-history" id="sbRunHistory">
       <div class="sb-search">
-        <span class="search-icon" aria-hidden="true">⌕</span>
-        <input id="runFilter" type="text" autocomplete="off" placeholder="Filter runs" aria-label="Filter runs" />
+        <span class="search-icon" aria-hidden="true"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg></span>
+        <input id="runFilter" type="text" autocomplete="off" placeholder="Filter engagements" aria-label="Filter runs" />
+        <span class="search-shortcut">⌘K</span>
       </div>
 
       <div class="sb-groups" id="sbGroups"><!-- populated by app.js --></div>
     </div>
 
     <div class="sb-bottom">
-      <span class="sb-version" id="sbVersion">v4.4.0</span>
+      <span class="sb-version" id="sbVersion">v4.4.1</span>
     </div>
   </aside>
 
   <!-- ============ MAIN ============ -->
   <main class="main">
+
+    <!-- ============ HOME ============ -->
+    <section class="page-view" id="homeView" hidden>
+      <div class="home-landing">
+        <div class="home-hero">
+          <h1 class="home-title">What do you want to test?</h1>
+          <p class="home-sub">Start a new engagement or pick a suggestion below</p>
+        </div>
+        <div class="home-suggestions">
+          <button class="home-card" data-mode="run"><span class="home-card-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="7.5"/><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4"/></svg></span><span class="home-card-title">Black-box pentest</span><span class="home-card-desc">Test a live web application from the outside</span></button>
+          <button class="home-card" data-mode="whitebox"><span class="home-card-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m8 8-4 4 4 4M16 8l4 4-4 4M13.5 5.5l-3 13"/></svg></span><span class="home-card-title">Code review</span><span class="home-card-desc">Deep SAST analysis of source code</span></button>
+          <button class="home-card" data-mode="greybox"><span class="home-card-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m12 3.5 8.5 4.7-8.5 4.8-8.5-4.8z"/><path d="m3.5 12.5 8.5 4.8 8.5-4.8"/></svg></span><span class="home-card-title">Grey-box test</span><span class="home-card-desc">URL + source code together</span></button>
+          <button class="home-card" data-mode="host"><span class="home-card-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3.5" y="4" width="17" height="6" rx="1.5"/><rect x="3.5" y="14" width="17" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg></span><span class="home-card-title">Infrastructure</span><span class="home-card-desc">Host, network, and AD testing</span></button>
+          <button class="home-card" data-mode="aitest"><span class="home-card-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M9.5 3v4M14.5 3v4M9.5 17v4M14.5 17v4M3 9.5h4M3 14.5h4M17 9.5h4M17 14.5h4"/></svg></span><span class="home-card-title">AI / LLM audit</span><span class="home-card-desc">Test AI agents and MCP endpoints</span></button>
+          <button class="home-card" data-mode="cloud"><span class="home-card-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 18.5a4 4 0 0 1-.6-7.95A6 6 0 0 1 18 9.8a4.4 4.4 0 0 1-.5 8.7z"/></svg></span><span class="home-card-title">Cloud audit</span><span class="home-card-desc">AWS, GCP, or Azure configuration review</span></button>
+        </div>
+        <div class="home-recent" id="homeRecent"></div>
+      </div>
+    </section>
 
     <!-- ============ DASHBOARD ============ -->
     <section class="dashboard" id="dashView" hidden>
@@ -101,8 +122,8 @@
           <div class="topbar-sub">All engagements — black-box, white-box, greybox, host, AI, mobile, container</div>
         </div>
         <div class="topbar-spacer"></div>
-        <input type="text" id="pentestSearch" class="topbar-search" placeholder="Search pentests…" />
-        <button class="btn btn-accent" id="btnNewPentest2">+ New Pentest</button>
+        <input type="text" id="pentestSearch" class="topbar-search" placeholder="Search pentests" />
+        <button class="btn btn-accent" id="btnNewPentest2"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg> New pentest</button>
       </header>
       <div class="page-body" id="pentestsBody"><div class="empty-state">Loading…</div></div>
     </section>
@@ -128,21 +149,31 @@
           <div class="topbar-sub">All findings across every engagement</div>
         </div>
         <div class="topbar-spacer"></div>
-        <select id="issuesSevFilter" class="dash-range">
-          <option value="">All severities</option>
-          <option value="critical">Critical</option>
-          <option value="high">High</option>
-          <option value="medium">Medium</option>
-          <option value="low">Low</option>
-        </select>
-        <select id="issuesStatusFilter" class="dash-range">
-          <option value="">All statuses</option>
-          <option value="open">Open</option>
-          <option value="fixed">Fixed</option>
-        </select>
-        <input type="text" id="issuesSearch" class="topbar-search" placeholder="Search issues…" />
       </header>
-      <div class="page-body" id="issuesBody"><div class="empty-state">Loading…</div></div>
+      <div class="page-body" id="issuesBody">
+        <div class="issues-sev-counters" id="issuesSevCounters"></div>
+        <nav class="issues-status-tabs" id="issuesStatusTabs">
+          <button class="issues-status-tab active" data-status="">All <span class="issues-tab-count" id="issuesCountAll">0</span></button>
+          <button class="issues-status-tab" data-status="open">Open <span class="issues-tab-count" id="issuesCountOpen">0</span></button>
+          <button class="issues-status-tab" data-status="in-progress">In progress <span class="issues-tab-count" id="issuesCountProgress">0</span></button>
+          <button class="issues-status-tab" data-status="fixed">Fixed <span class="issues-tab-count" id="issuesCountFixed">0</span></button>
+          <button class="issues-status-tab" data-status="ignored">Ignored <span class="issues-tab-count" id="issuesCountIgnored">0</span></button>
+        </nav>
+        <div class="issues-filter-bar">
+          <div class="search-wrap">
+            <span class="search-icon" aria-hidden="true"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg></span>
+            <input id="issuesSearch" type="text" placeholder="Search issues" />
+          </div>
+          <select id="issuesSevFilter" class="dash-range">
+            <option value="">Severity</option>
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+        </div>
+        <div id="issuesTableBody"><div class="empty-state">Loading…</div></div>
+      </div>
     </section>
 
     <!-- ============ REPOSITORIES ============ -->
@@ -200,7 +231,7 @@
             <div class="config-card-desc">Credentials used so agents test as a logged-in user. Kept only for this session.</div>
             <div class="form-group">
               <label for="vaultAuthHeader">Auth header</label>
-              <input id="vaultAuthHeader" type="text" placeholder="Authorization: Bearer <token>  or  Cookie: session=..." />
+              <input id="vaultAuthHeader" type="text" placeholder="Authorization: Bearer &lt;token&gt; or Cookie: session=…" />
               <div class="field-help">Sent to the CLI as an ephemeral creds file.</div>
             </div>
             <div class="form-group">
@@ -220,7 +251,7 @@
             <div class="form-group">
               <label for="vaultCollectionFile">API collection (Postman / OpenAPI / Swagger / HAR)</label>
               <input id="vaultCollectionFile" type="file" accept=".json,application/json,.har" multiple />
-              <input id="vaultCollectionPath" type="text" placeholder="…or a path on disk: file.json or a directory of .json files" />
+              <input id="vaultCollectionPath" type="text" placeholder="Path to a collection file or a folder of .json files" />
               <div class="field-help">Imports endpoints as known surface — file or directory of .json files.</div>
             </div>
           </div>
@@ -262,7 +293,7 @@
             <div class="config-card-desc">The hard scope is the boundary: a request whose host is not listed is refused before it is sent. Exclusions always win. A capability token still caps all of this.</div>
             <div class="form-group">
               <label for="grScopeHard">Hard scope — the allowlist</label>
-              <textarea id="grScopeHard" rows="3" placeholder="one per line, or comma-separated&#10;app.example.com&#10;*.staging.example.com"></textarea>
+              <textarea id="grScopeHard" rows="3" placeholder="One per line or comma-separated&#10;app.example.com&#10;*.staging.example.com"></textarea>
               <div class="field-help">Exact host · <code>*.wildcard</code> · <code>CIDR</code> · <code>https://host/path</code> prefix. Empty = nothing extra enforced.</div>
             </div>
             <div class="field-row">
@@ -401,12 +432,12 @@
     <section class="wizard" id="wizardView">
       <header class="topbar">
         <div>
-          <div class="topbar-title">New Pentest</div>
+          <div class="topbar-title">New pentest</div>
           <div class="topbar-sub">Asset → Scope &amp; Auth → Leads → Model &amp; Run → Review</div>
         </div>
         <div class="topbar-spacer"></div>
-        <button class="btn" id="btnOpenTerm2">❭_ Terminal</button>
-        <button class="btn" id="btnOpenAuth2">🔑 Auth &amp; Keys</button>
+        <button class="btn" id="btnOpenTerm2"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 7 5 5-5 5M12.5 18H19"/></svg> Terminal</button>
+        <button class="btn" id="btnOpenAuth2"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="8" cy="15" r="3.8"/><path d="m10.7 12.3 8.8-8.8M16 7l3 3M13.5 9.5l2 2"/></svg> Auth &amp; keys</button>
       </header>
 
       <nav class="stepper" id="stepper">
@@ -423,7 +454,7 @@
         <div class="wizard-panel" data-panel="0">
           <div class="field-group">
             <label class="field-label" for="fieldName">Engagement name</label>
-            <input id="fieldName" type="text" placeholder="e.g. Keystone – Digital Banking" aria-describedby="errName" />
+            <input id="fieldName" type="text" placeholder="Keystone digital banking" aria-describedby="errName" />
             <div class="field-error" id="errName" hidden></div>
             <div class="field-help">Identifies this engagement in the sidebar and run history — required.</div>
           </div>
@@ -448,7 +479,7 @@
           </div>
           <div class="field-group" id="fieldRepoGroup" hidden>
             <label class="field-label" for="fieldRepo">Source repo</label>
-            <input id="fieldRepo" type="text" placeholder="owner/repo, a GitHub URL, or a local path" aria-describedby="errRepo" />
+            <input id="fieldRepo" type="text" placeholder="owner/repo, GitHub URL, or local path" aria-describedby="errRepo" />
             <div class="field-error" id="errRepo" hidden></div>
             <div class="field-help">Cloned automatically if it's a GitHub URL or owner/repo shorthand.</div>
           </div>
@@ -469,20 +500,20 @@
           </div>
           <div class="field-group">
             <label class="field-label" for="fieldObjective">Objective</label>
-            <textarea id="fieldObjective" placeholder="e.g. Pre-launch review of the checkout flow — prove any path to unauthorized order access."></textarea>
+            <textarea id="fieldObjective" placeholder="Pre-launch review of the checkout flow. Prove any path to unauthorized order access."></textarea>
           </div>
           <div class="field-group">
             <label class="field-label" for="fieldFocus">Focus</label>
-            <textarea id="fieldFocus" placeholder="e.g. Prioritize the paths most likely to cause data leakage."></textarea>
+            <textarea id="fieldFocus" placeholder="Prioritize the paths most likely to leak customer data."></textarea>
           </div>
           <div class="field-group">
             <label class="field-label" for="fieldClasses">Focus vuln classes <span class="req">— optional</span></label>
-            <input id="fieldClasses" type="text" placeholder="idor, sqli, xss, ssrf — pins the matching agents, skips recon-driven selection" />
+            <input id="fieldClasses" type="text" placeholder="idor, sqli, xss, ssrf (pins matching agents and skips recon-driven selection)" />
             <div class="field-help">Same as the CLI <code>--class</code> / REPL <code>/class</code>. Leave empty for recon-driven selection.</div>
           </div>
           <div class="field-group">
             <label class="field-label" for="fieldOutOfScope">Out of scope</label>
-            <textarea id="fieldOutOfScope" placeholder="Hosts, paths, or techniques the agents must not touch."></textarea>
+            <textarea id="fieldOutOfScope" placeholder="Hosts, paths, or techniques the agents must not touch"></textarea>
           </div>
           <div>
             <div class="section-title">Authentication</div>
@@ -499,7 +530,7 @@
           <div class="lead-toolbar">
             <select class="input-sm" id="catFilter" title="Show one category"><option value="">All categories</option></select>
             <div class="search-wrap">
-              <span class="search-icon" aria-hidden="true">⌕</span>
+              <span class="search-icon" aria-hidden="true"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg></span>
               <input id="leadSearch" type="text" placeholder="Search leads by name or CWE" />
             </div>
             <div class="chips">
@@ -672,7 +703,7 @@
           <div class="run-meta" id="livePinned"></div>
         </div>
         <div class="run-actions">
-          <button class="btn" id="btnOpenTerm3">❭_ Terminal</button>
+          <button class="btn" id="btnOpenTerm3"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 7 5 5-5 5M12.5 18H19"/></svg> Terminal</button>
           <a class="btn" id="btnOpenReport" target="_blank" hidden>Open report</a>
           <button class="btn" id="btnPauseRun" title="Hold the run where it is — in-flight agents finish, nothing is lost">⏸ Pause</button>
           <a class="btn" id="btnDownloadLog" download>Download log</a>
@@ -685,6 +716,7 @@
         <div class="progress-bar" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
         <div class="progress-label" id="progressLabel">0 / 0 agents</div>
       </div>
+      <div class="run-sev-bar" id="liveSevBar" hidden></div>
       <div class="agent-panel" id="agentPanel" hidden>
         <div class="agent-panel-head">
           <span>What's being tested</span>
@@ -694,7 +726,10 @@
       </div>
       <nav class="run-tabs">
         <button class="run-tab active" data-tab="findings">Findings <span id="liveFindingsCount">0</span></button>
-        <button class="run-tab" data-tab="log">Activity log</button>
+        <button class="run-tab" data-tab="agents"><span class="tab-dot" id="agentsTabDot"></span>Agents <span id="liveAgentsCount" class="tab-badge">0</span></button>
+        <button class="run-tab" data-tab="coverage"><span class="tab-dot" id="coverageTabDot"></span>Coverage</button>
+        <button class="run-tab" data-tab="adaptive"><span class="tab-dot" id="adaptiveTabDot"></span>Adaptive</button>
+        <button class="run-tab" data-tab="log"><span class="tab-dot" id="activityTabDot"></span>Activity</button>
       </nav>
       <div class="run-body">
         <div class="run-tab-panel" data-tabpanel="findings">
@@ -702,7 +737,7 @@
             <div class="sev-summary" id="liveSevSummary"></div>
             <div class="topbar-spacer"></div>
             <div class="search-wrap">
-              <span class="search-icon" aria-hidden="true">⌕</span>
+              <span class="search-icon" aria-hidden="true"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg></span>
               <input id="liveFindingSearch" type="text" placeholder="Filter findings" />
             </div>
           </div>
@@ -714,11 +749,82 @@
           </div>
           <div class="empty-state" id="liveFindingsEmpty">No validated findings yet.</div>
         </div>
+        <div class="run-tab-panel" data-tabpanel="agents" hidden>
+          <div class="agents-tab-head">
+            <div class="agents-tab-stats" id="agentsTabStats"></div>
+            <div class="topbar-spacer"></div>
+            <div class="agent-legend"><i class="ap running"></i>testing <i class="ap done"></i>done <i class="ap found"></i>found <i class="ap failed"></i>error</div>
+          </div>
+          <div class="agents-tab-grid" id="agentsTabGrid"></div>
+          <div class="empty-state" id="agentsTabEmpty">No agents dispatched yet.</div>
+        </div>
+        <div class="run-tab-panel" data-tabpanel="coverage" hidden>
+          <div class="coverage-head">
+            <div class="coverage-stats" id="coverageStats"></div>
+            <div class="topbar-spacer"></div>
+            <div class="search-wrap">
+              <span class="search-icon" aria-hidden="true"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg></span>
+              <input id="coverageSearch" type="text" placeholder="Filter endpoints" />
+            </div>
+          </div>
+          <div class="cv-pills" id="coveragePills"></div>
+          <div class="coverage-list" id="coverageList"></div>
+          <div class="empty-state" id="coverageEmpty">Coverage will appear here as agents record each surface they test.</div>
+        </div>
+        <div class="run-tab-panel" data-tabpanel="adaptive" hidden>
+          <div class="adaptive-dashboard">
+            <div class="adaptive-section">
+              <h3 class="adaptive-title">Target Stack</h3>
+              <div class="adaptive-stack" id="adaptiveStack">No stack data yet.</div>
+            </div>
+            <div class="adaptive-section">
+              <h3 class="adaptive-title">WAF Intelligence</h3>
+              <div class="adaptive-waf" id="adaptiveWaf">No WAF detected yet.</div>
+            </div>
+            <div class="adaptive-section">
+              <h3 class="adaptive-title">Payload Evolution</h3>
+              <div class="adaptive-stats-grid" id="adaptivePayloadStats">
+                <div class="astat"><span class="astat-n" id="adaptPayloads">0</span><span class="astat-l">Payloads</span></div>
+                <div class="astat"><span class="astat-n" id="adaptTriggered">0</span><span class="astat-l">Triggered</span></div>
+                <div class="astat"><span class="astat-n" id="adaptBlocked">0</span><span class="astat-l">Blocked</span></div>
+              </div>
+            </div>
+            <div class="adaptive-section">
+              <h3 class="adaptive-title">Exploration Graph</h3>
+              <div class="adaptive-stats-grid" id="adaptiveGraphStats">
+                <div class="astat"><span class="astat-n" id="graphAssets">0</span><span class="astat-l">Assets</span></div>
+                <div class="astat"><span class="astat-n" id="graphExplored">0</span><span class="astat-l">Explored</span></div>
+                <div class="astat"><span class="astat-n" id="graphFindings">0</span><span class="astat-l">Findings</span></div>
+                <div class="astat"><span class="astat-n" id="graphCoverage">0%</span><span class="astat-l">Coverage</span></div>
+                <div class="astat"><span class="astat-n" id="graphHints">0</span><span class="astat-l">Hints</span></div>
+              </div>
+            </div>
+            <div class="adaptive-section">
+              <h3 class="adaptive-title">Planner</h3>
+              <div class="adaptive-stats-grid" id="adaptivePlannerStats">
+                <div class="astat"><span class="astat-n" id="planQueued">0</span><span class="astat-l">Queued</span></div>
+                <div class="astat"><span class="astat-n" id="planRunning">0</span><span class="astat-l">Running</span></div>
+                <div class="astat"><span class="astat-n" id="planDone">0</span><span class="astat-l">Done</span></div>
+                <div class="astat"><span class="astat-n" id="planFailed">0</span><span class="astat-l">Failed</span></div>
+              </div>
+            </div>
+            <div class="adaptive-section">
+              <h3 class="adaptive-title">Noise Governor</h3>
+              <div class="adaptive-stats-grid" id="adaptiveNoiseStats">
+                <div class="astat"><span class="astat-n" id="noiseRequests">0</span><span class="astat-l">Requests</span></div>
+                <div class="astat"><span class="astat-n" id="noiseCached">0</span><span class="astat-l">Cached</span></div>
+                <div class="astat"><span class="astat-n" id="noiseThrottled">0</span><span class="astat-l">Throttled</span></div>
+                <div class="astat"><span class="astat-n" id="noiseBlocked">0</span><span class="astat-l">Blocked</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="empty-state" id="adaptiveEmpty">Adaptive intelligence will appear as the engagement runs.</div>
+        </div>
         <div class="run-tab-panel log-tab-panel" data-tabpanel="log" hidden>
           <div class="log-panel" id="logList"></div>
           <div class="send-prompt-row" id="sendPromptRow" hidden>
             <span class="repl-prompt">❭</span>
-            <input id="sendPromptInput" type="text" autocomplete="off" spellcheck="false" placeholder="/status · /stop · /continue · or describe it in plain language" />
+            <input id="sendPromptInput" type="text" autocomplete="off" spellcheck="false" placeholder="Type /status, /stop, /continue, or describe what to do" />
             <button class="btn btn-sm" id="btnSendPromptTerm" title="Open this session in the full terminal">Open in terminal</button>
           </div>
           <div class="field-help" id="sendPromptHelp" hidden>This session stays interactive while the engagement runs — type a command or plain instruction and press Enter.</div>
@@ -749,18 +855,24 @@
       </header>
       <nav class="run-tabs">
         <button class="run-tab active" data-tab="findings">Findings <span id="detailFindingsCount">0</span></button>
+        <button class="run-tab" data-tab="agents">Agents <span id="detailAgentsCount" class="tab-badge">0</span></button>
+        <button class="run-tab" data-tab="coverage">Coverage</button>
       </nav>
+      <div class="run-sev-bar" id="detailSevBar" hidden></div>
       <div class="run-body">
         <div class="run-tab-panel" data-tabpanel="findings">
           <div class="findings-toolbar">
             <div class="sev-summary" id="detailSevSummary"></div>
             <div class="topbar-spacer"></div>
             <div class="search-wrap">
-              <span class="search-icon" aria-hidden="true">⌕</span>
+              <span class="search-icon" aria-hidden="true"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg></span>
               <input id="detailFindingSearch" type="text" placeholder="Filter findings" />
             </div>
             <button class="btn btn-sm" id="btnExportCsv" title="Export the filtered findings as CSV">⤓ CSV</button>
           </div>
+          <div class="run-report-nav" id="detailReportNav" hidden>
+              <div class="run-report-nav-title">Report sections</div>
+            </div>
           <div class="kpi-row" id="detailKpis"></div>
           <div id="detailRegression" hidden></div>
           <div class="table-wrap">
@@ -770,6 +882,27 @@
             </table>
           </div>
           <div class="empty-state" id="detailFindingsEmpty">No validated findings.</div>
+        </div>
+        <div class="run-tab-panel" data-tabpanel="agents" hidden>
+          <div class="agents-tab-head">
+            <div class="agents-tab-stats" id="detailAgentsStats"></div>
+            <div class="topbar-spacer"></div>
+          </div>
+          <div class="agents-tab-grid" id="detailAgentsGrid"></div>
+          <div class="empty-state" id="detailAgentsEmpty">No agent data recorded for this run.</div>
+        </div>
+        <div class="run-tab-panel" data-tabpanel="coverage" hidden>
+          <div class="coverage-head">
+            <div class="coverage-stats" id="detailCoverageStats"></div>
+            <div class="topbar-spacer"></div>
+            <div class="search-wrap">
+              <span class="search-icon" aria-hidden="true"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg></span>
+              <input id="detailCoverageSearch" type="text" placeholder="Filter endpoints" />
+            </div>
+          </div>
+          <div class="cv-pills" id="detailCoveragePills"></div>
+          <div class="coverage-list" id="detailCoverageList"></div>
+          <div class="empty-state" id="detailCoverageEmpty">No endpoint coverage data for this run.</div>
         </div>
       </div>
     </section>
@@ -788,7 +921,7 @@
         <button class="term-btn" id="btnTermClear" title="Clear screen (Ctrl+L)">clear</button>
         <button class="term-btn" id="btnTermRestart" title="Start a fresh harness session">restart</button>
         <button class="term-btn" id="btnTermExpand" title="Expand / collapse the dock">expand</button>
-        <button class="icon-btn" id="btnTermClose" title="Close (Esc)">✕</button>
+        <button class="icon-btn" id="btnTermClose" title="Close (Esc)" aria-label="Close"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
       </div>
       <div class="term-alert" id="termAlert" hidden></div>
       <div class="term-host" id="termHost"></div>
@@ -805,7 +938,7 @@
   <div class="modal">
     <div class="modal-head">
       <div class="title">Auth &amp; Keys</div>
-      <button class="icon-btn" id="btnCloseAuth">✕</button>
+      <button class="icon-btn" id="btnCloseAuth" aria-label="Close"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>
     <div class="modal-tabs">
       <button class="modal-tab active" data-mtab="target">Target auth</button>
@@ -817,7 +950,7 @@
       <div class="modal-panel" data-mpanel="target">
         <div class="field-group">
           <label class="field-label" for="authHeader">Auth header</label>
-          <input id="authHeader" type="text" placeholder="Authorization: Bearer &lt;token&gt;  or  Cookie: session=..." />
+          <input id="authHeader" type="text" placeholder="Authorization: Bearer &lt;token&gt; or Cookie: session=…" />
           <div class="field-help">Used so agents test as a logged-in user. Kept only for this session, sent to the CLI as an ephemeral creds file.</div>
         </div>
         <div class="field-group">
@@ -859,7 +992,7 @@
         </div>
         <div class="field-group">
           <label class="field-label" for="scopeHard">Hard scope <span class="req">— the allowlist</span></label>
-          <textarea id="scopeHard" rows="3" placeholder="one per line, or comma-separated&#10;app.example.com&#10;*.staging.example.com&#10;https://example.com/api/v2&#10;10.20.30.0/24"></textarea>
+          <textarea id="scopeHard" rows="3" placeholder="One per line or comma-separated&#10;app.example.com&#10;*.staging.example.com&#10;https://example.com/api/v2&#10;10.20.30.0/24"></textarea>
           <div class="field-help">Exact host · <code>*.wildcard</code> (apex + subdomains) · <code>CIDR</code> · <code>https://host/path</code> prefix. Empty = nothing extra is enforced here.</div>
         </div>
         <div class="field-row">
@@ -968,7 +1101,7 @@
         <div class="field-group">
           <label class="field-label" for="collectionFile">API collection (Postman / OpenAPI / Swagger / HAR)</label>
           <input id="collectionFile" type="file" accept=".json,application/json,.har" multiple />
-          <input id="collectionPath" type="text" placeholder="…or a path on disk: file.json or a directory of .json files" />
+          <input id="collectionPath" type="text" placeholder="Path to a collection file or a folder of .json files" />
           <div class="field-help" id="collectionHelp">Imports endpoints as known surface — file or directory of .json files. Every route is tested directly, alongside recon.</div>
         </div>
       </div>
@@ -981,7 +1114,7 @@
   <div class="modal modal-sm">
     <div class="modal-head">
       <div class="title">Custom lead</div>
-      <button class="icon-btn" id="btnCloseLead">✕</button>
+      <button class="icon-btn" id="btnCloseLead" aria-label="Close"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>
     <div class="modal-body">
       <div class="field-help" style="margin-bottom:14px;">A <b>lead</b> is a specialist agent the harness runs. Add one two ways — let Claude write it from a description, or paste your own agent / system prompt to run verbatim. Either way it is saved as a real, pinnable agent in <code>agents_md/vulns/</code> and you can remove it later.</div>
@@ -991,12 +1124,12 @@
       </div>
       <div class="field-group" data-leadpanel="describe">
         <label class="field-label" for="leadDesc">What should this lead test?</label>
-        <textarea id="leadDesc" placeholder="e.g. Abuse the invoice PDF export to read internal files via the template engine."></textarea>
+        <textarea id="leadDesc" placeholder="Abuse the invoice PDF export to read internal files through the template engine."></textarea>
         <div class="field-help">Claude (Opus, subscription) writes a real specialist agent for it and pins it. If generation is unavailable, the text is folded into <code>--focus</code> instead.</div>
       </div>
       <div class="field-group" data-leadpanel="own" hidden>
         <label class="field-label" for="leadName">Name</label>
-        <input id="leadName" type="text" placeholder="e.g. GraphQL Introspection Abuse" />
+        <input id="leadName" type="text" placeholder="GraphQL introspection abuse" />
         <label class="field-label" for="leadOwn" style="margin-top:10px;">Your agent / system prompt</label>
         <textarea id="leadOwn" rows="10" placeholder="Paste a full agent markdown (# Title / ## User Prompt / ## System Prompt), or just your system prompt — it will be wrapped into an agent. Use {target} and {recon_json} placeholders."></textarea>
         <div class="field-help">Used verbatim — no model rewrites it. {target} and {recon_json} are filled per run.</div>
@@ -1018,10 +1151,11 @@
         <span class="sev" id="fmSev">—</span>
         <span class="title" id="fmTitle" style="margin-left:8px;">—</span>
       </div>
-      <button class="icon-btn" id="btnCloseFinding">✕</button>
+      <button class="icon-btn" id="btnCloseFinding" aria-label="Close"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>
     <div class="modal-body">
-      <div class="review-grid" id="fmMeta" style="margin-bottom: var(--sp-5);"></div>
+      <div class="fm-meta-grid" id="fmMeta"></div>
+        <div class="fm-actions" id="fmActions"></div>
 
       <div id="fmSection-evidence"></div>
       <div id="fmSection-impact"></div>
@@ -1031,7 +1165,7 @@
       <div class="field-group" id="fmSection-wire">
         <div class="fm-wire-head">
           <label class="field-label">Wire evidence — the bytes behind this finding</label>
-          <button class="btn btn-sm" id="btnFindingRetest">⟳ Re-test this finding</button>
+          <button class="btn btn-sm" id="btnFindingRetest"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg> Re-test this finding</button>
         </div>
         <div id="fmWireSummary"></div>
         <div id="fmRetestHistory"></div>
@@ -1051,7 +1185,7 @@
   <div class="modal modal-sm">
     <div class="modal-head">
       <div class="title">Add Repository</div>
-      <button class="icon-btn" onclick="$('#repoModal').hidden=true">✕</button>
+      <button class="icon-btn" onclick="$('#repoModal').hidden=true" aria-label="Close"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>
     <div class="modal-body">
       <div class="field-group">
@@ -1061,7 +1195,7 @@
       </div>
       <div class="field-group">
         <label class="field-label" for="repoName">Display name (optional)</label>
-        <input id="repoName" type="text" placeholder="My API" />
+        <input id="repoName" type="text" placeholder="Payments API" />
       </div>
       <div class="field-group">
         <label class="field-label" for="repoBranch">Default branch</label>
@@ -1084,7 +1218,7 @@
   <div class="modal modal-sm">
     <div class="modal-head">
       <div class="title">Add Domain</div>
-      <button class="icon-btn" onclick="$('#domainModal').hidden=true">✕</button>
+      <button class="icon-btn" onclick="$('#domainModal').hidden=true" aria-label="Close"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>
     <div class="modal-body">
       <div class="field-group">
@@ -1126,7 +1260,7 @@
   <div class="modal modal-sm">
     <div class="modal-head">
       <div class="title">Add Network</div>
-      <button class="icon-btn" onclick="$('#networkModal').hidden=true">✕</button>
+      <button class="icon-btn" onclick="$('#networkModal').hidden=true" aria-label="Close"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>
     <div class="modal-body">
       <div class="field-group">
@@ -1144,7 +1278,7 @@
       </div>
       <div class="field-group">
         <label class="field-label" for="networkTransport">Transport</label>
-        <input id="networkTransport" type="text" placeholder="direct / socks5://host:port / ssh://user@bastion" spellcheck="false" />
+        <input id="networkTransport" type="text" placeholder="direct, socks5://host:port, or ssh://user@bastion" spellcheck="false" />
         <div class="field-help">How to reach this network. Leave empty for direct access.</div>
       </div>
     </div>
@@ -1160,7 +1294,7 @@
   <div class="modal modal-sm">
     <div class="modal-head">
       <div class="title" id="integModalTitle">Configure Integration</div>
-      <button class="icon-btn" onclick="$('#integrationModal').hidden=true">✕</button>
+      <button class="icon-btn" onclick="$('#integrationModal').hidden=true" aria-label="Close"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>
     <div class="modal-body" id="integModalBody">
     </div>
