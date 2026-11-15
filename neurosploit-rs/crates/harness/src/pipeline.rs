@@ -138,6 +138,9 @@ const RECON_SYS: &str = "You are an elite web recon specialist on an AUTHORIZED 
   · DNS/TAKEOVER: `dnsx -silent -a -cname -resp < subs`; dangling CNAME → takeover: `cat subs | httpx -silent | nuclei -t takeovers/`.\n\
   · CLOUD: grep URLs for `s3.amazonaws.com`, `storage.googleapis.com`, `blob.core.windows.net`; `cloud_enum -l targets`.\n\
   · TARGETED NUCLEI: `nuclei -l live -t exposures/,misconfiguration/,takeovers/ -severity critical,high,medium -silent` (targeted, not noisy mass-scan).\n\
+  · PERMUTATION BRUTEFORCE: `cat subs | dnsgen - | shuffledns -d <apex> -r resolvers.txt -silent` — catches typosquat/dev/staging variants missed by passive.\n\
+  · FAVICON HASH: `curl -s https://<host>/favicon.ico | md5sum` then `shodan search http.favicon.hash:<hash>` — uncovers hidden infrastructure.\n\
+  · HISTORICAL DEEP: `waymore -i <apex> -mode U --no-subs` — deeper historical URL recovery than gau/waybackurls; finds deleted/forgotten endpoints.\n\
   · PIPELINE example: `subfinder -d <apex> -all -silent | httpx -silent | katana -d 3 -jc | gf sqli | nuclei -t exploits/ -severity critical,high`.\n\
   Prioritise auth/reset/payment/upload/admin/export flows and the less-hardened subdomains.\n\
 Base everything on real observed responses — never assume. Reply with a COMPACT JSON object with keys {tech, versions, endpoints, params, apis, auth, js_findings, secrets, hosts, subdomains, wayback_hits, notes}. No prose.";
@@ -225,6 +228,29 @@ fn operator_directives(cfg: &RunConfig) -> String {
     }
     // What the other agents already observed (structured digest + where to grep).
     s.push_str(&crate::traces::prompt_block(cfg.workdir.as_deref(), None));
+    // Adaptive payload intelligence: WAF bypass history, target stack, parameter profiles.
+    if let Some(ref workdir) = cfg.workdir {
+        let adapt_path = std::path::Path::new(workdir).join("adaptive-engine.json");
+        if let Ok(engine) = crate::adaptive::AdaptiveEngine::load(&adapt_path) {
+            let block = engine.prompt_block();
+            if !block.is_empty() { s.push_str(&block); }
+        }
+        // Dual graph: asset coverage + exploration state.
+        let graph_dir = std::path::Path::new(workdir).join("graphs");
+        if let Ok(dg) = crate::exploration_graph::DualGraph::load(&graph_dir) {
+            let block = dg.prompt_block();
+            if !block.is_empty() { s.push_str(&block); }
+        }
+        // Planner state: pending intents and queue.
+        let planner_path = std::path::Path::new(workdir).join("planner-todo.json");
+        if planner_path.exists() {
+            let mut planner = crate::planner::Planner::new(crate::planner::PlannerConfig::default());
+            if planner.load_todo(&planner_path).is_ok() {
+                let block = planner.prompt_block();
+                if !block.is_empty() { s.push_str(&block); }
+            }
+        }
+    }
     if !s.is_empty() {
         s.push('\n');
     }

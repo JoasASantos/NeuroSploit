@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * NeuroSploit v4.4.0 — web console backend.
+ * NeuroSploit v4.4.1 — web console backend.
  *
  * Zero-dependency Node HTTP server that:
  *  - serves the static SPA in ./public
@@ -109,7 +109,7 @@ const BIN = findBinary();
 // string. This keeps the web UI and the CLI binary in lockstep: bump the crate,
 // rebuild, and the title/badge/UA all move together with no web edit. Falls back
 // to the package string only when the binary is missing.
-const FALLBACK_VERSION = '4.4.0';
+const FALLBACK_VERSION = '4.4.1';
 function binaryVersion() {
   if (!BIN) return FALLBACK_VERSION;
   try {
@@ -1154,6 +1154,51 @@ function ingestLine(job, rawLine) {
       job.findings.push(finding);
       job.push({ type: 'finding', finding });
     } catch { /* ignore malformed line */ }
+  }
+
+  // Adaptive engine events
+  const adaptJson = norm.match(/^adaptive_json:\s*(.+)$/);
+  if (adaptJson) {
+    try {
+      const data = JSON.parse(adaptJson[1]);
+      if (!job.adaptive) job.adaptive = { waf: null, stack: null, payloads: 0, blocked: 0, triggered: 0 };
+      if (data.waf) job.adaptive.waf = data.waf;
+      if (data.stack) job.adaptive.stack = data.stack;
+      if (data.payloads !== undefined) job.adaptive.payloads = data.payloads;
+      if (data.blocked !== undefined) job.adaptive.blocked = data.blocked;
+      if (data.triggered !== undefined) job.adaptive.triggered = data.triggered;
+      job.push({ type: 'adaptive', data });
+    } catch { /* ignore malformed */ }
+  }
+  // Exploration graph events
+  const graphJson = norm.match(/^graph_json:\s*(.+)$/);
+  if (graphJson) {
+    try {
+      const data = JSON.parse(graphJson[1]);
+      if (!job.graph) job.graph = { assets: 0, explored: 0, findings: 0, coverage: 0, hints: 0 };
+      Object.assign(job.graph, data);
+      job.push({ type: 'graph', data });
+    } catch { /* ignore */ }
+  }
+  // Planner events
+  const planJson = norm.match(/^planner_json:\s*(.+)$/);
+  if (planJson) {
+    try {
+      const data = JSON.parse(planJson[1]);
+      if (!job.planner) job.planner = { queued: 0, running: 0, done: 0, failed: 0 };
+      Object.assign(job.planner, data);
+      job.push({ type: 'planner', data });
+    } catch { /* ignore */ }
+  }
+  // Noise governor events
+  const noiseJson = norm.match(/^noise_json:\s*(.+)$/);
+  if (noiseJson) {
+    try {
+      const data = JSON.parse(noiseJson[1]);
+      if (!job.noise) job.noise = { requests: 0, cached: 0, throttled: 0, blocked: 0 };
+      Object.assign(job.noise, data);
+      job.push({ type: 'noise', data });
+    } catch { /* ignore */ }
   }
 
   const rep = line.match(/report:\s*(file:\/\/\S+)/);

@@ -176,6 +176,130 @@ pub fn prompt_block(workdir: Option<&str>, exclude: Option<&str>) -> String {
     s
 }
 
+// ── Cross-worker trace search ──
+// Artex-inspired: workers query other workers' raw traces for observations
+// that never became formal facts. The digest is a summary; this is grep on
+// steroids — structured, ranked, and privacy-aware.
+
+/// A single search hit from another worker's trace.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TraceHit {
+    pub agent: String,
+    pub line_number: usize,
+    pub context: String,
+    pub relevance: f64,
+}
+
+/// Query result from cross-worker trace search.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct TraceSearchResult {
+    pub hits: Vec<TraceHit>,
+    pub agents_searched: usize,
+    pub total_matches: usize,
+}
+
+/// Search all agent traces for specific patterns. Returns ranked hits with
+/// surrounding context. Unlike `digest()`, this searches raw lines — so the
+/// caller (the planner or an agent prompt) gets the exact observation another
+/// worker made, not a derived summary.
+///
+/// `queries` — keywords, regexes, or phrases to find.
+/// `exclude` — skip this agent's own trace.
+/// `max_hits` — cap to avoid prompt bloat.
+pub fn search(
+    workdir: Option<&str>,
+    queries: &[&str],
+    exclude: Option<&str>,
+    max_hits: usize,
+) -> TraceSearchResult {
+    let Some(d) = workdir.map(|w| Path::new(w).join("traces")) else {
+        return TraceSearchResult::default();
+    };
+    let Ok(rd) = std::fs::read_dir(&d) else {
+        return TraceSearchResult::default();
+    };
+    let skip = exclude.map(file_name);
+    let mut result = TraceSearchResult::default();
+
+    let query_lower: Vec<String> = queries.iter().map(|q| q.to_lowercase()).collect();
+
+    for entry in rd.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if Some(&name) == skip.as_ref() || !name.ends_with(".md") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(entry.path()) else { continue };
+        let agent = name.trim_end_matches(".md").to_string();
+        result.agents_searched += 1;
+
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            let line_lower = line.to_lowercase();
+            let mut match_count = 0usize;
+            for q in &query_lower {
+                if line_lower.contains(q.as_str()) {
+                    match_count += 1;
+                }
+            }
+            if match_count == 0 { continue; }
+
+            result.total_matches += 1;
+            if result.hits.len() >= max_hits { continue; }
+
+            // Gather context: 1 line before, the match, 1 line after.
+            let start = i.saturating_sub(1);
+            let end = (i + 2).min(lines.len());
+            let context: String = lines[start..end].join("\n");
+
+            // Relevance: fraction of query terms matched, boosted by position.
+            let relevance = match_count as f64 / queries.len().max(1) as f64;
+
+            result.hits.push(TraceHit {
+                agent: agent.clone(),
+                line_number: i + 1,
+                context: sanitize_context(&context),
+                relevance,
+            });
+        }
+    }
+
+    // Sort by relevance descending
+    result.hits.sort_by(|a, b| b.relevance.partial_cmp(&a.relevance).unwrap_or(std::cmp::Ordering::Equal));
+    result.hits.truncate(max_hits);
+    result
+}
+
+/// Targeted search: find which agent observed a specific endpoint, parameter,
+/// error, or technology. Returns the raw observation lines with agent attribution.
+pub fn who_observed(workdir: Option<&str>, pattern: &str) -> Vec<(String, String)> {
+    let result = search(workdir, &[pattern], None, 20);
+    result.hits.into_iter()
+        .map(|h| (h.agent, h.context))
+        .collect()
+}
+
+/// Generate a prompt block for cross-worker trace search results.
+pub fn search_prompt_block(results: &TraceSearchResult, query_desc: &str) -> String {
+    if results.hits.is_empty() { return String::new(); }
+
+    let mut s = format!("CROSS-WORKER TRACE SEARCH for '{query_desc}' ({} hits across {} agents):\n",
+        results.total_matches, results.agents_searched);
+    for hit in results.hits.iter().take(15) {
+        s.push_str(&format!("  [{}:L{}] (rel={:.0}%) {}\n",
+            hit.agent, hit.line_number, hit.relevance * 100.0,
+            hit.context.lines().next().unwrap_or("")));
+    }
+    s
+}
+
+/// Strip potential secrets from context lines while keeping the observation.
+fn sanitize_context(context: &str) -> String {
+    let secret_re = regex::Regex::new(
+        r"(?i)(password|secret|token|api[_-]?key|authorization|bearer)\s*[=:]\s*\S+"
+    ).expect("secret regex");
+    secret_re.replace_all(context, "$1=<REDACTED>").to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,6 +342,48 @@ mod tests {
         let b = prompt_block(Some(&w), None);
         assert!(b.contains("traces"));
         assert!(b.contains("grep -ril"));
+        let _ = std::fs::remove_dir_all(&w);
+    }
+
+    #[test]
+    fn cross_worker_search_finds_observations() {
+        let w = tmp("xsearch");
+        record(Some(&w), "agent_a", "Found hidden endpoint /api/admin/debug\nServer returned 500 with stack trace");
+        record(Some(&w), "agent_b", "Parameter 'callback' reflects input unfiltered\nTested XSS on /search");
+        let result = search(Some(&w), &["endpoint", "admin"], None, 10);
+        assert!(result.agents_searched >= 1);
+        assert!(!result.hits.is_empty());
+        assert!(result.hits[0].agent == "agent_a");
+        let _ = std::fs::remove_dir_all(&w);
+    }
+
+    #[test]
+    fn cross_worker_search_excludes_self() {
+        let w = tmp("xsearch_excl");
+        record(Some(&w), "my_agent", "Found something interesting about /api/secret");
+        let result = search(Some(&w), &["secret"], Some("my_agent"), 10);
+        assert!(result.hits.is_empty());
+        let _ = std::fs::remove_dir_all(&w);
+    }
+
+    #[test]
+    fn cross_worker_search_redacts_secrets() {
+        let w = tmp("xsearch_redact");
+        record(Some(&w), "recon", "Authorization: Bearer sk-12345abc\nFound /api/users");
+        let result = search(Some(&w), &["/api/users"], None, 10);
+        assert!(!result.hits.is_empty());
+        assert!(result.hits[0].context.contains("REDACTED"));
+        let _ = std::fs::remove_dir_all(&w);
+    }
+
+    #[test]
+    fn who_observed_returns_agent_attribution() {
+        let w = tmp("who_obs");
+        record(Some(&w), "sqli_agent", "Detected SQL error on /login endpoint");
+        record(Some(&w), "xss_agent", "No reflection found");
+        let obs = who_observed(Some(&w), "SQL error");
+        assert_eq!(obs.len(), 1);
+        assert_eq!(obs[0].0, "sqli_agent");
         let _ = std::fs::remove_dir_all(&w);
     }
 }

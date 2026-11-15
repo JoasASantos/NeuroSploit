@@ -1,5 +1,5 @@
 'use strict';
-/* NeuroSploit v4.4.0 — web console frontend. Vanilla JS, no build step. */
+/* NeuroSploit v4.4.1 — web console frontend. Vanilla JS, no build step. */
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -73,6 +73,29 @@ function sevRank(sev) {
 function sevClass(sev) {
   return ['sev-critical', 'sev-high', 'sev-medium', 'sev-low', 'sev-info'][sevRank(sev)];
 }
+function renderSevProgressBar(targetEl, findings) {
+  if (!targetEl || !findings?.length) { if (targetEl) targetEl.hidden = true; return; }
+  const counts = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+  for (const f of findings) {
+    const r = sevRank(f.severity);
+    if (r === 0) counts.critical++;
+    else if (r === 1) counts.high++;
+    else if (r === 2) counts.medium++;
+    else if (r === 3) counts.low++;
+    else counts.info++;
+  }
+  const total = findings.length;
+  const segs = ['critical', 'high', 'medium', 'low', 'info']
+    .filter(s => counts[s] > 0)
+    .map(s => `<div class="sev-progress-seg seg-${s}" style="width:${(counts[s] / total * 100).toFixed(1)}%"></div>`)
+    .join('');
+  const legend = ['critical', 'high', 'medium', 'low', 'info']
+    .filter(s => counts[s] > 0)
+    .map(s => `<span class="sev-progress-legend-item"><span class="spl-dot" style="background:var(--sev-${s}-fg)"></span><span class="spl-count">${counts[s]}</span> ${s}</span>`)
+    .join('');
+  targetEl.innerHTML = `<div class="sev-progress">${segs}</div><div class="sev-progress-legend">${legend}</div>`;
+  targetEl.hidden = false;
+}
 function show(el, on) { if (el) el.hidden = !on; }
 
 // Failures used to surface through `alert()`, which blocks the page and hides
@@ -102,7 +125,7 @@ function clearFieldErrors() { $$('.field-error').forEach((el) => { el.textConten
 // view navigation
 // ---------------------------------------------------------------------------
 
-const ALL_VIEWS = ['dashView','wizardView','liveView','detailView','pentestsView','prreviewsView','issuesView','reposView','domainsView','networksView','vaultView','guardrailsView','integrationsView','settingsView'];
+const ALL_VIEWS = ['homeView','dashView','wizardView','liveView','detailView','pentestsView','prreviewsView','issuesView','reposView','domainsView','networksView','vaultView','guardrailsView','integrationsView','settingsView'];
 
 function switchView(viewName) {
   state.activeView = viewName;
@@ -125,6 +148,7 @@ function switchView(viewName) {
   if (viewName === 'vault') loadVault();
   if (viewName === 'guardrails') loadGuardrails();
   if (viewName === 'dash') renderDashboard();
+  if (viewName === 'home') renderHome();
 }
 
 function timeAgo(ts) {
@@ -146,8 +170,10 @@ function timeAgo(ts) {
 
 function applyTheme() {
   document.documentElement.setAttribute('data-theme', state.theme);
-  $('#btnThemeToggle').textContent = state.theme === 'dark' ? '☀' : '☾';
-  $('#btnThemeToggle').title = state.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
+  $('#btnThemeToggle').innerHTML = state.theme === 'dark' ? '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></svg>' : '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>';
+  const themeLabel = state.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
+  $('#btnThemeToggle').title = themeLabel;
+  $('#btnThemeToggle').setAttribute('aria-label', themeLabel);
   // xterm paints into a canvas and doesn't inherit CSS variables — it has to
   // be told the palette changed.
   if (term.xterm) term.xterm.options.theme = termColors();
@@ -732,6 +758,8 @@ function bindRunTabs(scopeEl) {
 bindRunTabs($('#liveView'));
 bindRunTabs($('#detailView'));
 
+$('#coverageSearch')?.addEventListener('input', () => renderCoverageTab());
+
 const ACTIVE_JOB_KEY = 'ns-active-job';
 
 function attachLiveJob(id, target, name, pinnedAgents) {
@@ -773,6 +801,10 @@ function attachLiveJob(id, target, name, pinnedAgents) {
   es.addEventListener('log', (e) => appendLog(JSON.parse(e.data).line));
   es.addEventListener('finding', (e) => addFinding(JSON.parse(e.data).finding));
   es.addEventListener('agent', (e) => { const a = JSON.parse(e.data); if (state.currentJob) { (state.currentJob.agentStatus ||= {})[a.name] = { status: a.status, found: a.found || 0 }; renderAgentPanel(state.currentJob.agentStatus); } });
+  es.addEventListener('adaptive', (e) => updateAdaptiveTab(JSON.parse(e.data)));
+  es.addEventListener('graph', (e) => updateGraphTab(JSON.parse(e.data)));
+  es.addEventListener('planner', (e) => updatePlannerTab(JSON.parse(e.data)));
+  es.addEventListener('noise', (e) => updateNoiseTab(JSON.parse(e.data)));
   es.addEventListener('snapshot', (e) => applySnapshot(JSON.parse(e.data)));
   es.addEventListener('done', (e) => {
     applySnapshot(JSON.parse(e.data));
@@ -852,9 +884,9 @@ function appendLog(line) {
   const list = $('#logList');
   list.appendChild(div);
   list.scrollTop = list.scrollHeight;
-  // When the terminal is attached to this engagement it is the same stream —
-  // mirror it there so the operator types and reads in one place.
   if (term.mode === 'job' && term.xterm) termWrite(line + '\r\n');
+  const dot = $('#activityTabDot');
+  if (dot) { dot.classList.add('live'); clearTimeout(dot._t); dot._t = setTimeout(() => dot.classList.remove('live'), 3000); }
 }
 
 // Only run/whitebox/greybox jobs are REPL-backed (interactive: true) — the
@@ -1014,6 +1046,89 @@ bindFindingTableClicks('#detailFindingsTable tbody', () => state.detailFindings 
 function addFinding(f) {
   state.currentJob.findings.push(f);
   renderFindings('live');
+  renderCoverageTab();
+  renderSevProgressBar($('#liveSevBar'), state.currentJob?.findings);
+}
+
+function renderCoverageTab() {
+  const list = $('#coverageList');
+  const stats = $('#coverageStats');
+  const empty = $('#coverageEmpty');
+  const search = $('#coverageSearch');
+  if (!list) return;
+  const findings = state.currentJob?.findings || [];
+  const endpoints = new Map();
+  for (const f of findings) {
+    const ep = (f.endpoint || '').trim();
+    if (!ep) continue;
+    const atk = f.evidence_data?.attack;
+    const method = (atk?.method || f.method || 'GET').toUpperCase();
+    const status = atk?.status || 0;
+    const key = `${method} ${ep}`;
+    if (!endpoints.has(key)) {
+      endpoints.set(key, { method, path: ep, status, findings: [], severities: new Set() });
+    }
+    const entry = endpoints.get(key);
+    entry.findings.push(f);
+    entry.severities.add(f.severity);
+  }
+  const agentStatus = state.currentJob?.agentStatus || {};
+  const agentNames = Object.keys(agentStatus);
+  const tested = endpoints.size;
+  const withFindings = [...endpoints.values()].filter(e => e.findings.length > 0).length;
+
+  if (!tested && !agentNames.length) { list.innerHTML = ''; if (empty) empty.hidden = false; return; }
+  if (empty) empty.hidden = true;
+
+  if (stats) {
+    stats.innerHTML = `
+      <div class="at-stat"><span class="at-stat-k">Endpoints</span><span class="at-stat-v">${tested}</span></div>
+      <div class="at-stat"><span class="at-stat-k">With findings</span><span class="at-stat-v" style="color:var(--sev-high-fg)">${withFindings}</span></div>
+      <div class="at-stat"><span class="at-stat-k">Clean</span><span class="at-stat-v" style="color:var(--sev-info-fg)">${tested - withFindings}</span></div>
+    `;
+  }
+
+  const pillsEl = $('#coveragePills');
+  if (pillsEl) {
+    const all = [...endpoints.values()];
+    const reported = all.filter(e => e.findings.length > 0).length;
+    const clean = all.filter(e => e.findings.length === 0).length;
+    pillsEl.innerHTML = `
+      <button class="cv-pill${!state.coverageFilter ? ' active' : ''}" data-cv-filter="">All <span class="cv-pill-count">${tested}</span></button>
+      <button class="cv-pill${state.coverageFilter === 'reported' ? ' active' : ''}" data-cv-filter="reported">Reported <span class="cv-pill-count">${reported}</span></button>
+      <button class="cv-pill${state.coverageFilter === 'clean' ? ' active' : ''}" data-cv-filter="clean">No issue found <span class="cv-pill-count">${clean}</span></button>
+      <span class="cv-progress-label">${reported + clean} of ${tested} checked</span>
+    `;
+    $$('.cv-pill', pillsEl).forEach(pill => {
+      pill.addEventListener('click', () => {
+        $$('.cv-pill', pillsEl).forEach(p => p.classList.remove('active'));
+        pill.classList.add('active');
+        state.coverageFilter = pill.dataset.cvFilter || '';
+        renderCoverageTab();
+      });
+    });
+  }
+
+  const q = (search?.value || '').toLowerCase();
+  let rows = [...endpoints.values()];
+  const cvFilter = state.coverageFilter || '';
+  if (cvFilter === 'reported') rows = rows.filter(e => e.findings.length > 0);
+  else if (cvFilter === 'clean') rows = rows.filter(e => e.findings.length === 0);
+  if (q) rows = rows.filter(e => `${e.method} ${e.path}`.toLowerCase().includes(q));
+  rows.sort((a, b) => b.findings.length - a.findings.length || a.path.localeCompare(b.path));
+
+  list.innerHTML = rows.map(e => {
+    const badge = e.findings.length ? 'found' : 'tested';
+    const statusCls = e.status >= 500 ? 's-5' : e.status >= 400 ? 's-4' : e.status >= 300 ? 's-3' : e.status >= 200 ? 's-2' : '';
+    return `<div class="cv-row">
+      <span class="cv-method m-${e.method.toLowerCase()}">${esc(e.method)}</span>
+      <span class="cv-path">${esc(e.path)}</span>
+      ${e.status ? `<span class="cv-status-code ${statusCls}">${e.status}</span>` : ''}
+      <span class="cv-status-badge ${badge}">${e.findings.length ? `${e.findings.length} finding(s)` : 'tested'}</span>
+    </div>`;
+  }).join('');
+  const dot = $('#coverageTabDot');
+  if (dot) dot.classList.toggle('live', rows.some(e => e.findings.length > 0));
 }
 
 // Live "what's being tested" grid: one chip per agent, coloured by status.
@@ -1024,7 +1139,6 @@ function renderAgentPanel(statusMap) {
   const entries = Object.entries(statusMap || {});
   if (!entries.length) { panel.hidden = true; return; }
   panel.hidden = false;
-  // Order: running first, then found, then pending, then done, then failed.
   const rank = (s, found) => s === 'running' ? 0 : (s === 'done' && found > 0) ? 1 : s === 'pending' ? 2 : s === 'done' ? 3 : 4;
   entries.sort((a, b) => rank(a[1].status, a[1].found) - rank(b[1].status, b[1].found) || a[0].localeCompare(b[0]));
   const cls = (s, found) => s === 'running' ? 'running' : s === 'failed' ? 'failed' : (s === 'done' && found > 0) ? 'found' : s === 'done' ? 'done' : 'pending';
@@ -1033,6 +1147,46 @@ function renderAgentPanel(statusMap) {
   const done = entries.filter(([, s]) => s.status === 'done' || s.status === 'failed').length;
   const run = entries.filter(([, s]) => s.status === 'running').length;
   $('#agentPanel .agent-panel-head > span').textContent = `What's being tested — ${run} running · ${done}/${entries.length} done`;
+  renderAgentsTab(statusMap);
+  const countEl = $('#liveAgentsCount');
+  if (countEl) countEl.textContent = entries.length;
+  const dot = $('#agentsTabDot');
+  if (dot) dot.classList.toggle('live', run > 0);
+}
+
+function renderAgentsTab(statusMap) {
+  const grid = $('#agentsTabGrid');
+  const stats = $('#agentsTabStats');
+  const empty = $('#agentsTabEmpty');
+  if (!grid) return;
+  const entries = Object.entries(statusMap || {});
+  if (!entries.length) { grid.innerHTML = ''; if (empty) empty.hidden = false; return; }
+  if (empty) empty.hidden = true;
+  const rank = (s, found) => s === 'running' ? 0 : (s === 'done' && found > 0) ? 1 : s === 'pending' ? 2 : s === 'done' ? 3 : 4;
+  entries.sort((a, b) => rank(a[1].status, a[1].found) - rank(b[1].status, b[1].found) || a[0].localeCompare(b[0]));
+  const cls = (s, found) => s === 'running' ? 'running' : s === 'failed' ? 'failed' : (s === 'done' && found > 0) ? 'found' : s === 'done' ? 'done' : 'pending';
+  const running = entries.filter(([, s]) => s.status === 'running').length;
+  const done = entries.filter(([, s]) => s.status === 'done' || s.status === 'failed').length;
+  const found = entries.reduce((a, [, s]) => a + (s.found || 0), 0);
+  const failed = entries.filter(([, s]) => s.status === 'failed').length;
+  if (stats) {
+    stats.innerHTML = `
+      <div class="at-stat"><span class="at-stat-k">Total</span><span class="at-stat-v">${entries.length}</span></div>
+      <div class="at-stat"><span class="at-stat-k">Running</span><span class="at-stat-v" style="color:var(--accent)">${running}</span></div>
+      <div class="at-stat"><span class="at-stat-k">Done</span><span class="at-stat-v">${done}</span></div>
+      <div class="at-stat"><span class="at-stat-k">Findings</span><span class="at-stat-v" style="color:var(--sev-high-fg)">${found}</span></div>
+      ${failed ? `<div class="at-stat"><span class="at-stat-k">Errors</span><span class="at-stat-v" style="color:var(--sev-critical-fg)">${failed}</span></div>` : ''}
+    `;
+  }
+  grid.innerHTML = entries.map(([name, st]) => {
+    const c = cls(st.status, st.found);
+    return `<div class="at-card">
+      <span class="at-card-status ${c}"></span>
+      <span class="at-card-name ${c}">${esc(name)}</span>
+      <span class="at-card-state ${c}">${esc(st.status)}</span>
+      ${st.found ? `<span class="at-card-findings">${st.found}</span>` : ''}
+    </div>`;
+  }).join('');
 }
 
 function applySnapshot(snap) {
@@ -1196,15 +1350,43 @@ function openFindingModal(f, pocs, runId) {
   $('#fmSev').textContent = f.severity || 'info';
   $('#fmTitle').textContent = f.title || '(untitled finding)';
 
-  const meta = [
-    ['CWE', f.cwe], ['CVSS', f.cvss], ['OWASP', f.owasp], ['MITRE', f.mitre],
-    ['Stage', f.stage], ['Exploitability', f.exploitability],
-    ['Confidence', f.confidence ? f.confidence.toFixed(2) : ''], ['Votes', f.votes],
-    ['Review status', f.review_status], ['Auth context', f.auth_context],
-    ['Account', f.account], ['Agent', f.agent],
+  const cvssRaw = String(f.cvss || '');
+  const cvssScore = cvssRaw.match(/[\d.]+/)?.[0] || '';
+  const cvssVector = cvssRaw.match(/\(CVSS[^)]*\)/)?.[0] || '';
+  const cvssVal = parseFloat(cvssScore) || 0;
+  const cvssClass = cvssVal >= 7 ? 'fm-cvss-high' : cvssVal >= 4 ? 'fm-cvss-med' : 'fm-cvss-low';
+  const method = (f.evidence_data?.attack?.method || f.method || '').toUpperCase();
+  const endpoint = f.endpoint || '';
+  const endpointHtml = endpoint
+    ? `<div class="fm-endpoint-badge">${method ? `<span class="fm-endpoint-method m-${method.toLowerCase()}">${esc(method)}</span>` : ''}<span class="fm-endpoint-path">${esc(endpoint)}</span></div>`
+    : '<span class="fm-meta-value">—</span>';
+  const cvssHtml = cvssScore
+    ? `<span class="fm-meta-value fm-cvss ${cvssClass}">${esc(cvssScore)}</span>${cvssVector ? `<span class="fm-cvss-vector">${esc(cvssVector)}</span>` : ''}`
+    : '<span class="fm-meta-value">—</span>';
+  const metaCells = [
+    { label: 'CVSS', value: cvssHtml, raw: true },
+    { label: 'CWE', value: f.cwe },
+    { label: 'Endpoint', value: endpointHtml, raw: true },
+    { label: 'Confidence', value: f.confidence ? f.confidence.toFixed(2) : '' },
+    { label: 'Stage', value: f.stage },
+    { label: 'Review status', value: f.review_status },
+    { label: 'Agent', value: f.agent },
+    { label: 'Votes', value: f.votes },
   ];
-  $('#fmMeta').innerHTML = meta.map(([k, v]) =>
-    `<div class="review-item"><div class="k">${esc(k)}</div><div class="v mono">${esc(v || '—')}</div></div>`).join('');
+  $('#fmMeta').innerHTML = metaCells.map(c =>
+    `<div class="fm-meta-cell"><div class="fm-meta-label">${esc(c.label)}</div>${c.raw ? c.value : `<span class="fm-meta-value">${esc(c.value || '—')}</span>`}</div>`).join('');
+
+  const actionsEl = $('#fmActions');
+  if (actionsEl) {
+    actionsEl.innerHTML = `
+      <button class="fm-action-btn" data-action="copy-md" title="Copy finding as Markdown">📋 Copy as Markdown</button>
+      <button class="fm-action-btn" data-action="retest" title="Re-test this finding">⟳ Retest</button>
+    `;
+    actionsEl.querySelector('[data-action="copy-md"]')?.addEventListener('click', () => {
+      const md = `## ${f.severity} — ${f.title}\n\n**CVSS:** ${cvssScore || '—'} ${cvssVector} | **CWE:** ${f.cwe || '—'}\n**Endpoint:** ${method} ${endpoint}\n\n${f.impact || f.evidence || ''}\n\n### Remediation\n${f.remediation || '—'}`;
+      navigator.clipboard.writeText(md).then(() => toast('Finding copied as Markdown'));
+    });
+  }
 
   // The report footer ("Identified and validated by NeuroSploit...") gets
   // baked into impact/business_impact by the reporter — strip it from every
@@ -1815,6 +1997,18 @@ async function loadDetail(id) {
     reportLink.href = `/api/runs/${encodeURIComponent(id)}/asset/report.html`;
     show(reportLink, true);
   } else show(reportLink, false);
+  const reportNav = $('#detailReportNav');
+  if (reportNav) {
+    if (detail.assets.includes('report.html')) {
+      const reportUrl = `/api/runs/${encodeURIComponent(id)}/asset/report.html`;
+      reportNav.innerHTML = `<div class="run-report-nav-title">Report sections</div>
+        <a href="${reportUrl}#executive-summary" target="_blank">Executive summary</a>
+        <a href="${reportUrl}#technical-analysis" target="_blank">Technical analysis</a>
+        <a href="${reportUrl}#methodology" target="_blank">Methodology</a>
+        <a href="${reportUrl}#recommendations" target="_blank">Recommendations</a>`;
+      reportNav.hidden = false;
+    } else { reportNav.hidden = true; }
+  }
   // The PDF is produced by the harness (Typst) when that binary is present, so
   // it is offered only when it actually exists — a dead download button is
   // worse than none.
@@ -1832,8 +2026,95 @@ async function loadDetail(id) {
     show(pdfLink, true);
   } else show(pdfLink, false);
   afterDetailLoaded(id, detail);
+  renderDetailAgents(detail);
+  renderDetailCoverage(detail);
+  renderSevProgressBar($('#detailSevBar'), detail.findings);
   if (token !== state.detailToken) return;
   if (detail.status?.state === 'running') state.detailPoll = setInterval(() => loadDetail(id), 4000);
+}
+
+function renderDetailAgents(detail) {
+  const grid = $('#detailAgentsGrid');
+  const stats = $('#detailAgentsStats');
+  const empty = $('#detailAgentsEmpty');
+  const countEl = $('#detailAgentsCount');
+  if (!grid) return;
+  const agentMap = {};
+  for (const f of (detail.findings || [])) {
+    const name = f.agent || 'unknown';
+    if (!agentMap[name]) agentMap[name] = { status: 'done', found: 0 };
+    agentMap[name].found++;
+  }
+  const totalRan = detail.status?.agents_ran || Object.keys(agentMap).length;
+  if (countEl) countEl.textContent = totalRan;
+  const entries = Object.entries(agentMap);
+  if (!entries.length) { grid.innerHTML = ''; if (empty) empty.hidden = false; return; }
+  if (empty) empty.hidden = true;
+  entries.sort((a, b) => b[1].found - a[1].found || a[0].localeCompare(b[0]));
+  if (stats) {
+    stats.innerHTML = `
+      <div class="at-stat"><span class="at-stat-k">Total ran</span><span class="at-stat-v">${totalRan}</span></div>
+      <div class="at-stat"><span class="at-stat-k">With findings</span><span class="at-stat-v" style="color:var(--sev-high-fg)">${entries.filter(([,s]) => s.found > 0).length}</span></div>
+      <div class="at-stat"><span class="at-stat-k">Total findings</span><span class="at-stat-v">${entries.reduce((a,[,s]) => a + s.found, 0)}</span></div>
+    `;
+  }
+  grid.innerHTML = entries.map(([name, st]) =>
+    `<div class="at-card">
+      <span class="at-card-status ${st.found > 0 ? 'found' : 'done'}"></span>
+      <span class="at-card-name">${esc(name)}</span>
+      <span class="at-card-state done">done</span>
+      ${st.found ? `<span class="at-card-findings">${st.found}</span>` : ''}
+    </div>`
+  ).join('');
+}
+
+function renderDetailCoverage(detail) {
+  const list = $('#detailCoverageList');
+  const stats = $('#detailCoverageStats');
+  const empty = $('#detailCoverageEmpty');
+  const search = $('#detailCoverageSearch');
+  if (!list) return;
+  const findings = detail.findings || [];
+  const endpoints = new Map();
+  for (const f of findings) {
+    const ep = (f.endpoint || '').trim();
+    if (!ep) continue;
+    const atk = f.evidence_data?.attack;
+    const method = (atk?.method || f.method || 'GET').toUpperCase();
+    const status = atk?.status || 0;
+    const key = `${method} ${ep}`;
+    if (!endpoints.has(key)) endpoints.set(key, { method, path: ep, status, findings: [] });
+    endpoints.get(key).findings.push(f);
+  }
+  const tested = endpoints.size;
+  const withFindings = [...endpoints.values()].filter(e => e.findings.length > 0).length;
+  if (!tested) { list.innerHTML = ''; if (empty) empty.hidden = false; return; }
+  if (empty) empty.hidden = true;
+  if (stats) {
+    stats.innerHTML = `
+      <div class="at-stat"><span class="at-stat-k">Endpoints</span><span class="at-stat-v">${tested}</span></div>
+      <div class="at-stat"><span class="at-stat-k">With findings</span><span class="at-stat-v" style="color:var(--sev-high-fg)">${withFindings}</span></div>
+      <div class="at-stat"><span class="at-stat-k">Clean</span><span class="at-stat-v" style="color:var(--sev-info-fg)">${tested - withFindings}</span></div>
+    `;
+  }
+  const render = () => {
+    const q = (search?.value || '').toLowerCase();
+    let rows = [...endpoints.values()];
+    if (q) rows = rows.filter(e => `${e.method} ${e.path}`.toLowerCase().includes(q));
+    rows.sort((a, b) => b.findings.length - a.findings.length || a.path.localeCompare(b.path));
+    list.innerHTML = rows.map(e => {
+      const badge = e.findings.length ? 'found' : 'tested';
+      const statusCls = e.status >= 500 ? 's-5' : e.status >= 400 ? 's-4' : e.status >= 300 ? 's-3' : e.status >= 200 ? 's-2' : '';
+      return `<div class="cv-row">
+        <span class="cv-method m-${e.method.toLowerCase()}">${esc(e.method)}</span>
+        <span class="cv-path">${esc(e.path)}</span>
+        ${e.status ? `<span class="cv-status-code ${statusCls}">${e.status}</span>` : ''}
+        <span class="cv-status-badge ${badge}">${e.findings.length ? `${e.findings.length} finding(s)` : 'tested'}</span>
+      </div>`;
+    }).join('');
+  };
+  render();
+  if (search) search.oninput = render;
 }
 
 // ---------------------------------------------------------------------------
@@ -2056,7 +2337,8 @@ function termEnsure() {
   }
   term.xterm = new Terminal({
     fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--mono').trim() || 'monospace',
-    fontSize: 12,
+    fontSize: 13,
+    lineHeight: 1.3,
     cursorBlink: true,
     convertEol: true,   // the harness writes bare \n; without this every line stair-steps
     scrollback: 8000,
@@ -2075,6 +2357,10 @@ function termEnsure() {
     term.ro.observe($('#termHost'));
   }
   window.addEventListener('resize', termFit);
+  // Cell width is measured from the font; re-fit once it has actually loaded so
+  // the last column is not clipped by a stale measurement.
+  if (document.fonts?.ready) document.fonts.ready.then(() => termFit());
+  setTimeout(termFit, 150);
   return true;
 }
 
@@ -2544,27 +2830,41 @@ async function renderDashboard() {
   const maxSev = Math.max(1, ...Object.values(sevCounts));
   const maxCwe = Math.max(1, ...topCwe.map(([, n]) => n));
 
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+
   body.innerHTML = `
+    <div class="dash-greeting">${greeting}
+      <div class="dash-greeting-sub">Here's your security posture overview</div>
+    </div>
     <div class="stat-row">
+      <div class="stat-tile stat-score sev-${band.cls}">
+        <div class="stat-k">Security score</div>
+        <div class="score-ring-wrap">
+          <svg class="score-ring" viewBox="0 0 80 80">
+            <circle cx="40" cy="40" r="34" fill="none" stroke="var(--border)" stroke-width="6"/>
+            <circle cx="40" cy="40" r="34" fill="none" stroke="currentColor" stroke-width="6"
+              stroke-dasharray="${Math.round(213.6 * score / 100)} 214"
+              stroke-linecap="round" transform="rotate(-90 40 40)"/>
+          </svg>
+          <div class="score-ring-value">${score}</div>
+        </div>
+        <div class="stat-sub">${esc(band.label)}</div>
+      </div>
+      <div class="stat-tile">
+        <div class="stat-k">Open issues</div>
+        <div class="stat-v">${findings.length}</div>
+        <div class="stat-sub">${needsReview} awaiting review</div>
+      </div>
       <div class="stat-tile">
         <div class="stat-k">Engagements</div>
         <div class="stat-v">${runs.length}</div>
         <div class="stat-sub">${targets.size} distinct target(s)</div>
       </div>
       <div class="stat-tile">
-        <div class="stat-k">Findings</div>
-        <div class="stat-v">${findings.length}</div>
-        <div class="stat-sub">${needsReview} awaiting human review</div>
-      </div>
-      <div class="stat-tile">
         <div class="stat-k">Agents run</div>
         <div class="stat-v">${runs.reduce((a, r) => a + (r.agentsRan || 0), 0).toLocaleString('en-US')}</div>
         <div class="stat-sub">across ${runs.length} run(s)</div>
-      </div>
-      <div class="stat-tile stat-score sev-${band.cls}">
-        <div class="stat-k">Exposure score</div>
-        <div class="stat-v">${score}<span class="stat-unit">/100</span></div>
-        <div class="stat-sub">${esc(band.label)}</div>
       </div>
     </div>
 
@@ -2724,6 +3024,48 @@ function openFairParams(params) {
   body.scrollTop = body.scrollTop; // keep the page anchored while the modal opens
 }
 
+// ---------------------------------------------------------------------------
+// Home landing — quick-start cards + recent runs
+// ---------------------------------------------------------------------------
+
+async function renderHome() {
+  const recent = $('#homeRecent');
+  if (!recent) return;
+  try {
+    const runs = await api('/api/runs');
+    const last5 = (runs || []).slice(0, 5);
+    if (!last5.length) { recent.innerHTML = ''; return; }
+    recent.innerHTML = `
+      <div class="home-recent-title">Recent engagements</div>
+      <div class="home-recent-list">
+        ${last5.map(r => `<button class="home-recent-item" data-id="${esc(r.id)}">
+          <span class="run-dot" style="background:${r.state === 'running' ? 'var(--accent)' : 'var(--sev-low-fg)'}"></span>
+          <span class="home-recent-name">${esc(r.name || r.target || r.id)}</span>
+          <span class="home-recent-target">${esc(r.target || '')}</span>
+          <span class="home-recent-time">${esc(r.when ? timeAgo(Math.floor(new Date(r.when).getTime() / 1000)) : '')}</span>
+        </button>`).join('')}
+      </div>`;
+    $$('.home-recent-item', recent).forEach(btn => {
+      btn.addEventListener('click', () => {
+        const run = (runs || []).find(r => r.id === btn.dataset.id);
+        if (run) openRun(run);
+      });
+    });
+  } catch { recent.innerHTML = ''; }
+}
+
+// Home card click handlers — select mode and go to wizard
+$$('.home-card').forEach(card => {
+  card.addEventListener('click', () => {
+    const mode = card.dataset.mode;
+    leaveLiveJob();
+    clearInterval(state.detailPoll);
+    switchView('wizard');
+    if (mode) selectMode(mode);
+    goToStep(0);
+  });
+});
+
 function showDashboard() {
   leaveLiveJob();
   clearInterval(state.detailPoll);
@@ -2742,6 +3084,19 @@ $('#sbTerminal')?.addEventListener('click', () => termOpen());
 $('#btnDashRefresh')?.addEventListener('click', renderDashboard);
 $('#dashRange')?.addEventListener('change', renderDashboard);
 $('#runFilter')?.addEventListener('input', (e) => { state.runFilter = e.target.value; renderSidebar(); });
+
+// ⌘K / Ctrl+K — focus the sidebar search
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+    e.preventDefault();
+    const input = $('#runFilter');
+    if (input) { input.focus(); input.select(); }
+    const sidebar = $('#sidebar');
+    if (sidebar && !sidebar.classList.contains('open') && window.matchMedia('(max-width: 900px)').matches) {
+      setSidebar(true);
+    }
+  }
+});
 
 // ---------------------------------------------------------------------------
 // boot
@@ -2769,7 +3124,7 @@ window.matchMedia(NARROW).addEventListener('change', (m) => { if (!m.matches) se
 
 async function boot() {
   applyTheme();
-  switchView('dash');
+  switchView('home');
   selectMode('run');
   goToStep(0);
   renderCustomLeads();
@@ -2919,14 +3274,14 @@ function extrasPanelsHtml(uid) {
   <div class="run-tab-panel" data-tabpanel="traffic" hidden>
     <div class="panel-toolbar">
       <input type="text" placeholder="host…" class="input-sm" data-x="t-host" list="${uid}-hosts" /><datalist id="${uid}-hosts" data-x="t-hosts"></datalist>
-      <div class="search-wrap"><span class="search-icon" aria-hidden="true">⌕</span><input type="text" placeholder="Search URL / method / status / type" data-x="t-q" /></div>
+      <div class="search-wrap"><span class="search-icon" aria-hidden="true"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg></span><input type="text" placeholder="Search URL / method / status / type" data-x="t-q" /></div>
       <select class="input-sm" data-x="t-method"><option value="">all methods</option><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>CONNECT</option></select>
       <div class="topbar-spacer"></div><span class="muted" data-x="t-count"></span></div>
     <div class="table-wrap"><table class="data-table"><thead><tr><th>Time</th><th>Host</th><th>Method</th><th>URL</th><th>Status</th><th>Type</th><th class="col-conf">Size</th></tr></thead><tbody data-x="t-body"></tbody></table></div>
     <div class="empty-state" data-x="t-empty" hidden>No recorded traffic. The recording interceptor runs with <code>--intercept own</code>; findings are still wire-checked by the harness's own replay.</div>
   </div>
   <div class="run-tab-panel" data-tabpanel="traces" hidden>
-    <div class="panel-toolbar"><div class="search-wrap"><span class="search-icon" aria-hidden="true">⌕</span><input type="text" placeholder="Search every agent's trace (error, parameter, version…)" data-x="tr-q" /></div>
+    <div class="panel-toolbar"><div class="search-wrap"><span class="search-icon" aria-hidden="true"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg></span><input type="text" placeholder="Search every agent's trace (error, parameter, version…)" data-x="tr-q" /></div>
       <div class="topbar-spacer"></div><span class="muted" data-x="tr-note"></span></div>
     <div class="trace-layout"><ul class="trace-files" data-x="tr-files"></ul><div class="trace-hits" data-x="tr-hits"></div></div>
     <div class="empty-state" data-x="tr-empty" hidden>No agent traces yet.</div>
@@ -3680,18 +4035,59 @@ async function loadPrReviews() {
 }
 
 async function loadIssues() {
-  const body = $('#issuesBody');
-  if (!body) return;
+  const tableBody = $('#issuesTableBody');
+  if (!tableBody) return;
   try {
     const data = await api('/api/issues');
-    if (!data.length) { body.innerHTML = '<div class="empty-state">No findings across any engagement yet.</div>'; return; }
+    if (!data.length) {
+      const counters = $('#issuesSevCounters'); if (counters) counters.hidden = true;
+      const tabs = $('#issuesStatusTabs'); if (tabs) tabs.hidden = true;
+      const bar = tableBody.closest('.page-body')?.querySelector('.issues-filter-bar'); if (bar) bar.hidden = true;
+      tableBody.innerHTML = '<div class="empty-state">No findings across any engagement yet.</div>';
+      return;
+    }
+
+    // Severity counters
+    const sevTotals = { critical: 0, high: 0, medium: 0, low: 0 };
+    for (const f of data) {
+      const s = (f.severity || '').toLowerCase();
+      if (s.includes('crit')) sevTotals.critical++;
+      else if (s.includes('high')) sevTotals.high++;
+      else if (s.includes('med')) sevTotals.medium++;
+      else if (s.includes('low')) sevTotals.low++;
+    }
+    const countersEl = $('#issuesSevCounters');
+    if (countersEl) {
+      countersEl.innerHTML = ['critical','high','medium','low'].map(s =>
+        `<div class="issues-sev-item"><div class="issues-sev-label"><span class="issues-sev-dot dot-${s}"></span>${s}</div><div class="issues-sev-value">${sevTotals[s]}</div></div>`
+      ).join('');
+    }
+
+    // Status counts
+    const statusCounts = { '': data.length, open: 0, 'in-progress': 0, fixed: 0, ignored: 0 };
+    for (const f of data) {
+      const st = (f.status || 'open').toLowerCase();
+      if (st === 'in-progress' || st === 'in_progress') statusCounts['in-progress']++;
+      else if (statusCounts[st] !== undefined) statusCounts[st]++;
+      else statusCounts.open++;
+    }
+    const countAll = $('#issuesCountAll'); if (countAll) countAll.textContent = statusCounts[''];
+    const countOpen = $('#issuesCountOpen'); if (countOpen) countOpen.textContent = statusCounts.open;
+    const countProgress = $('#issuesCountProgress'); if (countProgress) countProgress.textContent = statusCounts['in-progress'];
+    const countFixed = $('#issuesCountFixed'); if (countFixed) countFixed.textContent = statusCounts.fixed;
+    const countIgnored = $('#issuesCountIgnored'); if (countIgnored) countIgnored.textContent = statusCounts.ignored;
+
+    let activeStatus = '';
+
     const renderRows = () => {
       const q = ($('#issuesSearch')?.value || '').trim().toLowerCase();
       const sevFilter = ($('#issuesSevFilter')?.value || '').toLowerCase();
-      const statusFilter = ($('#issuesStatusFilter')?.value || '').toLowerCase();
       const filtered = data.filter(f => {
         if (sevFilter && (f.severity || '').toLowerCase() !== sevFilter) return false;
-        if (statusFilter && (f.status || 'open').toLowerCase() !== statusFilter) return false;
+        if (activeStatus) {
+          const st = (f.status || 'open').toLowerCase().replace('_', '-');
+          if (st !== activeStatus) return false;
+        }
         if (q) {
           const blob = `${f.title || ''} ${f.target || ''} ${f.cwe || ''} ${f.run || ''} ${f.severity || ''} ${f.agent || ''}`.toLowerCase();
           if (!blob.includes(q)) return false;
@@ -3700,12 +4096,13 @@ async function loadIssues() {
       });
       const rows = filtered.map(f => {
         const sc = sevClass(f.severity);
-        return `<tr class="issue-row" data-run="${esc(f.run || '')}" data-title="${esc(f.title || '')}" data-cwe="${esc(f.cwe || '')}" style="cursor:pointer"><td><span class="sev ${sc}">${esc(f.severity)}</span></td><td>${esc(f.title)}</td><td class="mono">${esc(f.target || '')}</td><td class="mono">${esc(f.run || '')}</td><td>${esc(f.status || 'open')}</td></tr>`;
+        const epSub = f.endpoint ? `<div class="issue-endpoint-sub">${esc(f.endpoint)}</div>` : '';
+        return `<tr class="issue-row" data-run="${esc(f.run || '')}" data-title="${esc(f.title || '')}" data-cwe="${esc(f.cwe || '')}" style="cursor:pointer"><td><span class="sev ${sc}">${esc(f.severity)}</span></td><td><div class="issue-title-cell"><span class="issue-title-main">${esc(f.title)}</span>${epSub}</div></td><td class="mono col-endpoint">${esc(f.target || '')}</td><td class="mono">${esc(f.cwe || '')}</td><td>${esc(f.status || 'open')}</td></tr>`;
       }).join('');
-      body.innerHTML = rows
-        ? `<table class="data-table"><thead><tr><th>Severity</th><th>Title</th><th>Target</th><th>Run</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`
+      tableBody.innerHTML = rows
+        ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>Severity</th><th>Issue</th><th>Target</th><th>CWE</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>`
         : '<div class="empty-state">No issues matching current filters.</div>';
-      $$('.issue-row', body).forEach(row => {
+      $$('.issue-row', tableBody).forEach(row => {
         row.addEventListener('click', () => {
           const runId = row.dataset.run;
           if (!runId) return;
@@ -3714,13 +4111,22 @@ async function loadIssues() {
       });
     };
     renderRows();
+
+    // Status tab clicks
+    $$('.issues-status-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        $$('.issues-status-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        activeStatus = tab.dataset.status || '';
+        renderRows();
+      });
+    });
+
     const searchInput = $('#issuesSearch');
     if (searchInput) searchInput.oninput = renderRows;
     const sevSelect = $('#issuesSevFilter');
     if (sevSelect) sevSelect.onchange = renderRows;
-    const statusSelect = $('#issuesStatusFilter');
-    if (statusSelect) statusSelect.onchange = renderRows;
-  } catch (e) { body.innerHTML = `<div class="empty-state">Failed to load: ${esc(e.message)}</div>`; }
+  } catch (e) { tableBody.innerHTML = `<div class="empty-state">Failed to load: ${esc(e.message)}</div>`; }
 }
 
 async function loadRepos() {
@@ -4216,3 +4622,46 @@ document.addEventListener('keydown', (e) => {
     });
   }
 });
+
+// ── Adaptive Intelligence tab handlers ──
+function updateAdaptiveTab(data) {
+  const dot = $('#adaptiveTabDot');
+  if (dot) dot.style.background = 'var(--accent)';
+  show($('#adaptiveEmpty'), false);
+  if (data.stack) {
+    const el = $('#adaptiveStack');
+    if (el) el.innerHTML = `<code>${esc(data.stack.server || '?')}</code> / <code>${esc(data.stack.framework || '?')}</code> / <code>${esc(data.stack.language || '?')}</code> / DB: <code>${esc(data.stack.database || '?')}</code>`;
+  }
+  if (data.waf) {
+    const el = $('#adaptiveWaf');
+    if (el) el.innerHTML = `Vendor: <code>${esc(data.waf.vendor || 'unknown')}</code> | Block status: <code>${data.waf.block_status || '?'}</code>${data.waf.blocked_keywords?.length ? ` | Blocked: ${data.waf.blocked_keywords.map(k => `<code>${esc(k)}</code>`).join(', ')}` : ''}${data.waf.allowed_encodings?.length ? ` | Bypass: ${data.waf.allowed_encodings.map(e => `<code>${esc(e)}</code>`).join(', ')}` : ''}`;
+  }
+  if (data.payloads !== undefined) { const el = $('#adaptPayloads'); if (el) el.textContent = data.payloads; }
+  if (data.triggered !== undefined) { const el = $('#adaptTriggered'); if (el) el.textContent = data.triggered; }
+  if (data.blocked !== undefined) { const el = $('#adaptBlocked'); if (el) el.textContent = data.blocked; }
+}
+
+function updateGraphTab(data) {
+  show($('#adaptiveEmpty'), false);
+  if (data.assets !== undefined) { const el = $('#graphAssets'); if (el) el.textContent = data.assets; }
+  if (data.explored !== undefined) { const el = $('#graphExplored'); if (el) el.textContent = data.explored; }
+  if (data.findings !== undefined) { const el = $('#graphFindings'); if (el) el.textContent = data.findings; }
+  if (data.coverage !== undefined) { const el = $('#graphCoverage'); if (el) el.textContent = `${Math.round(data.coverage * 100)}%`; }
+  if (data.hints !== undefined) { const el = $('#graphHints'); if (el) el.textContent = data.hints; }
+}
+
+function updatePlannerTab(data) {
+  show($('#adaptiveEmpty'), false);
+  if (data.queued !== undefined) { const el = $('#planQueued'); if (el) el.textContent = data.queued; }
+  if (data.running !== undefined) { const el = $('#planRunning'); if (el) el.textContent = data.running; }
+  if (data.done !== undefined) { const el = $('#planDone'); if (el) el.textContent = data.done; }
+  if (data.failed !== undefined) { const el = $('#planFailed'); if (el) el.textContent = data.failed; }
+}
+
+function updateNoiseTab(data) {
+  show($('#adaptiveEmpty'), false);
+  if (data.requests !== undefined) { const el = $('#noiseRequests'); if (el) el.textContent = data.requests; }
+  if (data.cached !== undefined) { const el = $('#noiseCached'); if (el) el.textContent = data.cached; }
+  if (data.throttled !== undefined) { const el = $('#noiseThrottled'); if (el) el.textContent = data.throttled; }
+  if (data.blocked !== undefined) { const el = $('#noiseBlocked'); if (el) el.textContent = data.blocked; }
+}
