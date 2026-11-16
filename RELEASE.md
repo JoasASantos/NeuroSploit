@@ -1,3 +1,41 @@
+# NeuroSploit v4.4.1 — Release Notes
+
+**Credits:** Joas A Santos & Red Team Leaders
+
+## v4.4.1 — Operations engineering for long runs
+
+Five new harness modules, inspired by Artex's operating model. Each is pure,
+deterministic and unit-tested (562 harness tests pass).
+
+- **Cold-node digests** (`cold_digest`) — settled exploration nodes (completed
+  intents, facts, negatives) that stay untouched for N planner rounds are grouped
+  and folded into short digests for the planner prompt. Goals, findings, hints and
+  pending work are never folded. The graph itself is never mutated; a member that
+  becomes active again invalidates its digest. LLM digest prompt plus an offline
+  heuristic fallback.
+- **Operator constraints** (`constraints`) — "no port scan", "passive only" and
+  similar rules are extracted from the task text into self-contained deny/allow
+  statements (the concrete target replaces "the current target"), injected into
+  worker prompts, and the common classes (port scan, brute force, DoS) are blocked
+  deterministically at command level. Constraints only restrict; they never widen
+  what `scope.rs` allows.
+- **Single-generator intent queue** (`intent_queue`) — only the planner (or the
+  operator) can create intents; workers claim, complete or fail them and can only
+  `suggest()` leads. Dedupe, priority claiming that respects `depends_on`, bounded
+  retries, attempt refund on release.
+- **Wrap-up** (`wrapup`) — when turns or time run out, the run gets a short
+  settlement phase with only persistence tools open and a per-role prompt, so
+  findings, facts and negative results already identified are saved instead of lost.
+- **Retest verdicts** (`retest`) — `reproduced` / `fixed` / `inconclusive` computed
+  in code. `fixed` requires a comparable environment, met preconditions, a completed
+  trigger, a passing positive control and written evidence; timeouts, WAF blocks and
+  auth failures can never produce `fixed`.
+
+Note: the modules are available in the harness crate; pipeline wiring follows in a
+later release.
+
+---
+
 # NeuroSploit v3.6.8 — Release Notes
 
 **Release Date:** August 2026
