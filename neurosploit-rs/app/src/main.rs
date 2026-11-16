@@ -254,6 +254,13 @@ enum Cmd {
         #[arg(long = "top", default_value_t = 5)]
         top: usize,
     },
+    /// Manage the local Neo4j used for the attack/exploration graph: start it in
+    /// Docker, check it, stop it, sync a run into it. Once `up`, runs use it
+    /// automatically (no --neo4j flag or NEO4J_* variables needed).
+    Neo4j {
+        #[command(subcommand)]
+        cmd: Neo4jCmd,
+    },
     /// Verify a finished run's audit trail — the hash chain and, with --anchor,
     /// the signed anchors that catch truncation and silent rebuilds.
     Audit {
@@ -892,6 +899,7 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Compliance { run, framework, include_leads } => handle_compliance(&base, &run, &framework, include_leads)?,
         Cmd::Poc { run, repeats, apply, only, json } => handle_poc(&base, &run, repeats, apply, only, json).await?,
         Cmd::Sandbox { cmd } => handle_sandbox(cmd).await?,
+        Cmd::Neo4j { cmd } => handle_neo4j(&base, cmd).await?,
         Cmd::Capability { cmd } => handle_capability(cmd)?,
         Cmd::Provenance { cmd } => handle_provenance(cmd)?,
         Cmd::Internal { graph, scaffold, from, expand, mermaid, save } => {
@@ -1630,6 +1638,41 @@ fn apply_authorization(
 }
 
 #[derive(Subcommand)]
+enum Neo4jCmd {
+    /// Create/start the Neo4j container (127.0.0.1 only), save the connection,
+    /// and wait until it answers. Safe to re-run.
+    Up {
+        /// Image (default neo4j:5-community).
+        #[arg(long)]
+        image: Option<String>,
+        /// Start it but do not let runs use it automatically.
+        #[arg(long = "no-auto")]
+        no_auto: bool,
+    },
+    /// Stop and remove the container (data volume kept unless --purge).
+    Down {
+        /// Also delete the data volume and the saved connection.
+        #[arg(long)]
+        purge: bool,
+    },
+    /// Show container and connection state.
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Push a finished run's graphs into Neo4j and print chain leads.
+    Sync {
+        /// Run id (`ns-…`) or a path to the run directory.
+        run: String,
+    },
+    /// Print the saved connection (password hidden unless --show-password).
+    Info {
+        #[arg(long = "show-password")]
+        show_password: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum SandboxCmd {
     /// Pull the image and start the container.
     Up {
@@ -1862,7 +1905,9 @@ async fn handle_graph(base: &std::path::Path, run: &str, internal: Option<&str>,
         anyhow::bail!("{} is not a readable internal graph", ipath.display());
     }
     let mut b = gm::build(&target, &run_id, &findings, ig.as_ref(), None);
-    let neo = gm::Neo4j::resolve(neo4j).filter(|_| push || neo4j.is_some() || std::env::var("NEO4J_URI").is_ok());
+    let neo = gm::Neo4j::resolve(neo4j).filter(|_| {
+        push || neo4j.is_some() || std::env::var("NEO4J_URI").is_ok() || harness::neo4j_managed::auto_connection().is_some()
+    });
     if let Some(n) = &neo {
         let mut pushed = b.clone();
         let local = gm::chains(&pushed, 8, 50);
@@ -2039,6 +2084,59 @@ async fn handle_poc(base: &std::path::Path, run: &str, repeats: usize, apply: bo
         }
         std::fs::write(dir.join("findings.json"), serde_json::to_string_pretty(&findings)?)?;
         println!("  \x1b[2mwrote demotions back to findings.json — run `neurosploit rebuild {run}` to refresh the report\x1b[0m");
+    }
+    Ok(())
+}
+
+async fn handle_neo4j(base: &std::path::Path, cmd: Neo4jCmd) -> anyhow::Result<()> {
+    use harness::neo4j_managed as nm;
+    match cmd {
+        Neo4jCmd::Up { image, no_auto } => {
+            println!("  starting Neo4j (this can take a minute on first boot)…");
+            let c = nm::up(image.as_deref(), !no_auto).await.map_err(|e| anyhow::anyhow!(e))?;
+            println!("  \x1b[1;32m✓\x1b[0m neo4j ready");
+            println!("    browser : {}", c.http_uri());
+            println!("    bolt    : {}", c.bolt_uri());
+            println!("    user    : {}   (password saved to {}, mode 0600)", c.user,
+                nm::config_path().map(|p| p.display().to_string()).unwrap_or_default());
+            println!("    runs use it {}", if c.auto { "automatically" } else { "only with --neo4j (auto disabled)" });
+        }
+        Neo4jCmd::Down { purge } => {
+            nm::down(purge).await.map_err(|e| anyhow::anyhow!(e))?;
+            println!("  neo4j stopped{}", if purge { " and data purged" } else { " (data volume kept)" });
+        }
+        Neo4jCmd::Status { json } => {
+            let s = nm::status().await;
+            if json {
+                println!("{}", serde_json::to_string(&s)?);
+            } else {
+                println!("  state   : {:?}{}", s.state, if s.ready { " (ready)" } else { "" });
+                if let Some(r) = &s.runtime { println!("  runtime : {r}"); }
+                if let Some(u) = &s.browser { println!("  browser : {u}"); }
+                println!("  auto-use: {}", s.auto);
+            }
+        }
+        Neo4jCmd::Info { show_password } => {
+            let c = nm::load().ok_or_else(|| anyhow::anyhow!("no managed neo4j configured — run `neurosploit neo4j up`"))?;
+            println!("  http: {}\n  bolt: {}\n  user: {}\n  db  : {}\n  pass: {}", c.http_uri(), c.bolt_uri(), c.user, c.database,
+                if show_password { c.password.clone() } else { "(hidden; use --show-password)".into() });
+        }
+        Neo4jCmd::Sync { run } => {
+            let n = harness::graph_memory::Neo4j::resolve(None)
+                .ok_or_else(|| anyhow::anyhow!("no neo4j configured — run `neurosploit neo4j up` or set NEO4J_URI"))?;
+            let dir = resolve_run(base, &run)?;
+            let target = std::fs::read_to_string(dir.join("meta.json")).ok()
+                .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                .and_then(|v| v.get("target").and_then(|x| x.as_str()).map(String::from))
+                .unwrap_or_else(|| run.clone());
+            let rid = dir.file_name().and_then(|s| s.to_str()).unwrap_or("run").to_string();
+            let dg = harness::exploration_graph::DualGraph::load(&dir.join("graphs"))
+                .map_err(|e| anyhow::anyhow!("no exploration graph in {} ({e})", dir.join("graphs").display()))?;
+            let leads = harness::neo4j_exploration::sync(&n, &dg, &target, &rid).await?;
+            println!("  neo4j: synced {} asset(s), {} exploration node(s) → {}", dg.assets.nodes.len(), dg.exploration.nodes.len(), n.label());
+            if leads.is_empty() { println!("  no chain leads yet"); }
+            for l in &leads { println!("  lead: {l}"); }
+        }
     }
     Ok(())
 }

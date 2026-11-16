@@ -800,15 +800,33 @@ watch the graph evolve (the web console's Attack graph tab reads these).
 
 ### Enabling Neo4j (optional)
 
-Point the run at a Neo4j and the graph is MERGEd in at the end, and accumulated paths from earlier
-runs are read back:
+**Easiest: let NeuroSploit run it.** One command starts a local Neo4j in Docker, generates a
+password, saves the connection, and from then on every run uses it automatically:
 
 ```bash
-# one-time: a local Neo4j in Docker
-docker run -d --name neo4j -p7474:7474 -p7687:7687 \
-  -e NEO4J_AUTH=neo4j/please-change-me neo4j:5
+neurosploit neo4j up          # create/start (127.0.0.1 only), wait until ready
+neurosploit neo4j status      # state, URLs, whether runs use it automatically
+neurosploit neo4j info        # connection details (--show-password to reveal)
+neurosploit neo4j sync <run>  # push a run's exploration graph, print chain leads
+neurosploit neo4j down        # stop (data kept); add --purge to delete data + saved connection
+```
 
-# credentials ONLY via env — never on the command line, never written to disk
+- The connection (including the generated password) is saved to `~/.neurosploit/neo4j.json`
+  (or `$NEUROSPLOIT_HOME/neo4j.json`) with mode `0600`. The password is handed to Docker through
+  the environment, never on a command line.
+- `neurosploit neo4j up --no-auto` starts it but keeps runs from using it unless you pass `--neo4j`.
+- An explicit `--neo4j` or `NEO4J_URI` always wins over the managed instance.
+- With Neo4j active, each graph checkpoint also pushes the **exploration graph** (assets, goals,
+  intents, facts, negatives, findings and their anchors) and reads back **chain leads**: untested
+  assets sitting next to something already broken. Those leads are injected into agent prompts as
+  unverified hypotheses.
+- The web console backend exposes the same controls: `GET /api/neo4j/status`,
+  `POST /api/neo4j/up`, `POST /api/neo4j/down`, `POST /api/runs/<id>/neo4j-sync`.
+- Prefer compose? `NEO4J_PASSWORD=... docker compose -f docker-compose.neo4j.yml up -d`.
+
+**Bring your own Neo4j.** Point the run at any instance; credentials only via env:
+
+```bash
 export NEO4J_USER=neo4j NEO4J_PASSWORD='please-change-me'
 neurosploit run https://app.example --neo4j bolt://localhost:7687
 ```

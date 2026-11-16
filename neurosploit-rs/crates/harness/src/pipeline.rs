@@ -2093,6 +2093,21 @@ async fn graph_checkpoint(
             Ok(_) => synced = " · neo4j synced".into(),
             Err(e) => synced = format!(" · neo4j push skipped ({e})"),
         }
+        // Exploration graph (assets + what was tried): push it and turn
+        // "untested assets next to a finding" into prompt leads for the agents.
+        if let Some(d) = cfg.workdir.as_deref() {
+            if let Ok(dg) = crate::exploration_graph::DualGraph::load(&Path::new(d).join("graphs")) {
+                match crate::neo4j_exploration::sync(n, &dg, &cfg.target, &rid).await {
+                    Ok(leads) if !leads.is_empty() => {
+                        let cur = gm::live_context(&rid);
+                        gm::set_live_context(&rid, format!("{cur}{}", crate::neo4j_exploration::suggestion_block(&leads)));
+                        synced.push_str(&format!(" · {} chain lead(s)", leads.len()));
+                    }
+                    Ok(_) => {}
+                    Err(e) => synced.push_str(&format!(" · exploration sync skipped ({e})")),
+                }
+            }
+        }
     }
     let (h, sv, ep, sec) = gm::surface_counts(&gb);
     let confirmed = cs.iter().filter(|c| c.status == gm::Status::Confirmed).count();
