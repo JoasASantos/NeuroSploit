@@ -1,0 +1,31 @@
+# Local Neo4j for NeuroSploit's attack / exploration graph.
+#
+#   NEO4J_PASSWORD='choose-a-password' docker compose -f docker-compose.neo4j.yml up -d
+#   export NEO4J_URI=bolt://127.0.0.1:7687 NEO4J_USER=neo4j NEO4J_PASSWORD='choose-a-password'
+#
+# Or skip all of this and let NeuroSploit manage it for you (generated password,
+# saved with mode 0600, used automatically by runs):
+#
+#   neurosploit neo4j up
+#
+# Ports are bound to loopback only. Do not publish them on a shared network.
+services:
+  neo4j:
+    image: neo4j:5-community
+    container_name: neurosploit-neo4j
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:7474:7474"   # browser / HTTP transactional API (what NeuroSploit uses)
+      - "127.0.0.1:7687:7687"   # bolt
+    environment:
+      NEO4J_AUTH: "neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD}"
+    volumes:
+      - neurosploit-neo4j-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  neurosploit-neo4j-data:

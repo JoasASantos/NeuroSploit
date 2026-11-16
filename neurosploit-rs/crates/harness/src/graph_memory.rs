@@ -1930,10 +1930,41 @@ pub struct Neo4j {
 }
 
 impl Neo4j {
-    /// From an explicit URI, else `NEO4J_URI`. `None` when neither is set.
+    /// From an explicit URI, else `NEO4J_URI`, else the managed local instance
+    /// (`neurosploit neo4j up`) when it is configured for automatic use.
+    /// `None` when none of those is set.
     pub fn resolve(explicit: Option<&str>) -> Option<Neo4j> {
-        let uri = explicit.map(str::to_string).filter(|s| !s.trim().is_empty()).or_else(|| std::env::var("NEO4J_URI").ok().filter(|s| !s.trim().is_empty()))?;
-        Some(Neo4j::new(&uri))
+        let uri = explicit.map(str::to_string).filter(|s| !s.trim().is_empty()).or_else(|| std::env::var("NEO4J_URI").ok().filter(|s| !s.trim().is_empty()));
+        if let Some(uri) = uri { return Some(Neo4j::new(&uri)); }
+        let (uri, db, user, pass) = crate::neo4j_managed::auto_connection()?;
+        Some(Neo4j::with_credentials(&uri, &db, &user, &pass))
+    }
+
+    pub fn with_credentials(uri: &str, db: &str, user: &str, pass: &str) -> Neo4j {
+        Neo4j {
+            base: http_base(uri),
+            db: db.to_string(),
+            user: user.to_string(),
+            pass: pass.to_string(),
+            http: reqwest::Client::builder().timeout(std::time::Duration::from_secs(60)).build().unwrap_or_default(),
+        }
+    }
+
+    /// Run a batch of (cypher, params) statements in one transaction each chunk.
+    /// Used by sibling modules (exploration graph sync); returns the raw result.
+    pub async fn run_statements(&self, stmts: Vec<(String, Value)>) -> anyhow::Result<Vec<Value>> {
+        let mut out = Vec::new();
+        for chunk in stmts.chunks(10) {
+            out.push(self.tx(chunk.iter().map(|(s, p)| json!({"statement": s, "parameters": p})).collect()).await?);
+        }
+        Ok(out)
+    }
+
+    /// One read query; rows come back as JSON arrays in column order.
+    pub async fn query_rows(&self, cypher: &str, params: Value) -> anyhow::Result<Vec<Vec<Value>>> {
+        let v = self.tx(vec![json!({"statement": cypher, "parameters": params, "resultDataContents": ["row"]})]).await?;
+        Ok(v.pointer("/results/0/data").and_then(|d| d.as_array()).cloned().unwrap_or_default().into_iter()
+            .filter_map(|r| r.get("row").and_then(|x| x.as_array()).cloned()).collect())
     }
 
     pub fn new(uri: &str) -> Neo4j {

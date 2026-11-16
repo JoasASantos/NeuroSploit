@@ -49,6 +49,8 @@ pub mod redact;
 pub mod request_analyzer;
 pub mod provenance;
 pub mod models;
+pub mod neo4j_exploration;
+pub mod neo4j_managed;
 pub mod netguard;
 pub mod noise_governor;
 pub mod oob;

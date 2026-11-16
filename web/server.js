@@ -2012,6 +2012,42 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // ---- Neo4j (managed local instance; the CLI does the Docker work) ----
+    if (p === '/api/neo4j/status' && req.method === 'GET') {
+      const out = await runCli(['neo4j', 'status', '--json']);
+      let st = null;
+      try { st = JSON.parse(lastJsonLine(out.buf)); } catch { /* fall through */ }
+      if (!st || Array.isArray(st) || typeof st.state !== 'string') return sendJson(res, 502, { error: out.buf.trim() || 'neo4j status failed' });
+      return sendJson(res, 200, st);
+    }
+    if (p === '/api/neo4j/up' && req.method === 'POST') {
+      const body = await readBody(req).catch(() => ({}));
+      const args = ['neo4j', 'up'];
+      if (body.noAuto) args.push('--no-auto');
+      // Image is passed as an argument vector (no shell), but keep it to a
+      // plain image reference anyway.
+      if (typeof body.image === 'string' && /^[a-z0-9][a-z0-9._/:@-]{0,200}$/i.test(body.image)) args.push('--image', body.image);
+      const out = await runCli(args);
+      if (out.code !== 0) return sendJson(res, 502, { error: out.buf.trim() || 'neo4j up failed' });
+      return sendJson(res, 200, { ok: true, output: out.buf.trim() });
+    }
+    if (p === '/api/neo4j/down' && req.method === 'POST') {
+      const body = await readBody(req).catch(() => ({}));
+      const args = ['neo4j', 'down'];
+      if (body.purge === true) args.push('--purge');
+      const out = await runCli(args);
+      if (out.code !== 0) return sendJson(res, 502, { error: out.buf.trim() || 'neo4j down failed' });
+      return sendJson(res, 200, { ok: true, output: out.buf.trim() });
+    }
+    m = p.match(/^\/api\/runs\/([^/]+)\/neo4j-sync$/);
+    if (req.method === 'POST' && m) {
+      const dir = safeRunDir(decodeURIComponent(m[1]));
+      if (!dir || !fs.existsSync(dir)) return sendJson(res, 404, { error: 'run not found' });
+      const out = await runCli(['neo4j', 'sync', dir]);
+      if (out.code !== 0) return sendJson(res, 502, { error: out.buf.trim() || 'neo4j sync failed' });
+      return sendJson(res, 200, { ok: true, output: out.buf.trim() });
+    }
+
     // ---- attack graph / traffic / traces (files the CLI wrote) ----
     m = p.match(/^\/api\/runs\/([^/]+)\/graph$/);
     if (m) {
