@@ -2053,6 +2053,11 @@ async fn graph_checkpoint(
 
     let mut gb = gm::build(&cfg.target, &rid, findings, internal.as_ref(), Some(&history));
     gm::project_recon(&mut gb, &cfg.target, recon, &in_scope);
+    // Keep the exploration/asset graph current (planner prompt, digests, Neo4j).
+    // Best-effort: a write problem must never fail the run.
+    if let Some(d) = cfg.workdir.as_deref() {
+        let _ = crate::dual_build::update_and_save(&Path::new(d).join("graphs"), &cfg.target, recon, findings, &in_scope);
+    }
     let neo = gm::Neo4j::resolve(cfg.neo4j.as_deref());
     if let Some(n) = &neo {
         match n.fetch_paths(&gb.target_id, 300).await {
