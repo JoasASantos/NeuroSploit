@@ -28,6 +28,7 @@ pub mod wrapup;
 pub mod creds;
 pub mod cvss;
 pub mod deliverables;
+pub mod dual_build;
 pub mod exploration_graph;
 pub mod graph_memory;
 pub mod grounding;
