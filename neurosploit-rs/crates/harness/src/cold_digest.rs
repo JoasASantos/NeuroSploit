@@ -65,6 +65,8 @@ pub struct DigestState {
     last_status: HashMap<String, ExplorationStatus>,
     pub digests: Vec<Digest>,
     params: ColdParams,
+    #[serde(default)]
+    last_version: u64,
 }
 
 fn is_settled(n: &ExplorationNode) -> bool {
@@ -93,6 +95,16 @@ impl DigestState {
     pub fn new() -> Self { Self::default() }
 
     pub fn with_params(params: ColdParams) -> Self { Self { params, ..Self::default() } }
+
+    /// Advance a round only when the graph actually changed, so many prompt
+    /// builds against an unchanged graph do not age nodes artificially.
+    /// Returns true if a round was run.
+    pub fn maintain_if_changed(&mut self, g: &ExplorationGraph) -> bool {
+        if self.round > 0 && g.version == self.last_version { return false; }
+        self.last_version = g.version;
+        self.maintain(g);
+        true
+    }
 
     /// Cheap bookkeeping, once per planner round. Never calls an LLM.
     /// Nodes that are new or changed status are "touched" (kept hot).
@@ -261,6 +273,18 @@ pub fn heuristic_digest(g: &ExplorationGraph, group: &ColdGroup, p: &ColdParams)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn maintain_if_changed_ages_only_on_graph_change() {
+        let mut g = graph_with_settled(5);
+        let mut st = DigestState::new();
+        assert!(st.maintain_if_changed(&g));
+        assert!(!st.maintain_if_changed(&g));
+        assert_eq!(st.round, 1);
+        g.add_hint("lead", "exp-0", "w");
+        assert!(st.maintain_if_changed(&g));
+        assert_eq!(st.round, 2);
+    }
 
     fn graph_with_settled(n: usize) -> ExplorationGraph {
         let mut g = ExplorationGraph::new();

@@ -151,6 +151,39 @@ fn prompt_prefix_enabled() -> bool {
     std::env::var("NEUROSPLOIT_PROMPT_PREFIX").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false)
 }
 
+/// Operator constraints extracted (offline, keyword-based) from the free-text
+/// fields of the run config. Deterministic and cheap; an LLM reply can be
+/// unioned in by callers via `constraints::extract`.
+fn operator_constraints(cfg: &RunConfig) -> crate::constraints::ConstraintSet {
+    let text = [cfg.objective.as_deref(), cfg.instructions.as_deref(), cfg.out_of_scope.as_deref()]
+        .into_iter().flatten().collect::<Vec<_>>().join("\n");
+    if text.trim().is_empty() { return crate::constraints::ConstraintSet::new(); }
+    crate::constraints::extract(&text, &cfg.target, None)
+}
+
+/// Exploration block for prompts. Once settled history exists it is folded into
+/// digests (persisted next to the graph); otherwise the plain summary is used.
+/// Any I/O failure falls back to the plain summary: this must never break a run.
+fn compact_graph_block(graph_dir: &std::path::Path, dg: &crate::exploration_graph::DualGraph) -> String {
+    use crate::cold_digest::{heuristic_digest, ColdParams, DigestState};
+    let path = graph_dir.join("digest-state.json");
+    let params = ColdParams::default();
+    let mut st = std::fs::read_to_string(&path).ok()
+        .and_then(|j| serde_json::from_str::<DigestState>(&j).ok())
+        .unwrap_or_else(|| DigestState::with_params(params));
+    if st.maintain_if_changed(&dg.exploration) {
+        for grp in st.cold_groups(&dg.exploration, &params) {
+            let body = heuristic_digest(&dg.exploration, &grp, &params);
+            st.commit(&dg.exploration, &grp, &body, &params);
+        }
+        if let Ok(j) = serde_json::to_string(&st) { let _ = std::fs::write(&path, j); }
+    }
+    if st.digests.is_empty() { return dg.prompt_block(); }
+    let mut s = dg.assets.prompt_summary();
+    s.push_str(&st.compact_summary(&dg.exploration, 15));
+    s
+}
+
 /// Operator directives (focus instructions + auth material) prepended to
 /// recon/exploit prompts so the engagement is steered as the user asked.
 fn operator_directives(cfg: &RunConfig) -> String {
@@ -182,6 +215,9 @@ fn operator_directives(cfg: &RunConfig) -> String {
         s.push_str(&format!(
             "OUT OF SCOPE — additional operator constraints (techniques, flows, data) beyond the host rules above: {oos}\n"));
     }
+    // Behavioural limits the operator wrote in free text, made self-contained.
+    // Extra layer on top of scope.rs: it can only restrict, never authorize.
+    s.push_str(&operator_constraints(cfg).prompt_block());
     if let Some(auth) = cfg.auth.as_deref().filter(|x| !x.trim().is_empty()) {
         s.push_str(&format!("AUTHENTICATION — test as an authenticated user; send this with each request: {auth}\n"));
     }
@@ -238,7 +274,7 @@ fn operator_directives(cfg: &RunConfig) -> String {
         // Dual graph: asset coverage + exploration state.
         let graph_dir = std::path::Path::new(workdir).join("graphs");
         if let Ok(dg) = crate::exploration_graph::DualGraph::load(&graph_dir) {
-            let block = dg.prompt_block();
+            let block = compact_graph_block(&graph_dir, &dg);
             if !block.is_empty() { s.push_str(&block); }
         }
         // Planner state: pending intents and queue.
@@ -4984,6 +5020,11 @@ const RECON_TOTAL_BUDGET_SECS: u64 = 300; // 5 minutes total
 /// so the Kali toolbox powers recon) or on the host. Returns stdout, or None if
 /// the tool isn't available / failed. Short-timed so a missing tool is cheap.
 async fn recon_tool(cfg: &RunConfig, tool: &str, command: &str) -> Option<String> {
+    // Operator constraint (e.g. "no port scan") enforced in code, not by prompt.
+    if let Some(c) = operator_constraints(cfg).check_command(command) {
+        eprintln!("[constraint] skipped `{tool}`: {}", c.text);
+        return None;
+    }
     if let Some(image) = cfg.sandbox.as_deref() {
         let mut sc = crate::sandbox::SandboxConfig::default();
         if !image.trim().is_empty() { sc = sc.with_image(image); }
@@ -5870,5 +5911,56 @@ mod dedup_tests {
         let h = default_scan_headers();
         assert_eq!(h.get("X-NeuroSploit-Scan").unwrap(), env!("CARGO_PKG_VERSION"));
         assert_eq!(h.get(reqwest::header::ACCEPT).unwrap(), "*/*");
+    }
+}
+
+#[cfg(test)]
+mod ops_wiring_tests {
+    use super::*;
+
+    fn cfg(extra: serde_json::Value) -> RunConfig {
+        let mut base = serde_json::json!({"target": "app.example.com", "models": []});
+        base.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(base).expect("RunConfig from json")
+    }
+
+    #[test]
+    fn operator_constraint_reaches_prompt_and_blocks_scanners() {
+        let c = cfg(serde_json::json!({"instructions": "Focus on auth. No port scan please."}));
+        assert!(operator_directives(&c).contains("OPERATOR CONSTRAINTS"));
+        assert!(operator_constraints(&c).check_command("nmap -sV app.example.com").is_some());
+        assert!(operator_constraints(&c).check_command("curl https://app.example.com").is_none());
+    }
+
+    #[test]
+    fn no_constraint_text_means_no_block_and_nothing_blocked() {
+        let c = cfg(serde_json::json!({"instructions": "focus on injection"}));
+        assert!(!operator_directives(&c).contains("OPERATOR CONSTRAINTS"));
+        assert!(operator_constraints(&c).check_command("nmap x").is_none());
+    }
+
+    #[test]
+    fn graph_block_folds_settled_history_and_persists_state() {
+        use crate::exploration_graph::{DualGraph, ExplorationStatus};
+        let dir = std::env::temp_dir().join(format!("ns-digest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut dg = DualGraph::default();
+        let goal = dg.exploration.add_goal("test auth", "planner");
+        let intent = dg.exploration.add_intent("probe login", &goal, "planner");
+        for i in 0..8 { dg.exploration.add_negative(&format!("param {i} clean"), &intent, "w"); }
+        dg.exploration.set_status(&intent, ExplorationStatus::Completed);
+        // Each graph change ages the history by one round; fold after it settles.
+        let mut out = compact_graph_block(&dir, &dg);
+        for _ in 0..5 {
+            dg.exploration.add_hint("noise", &goal, "w");
+            out = compact_graph_block(&dir, &dg);
+        }
+        assert!(out.contains("digest-0"), "settled nodes should be folded: {out}");
+        assert!(dir.join("digest-state.json").exists());
+        // Corrupt state must not break prompt building.
+        std::fs::write(dir.join("digest-state.json"), "{not json").unwrap();
+        assert!(!compact_graph_block(&dir, &dg).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

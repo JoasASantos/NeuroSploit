@@ -31,8 +31,11 @@ deterministic and unit-tested (562 harness tests pass).
   trigger, a passing positive control and written evidence; timeouts, WAF blocks and
   auth failures can never produce `fixed`.
 
-Note: the modules are available in the harness crate; pipeline wiring follows in a
-later release.
+Pipeline wiring (post-4.4.1): operator constraints are injected into every
+recon/exploit prompt and enforced on recon commands; the exploration block in
+prompts is folded into digests (persisted as `graphs/digest-state.json`). The queue,
+wrap-up and retest modules are available in the harness crate; their drivers land
+in a later release.
 
 ---
 
