@@ -1,3 +1,35 @@
+# NeuroSploit v4.4.2 — Release Notes
+
+**Credits:** Joas A Santos & Red Team Leaders
+
+## v4.4.2 — Managed Neo4j and a populated exploration graph
+
+- **Managed Neo4j.** `neurosploit neo4j up|down|status|info|sync` starts a local Neo4j in
+  Docker (ports bound to `127.0.0.1` only), generates a password, saves the connection to
+  `~/.neurosploit/neo4j.json` (mode `0600`) and hands the password to Docker through the
+  environment, never on a command line. Once up, runs use it automatically; an explicit
+  `--neo4j` or `NEO4J_URI` always wins. `down` keeps the data and disables auto-use;
+  `down --purge` deletes data and the saved connection. `docker-compose.neo4j.yml` is provided
+  for those who prefer compose.
+- **Exploration graph in Neo4j.** Assets and the exploration graph (goals, intents, facts,
+  negatives, findings, anchors) are MERGEd with closed-enum labels and relationship types;
+  free text only travels as parameters. A chain query surfaces untested assets sitting next to
+  something already broken and injects them into agent prompts as unverified hypotheses.
+- **The graph is now actually populated.** At every graph checkpoint the pipeline writes
+  `graphs/dual-graph.json` from recon (in-scope hosts, subdomains, endpoints, parameters) and
+  findings (intent -> finding with anchors). Idempotent; validation updates status in place;
+  out-of-scope hosts and URLs never enter.
+- **Operator constraints and cold digests are wired into the pipeline** (from 4.4.1's
+  modules): extracted constraints reach every recon/exploit prompt and are enforced on recon
+  commands; settled exploration history is folded into digests in the prompt block.
+- **Web backend.** `GET /api/neo4j/status`, `POST /api/neo4j/up`, `POST /api/neo4j/down`,
+  `POST /api/runs/<id>/neo4j-sync`.
+
+Known gap: the intent queue, wrap-up and retest modules from 4.4.1 are library-only; their
+drivers in the agent loop are not wired yet.
+
+---
+
 # NeuroSploit v4.4.1 — Release Notes
 
 **Credits:** Joas A Santos & Red Team Leaders
