@@ -142,6 +142,10 @@ enum Cmd {
         /// support MCP fall back to their built-in tools).
         #[arg(long)]
         mcp: bool,
+        /// MCP tool profile: web · mobile-android · mobile-ios · binary · burp.
+        /// Auto-registers the right MCP server and tool allowlist for the test type.
+        #[arg(long = "mcp-profile")]
+        mcp_profile: Option<String>,
         /// Credentials YAML for authenticated testing (jwt/header/cookie/login).
         #[arg(long)]
         creds: Option<String>,
@@ -211,6 +215,14 @@ enum Cmd {
         /// Verbose: log each agent as it launches, recon, and votes.
         #[arg(short, long)]
         verbose: bool,
+        /// Agent autonomy level: cautious, standard (default), aggressive, full.
+        #[arg(long, default_value = "standard")]
+        autonomy: String,
+        /// Use the event-driven reactive engine instead of the default phased
+        /// pipeline. The planner wakes on graph changes; workers claim from a
+        /// shared intent queue. Experimental opt-in.
+        #[arg(long)]
+        reactive: bool,
     },
     /// Run NeuroSploit as an MCP server (stdio) so Claude Code, Codex, Cursor
     /// and other MCP clients can drive it as a set of tools.
@@ -905,7 +917,7 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Internal { graph, scaffold, from, expand, mermaid, save } => {
             handle_internal(graph.as_deref(), scaffold.as_deref(), &from, expand, mermaid, save.as_deref())?
         }
-        Cmd::Run { url, models, max_agents, vote_n, chain_depth, recon, quick, offline, subscription, mcp, creds, focus, objective, out_of_scope, in_scope, scope_file, environment, policy, budget, token_limit, deep_test_limit, coverage_first, depth_first, sample_per_route, revalidate_poc, compliance, jira, only, verbose } => {
+        Cmd::Run { url, models, max_agents, vote_n, chain_depth, recon, quick, offline, subscription, mcp, mcp_profile, creds, focus, objective, out_of_scope, in_scope, scope_file, environment, policy, budget, token_limit, deep_test_limit, coverage_first, depth_first, sample_per_route, revalidate_poc, compliance, jira, only, verbose, autonomy, reactive } => {
             let url = if url.starts_with("http") { url } else { format!("https://{url}") };
             // A wildcard target (`*.zoom.us`) is domain-wide: seed recon with the
             // apex (a literal `*.zoom.us` has no DNS record to probe) and widen
@@ -956,6 +968,9 @@ async fn main() -> anyhow::Result<()> {
             if !models.is_empty() {
                 cfg.models = models;
             }
+            cfg.reactive = reactive;
+            cfg.mcp_profile = mcp_profile;
+            cfg.autonomy = autonomy;
             apply_creds(&mut cfg, creds.as_deref()).await;
             let out = run_engagement(&base, cfg, mcp, false).await?;
             print_findings(&out);
@@ -1426,6 +1441,7 @@ pub(crate) fn spawn_engagement(base: &Path, mut cfg: RunConfig, mcp: bool, mode:
             Mode::Skills => harness::pipeline::run_skills_audit(cfg, &lib, &pool, tx).await,
             Mode::Mobile => harness::run_mobile(cfg, &lib, &pool, tx).await,
             Mode::Container => harness::run_container(cfg, &lib, &pool, tx).await,
+            Mode::Black if cfg.reactive => harness::run_reactive(cfg, &lib, &pool, tx).await,
             Mode::Black => harness::run(cfg, &lib, &pool, tx).await,
         }
     });

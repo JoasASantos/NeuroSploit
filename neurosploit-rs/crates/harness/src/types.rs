@@ -319,6 +319,16 @@ pub struct RunConfig {
     /// autonomy — no guardrails on tool installs, research, creative attacks).
     #[serde(default = "default_autonomy")]
     pub autonomy: String,
+    /// Opt-in: use the event-driven reactive engine instead of the default
+    /// phased pipeline. The planner wakes on graph changes and workers claim
+    /// intents from a shared queue. Experimental — the phased pipeline remains
+    /// the default and the most tested path.
+    #[serde(default)]
+    pub reactive: bool,
+    /// MCP tool profile: `web`, `mobile-android`, `mobile-ios`, `binary`, `burp`.
+    /// When set, the matching MCP server and tool allowlist are auto-configured.
+    #[serde(default)]
+    pub mcp_profile: Option<String>,
 }
 
 fn default_autonomy() -> String {
@@ -386,6 +396,8 @@ impl RunConfig {
             api_collection: None,
             reference_prompts: Vec::new(),
             autonomy: default_autonomy(),
+            reactive: false,
+            mcp_profile: None,
         }
     }
 }

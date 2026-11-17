@@ -113,6 +113,108 @@ impl Settlement {
     }
 }
 
+/// Conclude prompt: re-enter a cut-off session to extract partial work.
+/// Unlike `prompt()` which guides a live agent, this addresses a session that
+/// was forcibly stopped and asks it to summarize what it accomplished.
+pub fn conclude_prompt(role: Role, partial_context: &str) -> String {
+    let preamble = "Your previous execution was interrupted. Do NOT continue testing. \
+        Instead, review what you accomplished and report it now.";
+    let body = match role {
+        Role::Worker => format!(
+            "{preamble}\n\n\
+            Context from your interrupted session:\n{partial_context}\n\n\
+            Report using these exact prefixes:\n\
+            - Finding: [severity] description (for confirmed vulnerabilities)\n\
+            - Fact: description (for observations, discovered endpoints, technologies)\n\
+            - Negative: description (for things you tested that were NOT vulnerable)\n\
+            - Incomplete: description (for work you started but could not finish)\n\n\
+            List everything you found, even partial results. Do not fabricate — only report what you actually observed."
+        ),
+        Role::Planner => format!(
+            "{preamble}\n\n\
+            Planning context:\n{partial_context}\n\n\
+            Report:\n\
+            - Intent: action on target (for planned but unsubmitted intents)\n\
+            - Fact: observation (for things you learned about the target)\n\
+            - Priority: description (for the most important next steps)\n\
+            Do not start new analysis."
+        ),
+        Role::Validator => format!(
+            "{preamble}\n\n\
+            Validation context:\n{partial_context}\n\n\
+            For each claim you were checking:\n\
+            - Finding: confirmed description (if you verified it)\n\
+            - Negative: disproven description (if you disproved it)\n\
+            - Incomplete: claim description, what was missing"
+        ),
+        Role::Reporter => format!(
+            "{preamble}\n\n\
+            Report context:\n{partial_context}\n\n\
+            Save whatever sections you completed. List missing sections as:\n\
+            - Incomplete: section name, what remains"
+        ),
+    };
+    body
+}
+
+/// Tracks enough context to resume a cut-off session via conclude.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionState {
+    /// What the agent was working on when cut off.
+    pub task_description: String,
+    /// Any partial output captured before the cut.
+    pub partial_output: String,
+    /// How many turns the agent completed.
+    pub turns_completed: u32,
+    /// Whether a conclude attempt was already made.
+    pub concluded: bool,
+}
+
+impl SessionState {
+    pub fn new(task: &str) -> Self {
+        Self { task_description: task.to_string(), ..Default::default() }
+    }
+
+    /// Build the context string for the conclude prompt.
+    pub fn context(&self) -> String {
+        let mut ctx = format!("Task: {}", self.task_description);
+        if !self.partial_output.is_empty() {
+            ctx.push_str(&format!("\nPartial output:\n{}", self.partial_output));
+        }
+        if self.turns_completed > 0 {
+            ctx.push_str(&format!("\nCompleted {} turn(s) before interruption.", self.turns_completed));
+        }
+        ctx
+    }
+}
+
+/// Parsed results from a conclude response.
+#[derive(Debug, Clone, Default)]
+pub struct ConcludeResults {
+    pub findings: Vec<String>,
+    pub facts: Vec<String>,
+    pub negatives: Vec<String>,
+    pub incomplete: Vec<String>,
+}
+
+/// Parse a conclude response into structured results.
+pub fn parse_conclude(response: &str) -> ConcludeResults {
+    let mut r = ConcludeResults::default();
+    for line in response.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("Finding:").or_else(|| trimmed.strip_prefix("FINDING:")) {
+            r.findings.push(rest.trim().to_string());
+        } else if let Some(rest) = trimmed.strip_prefix("Fact:").or_else(|| trimmed.strip_prefix("FACT:")) {
+            r.facts.push(rest.trim().to_string());
+        } else if let Some(rest) = trimmed.strip_prefix("Negative:").or_else(|| trimmed.strip_prefix("NEGATIVE:")) {
+            r.negatives.push(rest.trim().to_string());
+        } else if let Some(rest) = trimmed.strip_prefix("Incomplete:").or_else(|| trimmed.strip_prefix("INCOMPLETE:")) {
+            r.incomplete.push(rest.trim().to_string());
+        }
+    }
+    r
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,5 +256,33 @@ mod tests {
         let s = Settlement { reason: Some(Reason::TimeExhausted), findings_saved: 2, facts_saved: 5, incomplete: true };
         assert!(s.line().contains("2 finding(s)") && s.line().contains("INCOMPLETE"));
         assert_eq!(Settlement::default().line(), "completed normally");
+    }
+
+    #[test]
+    fn conclude_prompt_forbids_continued_testing() {
+        let p = conclude_prompt(Role::Worker, "scanning /api/users");
+        assert!(p.contains("Do NOT continue testing"));
+        assert!(p.contains("Finding:") && p.contains("Fact:") && p.contains("Negative:"));
+    }
+
+    #[test]
+    fn session_state_builds_context() {
+        let mut ss = SessionState::new("test IDOR on /api/users");
+        ss.partial_output = "Found endpoint returns 200 for other user IDs".into();
+        ss.turns_completed = 3;
+        let ctx = ss.context();
+        assert!(ctx.contains("IDOR") && ctx.contains("3 turn(s)") && ctx.contains("200 for other"));
+    }
+
+    #[test]
+    fn parse_conclude_extracts_structured_results() {
+        let resp = "Finding: [high] IDOR on /api/users/{id}\nFact: API uses sequential integer IDs\n\
+                    Negative: CSRF tokens are properly validated\nIncomplete: did not test admin endpoints";
+        let r = parse_conclude(resp);
+        assert_eq!(r.findings.len(), 1);
+        assert_eq!(r.facts.len(), 1);
+        assert_eq!(r.negatives.len(), 1);
+        assert_eq!(r.incomplete.len(), 1);
+        assert!(r.findings[0].contains("IDOR"));
     }
 }

@@ -472,6 +472,24 @@ $('#btnCustomLead').addEventListener('click', openLeadModal);
 $('#btnCloseLead').addEventListener('click', closeLeadModal);
 $('#btnLeadCancel').addEventListener('click', closeLeadModal);
 $('#leadModal').addEventListener('click', (e) => { if (e.target.id === 'leadModal') closeLeadModal(); });
+
+// Reactive engine info modal
+$('#btnReactiveInfo')?.addEventListener('click', () => show($('#reactiveModal'), true));
+$('#btnCloseReactive')?.addEventListener('click', () => show($('#reactiveModal'), false));
+$('#btnReactiveClose2')?.addEventListener('click', () => show($('#reactiveModal'), false));
+$('#btnEnableReactive')?.addEventListener('click', () => {
+  $('#fieldReactive').checked = true;
+  show($('#reactiveModal'), false);
+});
+$('#reactiveModal')?.addEventListener('click', (e) => { if (e.target.id === 'reactiveModal') show($('#reactiveModal'), false); });
+
+// MCP profile info — link near the MCP Profile select
+$('#fieldMcpProfile')?.parentElement?.querySelector('.field-help')?.insertAdjacentHTML('beforeend', ' <button class="btn-link" id="btnMcpProfileInfo">View profiles…</button>');
+$('#btnMcpProfileInfo')?.addEventListener('click', () => show($('#mcpProfileModal'), true));
+$('#btnCloseMcpProfile')?.addEventListener('click', () => show($('#mcpProfileModal'), false));
+$('#btnMcpProfileClose')?.addEventListener('click', () => show($('#mcpProfileModal'), false));
+$('#mcpProfileModal')?.addEventListener('click', (e) => { if (e.target.id === 'mcpProfileModal') show($('#mcpProfileModal'), false); });
+
 $$('#leadModeTabs .seg-tab').forEach((t) => t.addEventListener('click', () => setLeadMode(t.dataset.leadmode)));
 $('#leadDesc').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) $('#btnLeadGenerate').click();
@@ -660,6 +678,9 @@ function renderReview() {
     { k: 'PoC re-validation', v: $('#fieldRevalidatePoc').checked ? 'on' : 'off' },
     { k: 'TypeSafe', v: $('#fieldTypesafe') ? $('#fieldTypesafe').value : 'auto' },
     { k: 'Compliance', v: (['fieldCompPci', 'fieldCompHipaa', 'fieldCompSoc2', 'fieldCompGdpr'].map((id) => $(`#${id}`).checked && $(`#${id}`).value).filter(Boolean).join(', ')) || 'none' },
+    { k: 'Autonomy', v: $('#fieldAutonomy')?.value || 'standard' },
+    { k: 'MCP Profile', v: $('#fieldMcpProfile')?.value || 'auto' },
+    { k: 'Reactive engine', v: $('#fieldReactive')?.checked ? 'on' : 'off' },
     { k: 'Target auth', v: state.auth.header ? 'header set' : (state.auth.roles.length ? `${state.auth.roles.length} role(s)` : 'none') },
   ];
   $('#reviewGrid').innerHTML = items.map((it) => `
@@ -729,6 +750,9 @@ async function startExploitation() {
     oobDns: state.authz.oobDns || undefined,
     sms: state.authz.sms || undefined,
     scope: collectScope(),
+    reactive: $('#fieldReactive')?.checked || false,
+    mcpProfile: $('#fieldMcpProfile')?.value || undefined,
+    autonomy: $('#fieldAutonomy')?.value || 'standard',
   };
 
   $('#btnLaunch').disabled = true;
@@ -4233,6 +4257,28 @@ async function loadSettings() {
         <div class="config-card-actions"><button class="btn btn-accent" onclick="saveSettings()">Save</button></div>
       </div>
       <div class="config-card">
+        <div class="config-card-title">Reactive Engine</div>
+        <div class="form-group"><label>Default autonomy</label><select id="settingAutonomy">
+          <option value="cautious" ${cfg.autonomy === 'cautious' ? 'selected' : ''}>Cautious</option>
+          <option value="standard" ${!cfg.autonomy || cfg.autonomy === 'standard' ? 'selected' : ''}>Standard</option>
+          <option value="aggressive" ${cfg.autonomy === 'aggressive' ? 'selected' : ''}>Aggressive</option>
+          <option value="full" ${cfg.autonomy === 'full' ? 'selected' : ''}>Full</option>
+        </select></div>
+        <div class="form-group"><label>Default MCP profile</label><select id="settingMcpProfile">
+          <option value="" ${!cfg.mcpProfile ? 'selected' : ''}>Auto</option>
+          <option value="web" ${cfg.mcpProfile === 'web' ? 'selected' : ''}>Web</option>
+          <option value="mobile-android" ${cfg.mcpProfile === 'mobile-android' ? 'selected' : ''}>Mobile Android</option>
+          <option value="mobile-ios" ${cfg.mcpProfile === 'mobile-ios' ? 'selected' : ''}>Mobile iOS</option>
+          <option value="binary" ${cfg.mcpProfile === 'binary' ? 'selected' : ''}>Binary Analysis</option>
+          <option value="burp" ${cfg.mcpProfile === 'burp' ? 'selected' : ''}>Burp Suite</option>
+        </select></div>
+        <div class="form-group"><label>Reactive engine default</label><select id="settingReactive">
+          <option value="off" ${!cfg.reactive || cfg.reactive === 'off' ? 'selected' : ''}>Off (phased pipeline)</option>
+          <option value="on" ${cfg.reactive === 'on' ? 'selected' : ''}>On (event-driven)</option>
+        </select></div>
+        <div class="config-card-actions"><button class="btn btn-accent" onclick="saveSettings()">Save</button></div>
+      </div>
+      <div class="config-card">
         <div class="config-card-title">LLM Provider Keys</div>
         <div class="config-card-desc">API keys for the LLMs that run engagements. Kept in server memory only, never written to disk.</div>
         <div class="config-card-actions"><button class="btn btn-accent" id="btnOpenProviderKeys">Config</button></div>
@@ -4434,6 +4480,9 @@ async function saveSettings() {
     transport: $('#settingTransport')?.value || '',
     oobDomain: $('#settingOob')?.value || '',
     intercept: $('#settingIntercept')?.value || '',
+    autonomy: $('#settingAutonomy')?.value || 'standard',
+    mcpProfile: $('#settingMcpProfile')?.value || '',
+    reactive: $('#settingReactive')?.value || 'off',
   };
   try { await api('/api/config/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }); toast('Settings saved', 'ok'); }
   catch (e) { toast(`Failed: ${e.message}`, 'error'); }

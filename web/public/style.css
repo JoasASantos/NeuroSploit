@@ -1517,3 +1517,30 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
 .astat-l { font-size: var(--fs-xs); color: var(--fg-3); text-transform: uppercase; letter-spacing: 0.03em; }
 .adaptive-stack, .adaptive-waf { font-size: var(--fs-sm); color: var(--fg-2); line-height: 1.5; }
 .adaptive-stack code, .adaptive-waf code { background: var(--bg-1); padding: 1px 4px; border-radius: var(--r-sm); font-size: var(--fs-xs); }
+
+/* ============================================================ Reactive / MCP modals */
+.badge-experimental { display: inline-block; font-size: var(--fs-xs); font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--warn-bg, #fff3cd); color: var(--warn-fg, #856404); vertical-align: middle; margin-left: 6px; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .badge-experimental { background: #3d3200; color: #ffc107; } }
+:root[data-theme="dark"] .badge-experimental { background: #3d3200; color: #ffc107; }
+
+.feature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
+@media (max-width: 600px) { .feature-grid { grid-template-columns: 1fr; } }
+.feature-item { display: flex; gap: var(--sp-2); align-items: flex-start; padding: var(--sp-2); border-radius: var(--radius); background: var(--surface-raised, var(--surface)); }
+.feature-icon { font-size: 1.4em; flex-shrink: 0; }
+.feature-item b { display: block; margin-bottom: 2px; }
+
+.profile-cards { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
+@media (max-width: 600px) { .profile-cards { grid-template-columns: 1fr; } }
+.profile-card { padding: var(--sp-3); border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface-raised, var(--surface)); }
+.profile-card-title { font-size: var(--fs-base); font-weight: 600; margin-bottom: 4px; }
+.profile-card-desc { font-size: var(--fs-sm); color: var(--text-muted); margin-bottom: 6px; }
+.profile-card-tools { font-size: var(--fs-xs); color: var(--text-faint); font-family: var(--font-mono, monospace); }
+
+.modal-section { margin-bottom: var(--sp-4); }
+.modal-section h3 { font-size: var(--fs-base); font-weight: 600; margin: 0 0 var(--sp-2) 0; }
+.modal-section ul { margin: var(--sp-2) 0; padding-left: var(--sp-4); }
+.modal-section li { margin-bottom: var(--sp-1); font-size: var(--fs-sm); }
+.modal-section p { font-size: var(--fs-sm); color: var(--text-muted); }
+
+.btn-link { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font-size: inherit; text-decoration: underline; }
+.btn-link:hover { opacity: 0.8; }

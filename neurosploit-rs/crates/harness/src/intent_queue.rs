@@ -161,7 +161,42 @@ impl IntentQueue {
         m
     }
 
+    /// Terminate a still-queued intent (used after an operator stop).
+    /// Returns true if it was queued and is now Failed.
+    pub fn fail_if_queued(&mut self, id: &str, reason: &str) -> bool {
+        match self.entries.iter_mut().find(|e| e.intent.id == id && e.state == State::Queued) {
+            Some(e) => { e.state = State::Failed; e.result = Some(reason.into()); false }
+            None => false,
+        }
+    }
+
     pub fn entries(&self) -> &[Entry] { &self.entries }
+
+    /// Queued intents whose dependencies are all done (i.e. claimable now).
+    pub fn runnable(&self) -> usize {
+        let done = self.done_ids();
+        self.entries.iter()
+            .filter(|e| e.state == State::Queued && e.intent.depends_on.iter().all(|d| done.contains(d.as_str())))
+            .count()
+    }
+
+    /// Queued or claimed entries.
+    pub fn live(&self) -> usize {
+        self.entries.iter().filter(|e| matches!(e.state, State::Queued | State::Claimed)).count()
+    }
+
+    /// After a restart nothing is actually running: put claimed work back,
+    /// refunding the attempt. Returns how many were released.
+    pub fn requeue_claimed(&mut self) -> usize {
+        let mut n = 0;
+        for e in self.entries.iter_mut().filter(|e| e.state == State::Claimed) {
+            e.state = State::Queued;
+            e.claimed_by = None;
+            e.attempts = e.attempts.saturating_sub(1);
+            n += 1;
+        }
+        n
+    }
 }
 
 /// Convenience constructor used by tests and callers building simple intents.
