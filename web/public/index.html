@@ -593,6 +593,28 @@
               <div class="field-help">Deeper recon finds more surface but costs more tokens.</div>
             </div>
           </div>
+          <div class="field-row">
+            <div class="field-group"><label class="field-label" for="fieldAutonomy">Autonomy</label>
+              <select class="narrow" id="fieldAutonomy">
+                <option value="cautious">cautious — minimal installs</option>
+                <option value="standard" selected>standard — balanced</option>
+                <option value="aggressive">aggressive — creative attacks</option>
+                <option value="full">full — maximum autonomy</option>
+              </select>
+              <div class="field-help">How much freedom agents get: tool installs, creative attacks, deeper chaining.</div>
+            </div>
+            <div class="field-group"><label class="field-label" for="fieldMcpProfile">MCP Profile</label>
+              <select class="narrow" id="fieldMcpProfile">
+                <option value="" selected>auto</option>
+                <option value="web">Web (Playwright)</option>
+                <option value="mobile-android">Mobile Android (REA APK)</option>
+                <option value="mobile-ios">Mobile iOS (REA IPA)</option>
+                <option value="binary">Binary Analysis (REA)</option>
+                <option value="burp">Burp Suite</option>
+              </select>
+              <div class="field-help">Pre-configured MCP tool profile per test type. Auto picks from engagement mode.</div>
+            </div>
+          </div>
 
           <div>
             <div class="section-title">Reasoning budget</div>
@@ -670,6 +692,12 @@
             <div class="check-row"><input type="checkbox" id="fieldCompGdpr" value="gdpr" /> <label for="fieldCompGdpr">GDPR (data-protection articles)</label></div>
             <div class="field-help">Maps confirmed findings onto control requirements in the report. Indicates gaps for an assessor — never a compliance verdict.</div>
           </div>
+          <div>
+            <div class="section-title">Reactive Engine <span class="badge badge-experimental">experimental</span></div>
+            <div class="section-desc">Event-driven planner/worker loop. Replans on graph changes instead of fixed phases. <button class="btn-link" id="btnReactiveInfo">Learn more…</button></div>
+          </div>
+          <div class="check-row"><input type="checkbox" id="fieldReactive" /> <label for="fieldReactive"><b>Enable reactive engine</b> — event-driven instead of phased pipeline</label></div>
+          <div class="field-help check-help">Workers claim intents from a shared queue. The planner wakes on graph changes, findings, and operator hints. Experimental — the phased pipeline is more tested.</div>
         </div>
 
         <!-- Step 5 — Review -->
@@ -1301,6 +1329,88 @@
     <div class="modal-foot">
       <button class="btn" onclick="$('#integrationModal').hidden=true">Cancel</button>
       <button class="btn btn-primary" id="btnIntegSubmit">Save & Validate</button>
+    </div>
+  </div>
+</div>
+
+<!-- Reactive Engine Info Modal -->
+<div class="modal-backdrop" id="reactiveModal" hidden>
+  <div class="modal" style="max-width:620px">
+    <div class="modal-header">
+      <span class="modal-title">Reactive Engine</span>
+      <button class="icon-btn" id="btnCloseReactive" aria-label="Close"><svg class="ico" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    </div>
+    <div class="modal-body" style="max-height:60vh;overflow-y:auto">
+      <div class="modal-section">
+        <h3>How it works</h3>
+        <p>The reactive engine replaces the fixed phase pipeline with an event-driven loop:</p>
+        <ul>
+          <li><b>Planner</b> — wakes on graph changes (findings, facts, hints) and emits intents</li>
+          <li><b>Workers</b> — claim intents from a shared queue and execute them concurrently</li>
+          <li><b>Graph reasoning</b> — BFS chain discovery from findings to untested assets, LLM-driven strategy</li>
+          <li><b>Knowledge base</b> — agent markdowns as searchable methodology, dynamically injected into prompts</li>
+        </ul>
+      </div>
+      <div class="modal-section">
+        <h3>Features</h3>
+        <div class="feature-grid">
+          <div class="feature-item"><span class="feature-icon">🔄</span><div><b>Smart replanning</b><br>Only replans when graph state actually changes (version + fact count + hint count signature).</div></div>
+          <div class="feature-item"><span class="feature-icon">💓</span><div><b>Heartbeat lease</b><br>Tracks worker liveness. Stale workers are swept and their intents released.</div></div>
+          <div class="feature-item"><span class="feature-icon">💡</span><div><b>Hint injection</b><br>Inject information without stopping the engine. Triggers immediate replan.</div></div>
+          <div class="feature-item"><span class="feature-icon">🔗</span><div><b>Chain exploitation</b><br>Finds multi-hop attack paths from findings to untested assets. LLM picks the best chains.</div></div>
+          <div class="feature-item"><span class="feature-icon">📚</span><div><b>Knowledge base</b><br>Agent markdowns scored by keyword overlap, injected as methodology context per task.</div></div>
+          <div class="feature-item"><span class="feature-icon">🛟</span><div><b>Session resume</b><br>If a worker is cut off, conclude prompt extracts partial results instead of losing them.</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" id="btnReactiveClose2">Close</button>
+      <button class="btn btn-accent" id="btnEnableReactive">Enable &amp; close</button>
+    </div>
+  </div>
+</div>
+
+<!-- MCP Profile Modal -->
+<div class="modal-backdrop" id="mcpProfileModal" hidden>
+  <div class="modal" style="max-width:620px">
+    <div class="modal-header">
+      <span class="modal-title">MCP Tool Profiles</span>
+      <button class="icon-btn" id="btnCloseMcpProfile" aria-label="Close"><svg class="ico" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    </div>
+    <div class="modal-body" style="max-height:60vh;overflow-y:auto">
+      <div class="modal-section">
+        <p>MCP profiles auto-configure the right tool server and allowlist per engagement type.</p>
+      </div>
+      <div class="profile-cards" id="mcpProfileCards">
+        <div class="profile-card">
+          <div class="profile-card-title">🌐 Web</div>
+          <div class="profile-card-desc">Playwright browser tools — navigate, click, fill forms, screenshot, evaluate JS, intercept network.</div>
+          <div class="profile-card-tools">16 tools · @anthropic/playwright-mcp</div>
+        </div>
+        <div class="profile-card">
+          <div class="profile-card-title">📱 Mobile Android</div>
+          <div class="profile-card-desc">REA APK analysis — open/inspect APK, decompile, inspect signatures, analyze components, trace features.</div>
+          <div class="profile-card-tools">8 tools · REA reverse-engineering</div>
+        </div>
+        <div class="profile-card">
+          <div class="profile-card-title">🍎 Mobile iOS</div>
+          <div class="profile-card-desc">REA IPA analysis — inspect Mach-O, decode Interface Builder, analyze Swift types, Obj-C classes.</div>
+          <div class="profile-card-tools">7 tools · REA reverse-engineering</div>
+        </div>
+        <div class="profile-card">
+          <div class="profile-card-title">🔬 Binary Analysis</div>
+          <div class="profile-card-desc">REA binary — decompile, disassemble, call graphs, cross-refs, string search, trace data flow.</div>
+          <div class="profile-card-tools">10 tools · REA reverse-engineering</div>
+        </div>
+        <div class="profile-card">
+          <div class="profile-card-title">🕷️ Burp Suite</div>
+          <div class="profile-card-desc">Burp REST API — scan launch, issue retrieval, sitemap access, proxy history.</div>
+          <div class="profile-card-tools">4 tools · Burp REST API</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" id="btnMcpProfileClose">Close</button>
     </div>
   </div>
 </div>

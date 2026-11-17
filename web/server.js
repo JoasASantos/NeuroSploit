@@ -1296,6 +1296,9 @@ function buildArgs(body) {
   if (body.environment) args.push('--environment', body.environment);
   if (body.policyProfile) args.push('--policy', body.policyProfile);
   for (const a of body.agents || []) args.push('--only', a);
+  if (body.reactive) args.push('--reactive');
+  if (body.mcpProfile) args.push('--mcp-profile', body.mcpProfile);
+  if (body.autonomy && body.autonomy !== 'standard') args.push('--autonomy', body.autonomy);
   args.push('--verbose');
   return args;
 }
