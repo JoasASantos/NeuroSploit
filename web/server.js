@@ -208,7 +208,7 @@ const PROVIDERS = [
   { key: 'nvidia_nim', label: 'NVIDIA NIM', kind: 'api', envKey: 'NVIDIA_NIM_API_KEY',
     models: ['nvidia/llama-3.3-nemotron-super-49b-v1', 'deepseek-ai/deepseek-r1', 'qwen/qwen2.5-coder-32b-instruct'] },
   { key: 'deepseek', label: 'DeepSeek', kind: 'api', envKey: 'DEEPSEEK_API_KEY',
-    models: ['deepseek-reasoner', 'deepseek-chat'] },
+    models: ['deepseek-v4-pro', 'deepseek-flash', 'deepseek-reasoner', 'deepseek-chat'] },
   { key: 'mistral', label: 'Mistral', kind: 'api', envKey: 'MISTRAL_API_KEY',
     models: ['mistral-large-latest', 'codestral-latest'] },
   { key: 'qwen', label: 'Qwen (DashScope)', kind: 'api', envKey: 'DASHSCOPE_API_KEY',

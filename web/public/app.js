@@ -590,6 +590,18 @@ async function loadProviders() {
   const sel = $('#fieldProvider');
   sel.innerHTML = state.providers.map((p) => `<option value="${esc(p.key)}">${esc(p.label)} (${p.kind === 'cli' ? 'API or subscription' : 'API key only'})</option>`).join('');
   sel.addEventListener('change', onProviderChange);
+  try {
+    const cfg = await api('/api/config/settings');
+    if (cfg.defaultModel) {
+      const parts = cfg.defaultModel.split(':');
+      if (parts.length >= 2) {
+        sel.value = parts[0];
+        onProviderChange();
+        $('#fieldModelSelect').value = parts.slice(1).join(':');
+        return;
+      }
+    }
+  } catch {}
   onProviderChange();
 }
 function onProviderChange() {
@@ -4974,10 +4986,8 @@ async function loadSettings() {
             <option value="google:gemini-2.5-flash"${cfg.defaultModel==='google:gemini-2.5-flash'?' selected':''}>gemini-2.5-flash</option>
           </optgroup>
           <optgroup label="DeepSeek">
-            <option value="deepseek:deepseek-r2"${cfg.defaultModel==='deepseek:deepseek-r2'?' selected':''}>deepseek-r2</option>
-            <option value="deepseek:deepseek-v4.1"${cfg.defaultModel==='deepseek:deepseek-v4.1'?' selected':''}>deepseek-v4.1</option>
             <option value="deepseek:deepseek-v4-pro"${cfg.defaultModel==='deepseek:deepseek-v4-pro'?' selected':''}>deepseek-v4-pro</option>
-            <option value="deepseek:deepseek-v4"${cfg.defaultModel==='deepseek:deepseek-v4'?' selected':''}>deepseek-v4</option>
+            <option value="deepseek:deepseek-flash"${cfg.defaultModel==='deepseek:deepseek-flash'?' selected':''}>deepseek-flash</option>
             <option value="deepseek:deepseek-reasoner"${cfg.defaultModel==='deepseek:deepseek-reasoner'?' selected':''}>deepseek-reasoner</option>
             <option value="deepseek:deepseek-chat"${cfg.defaultModel==='deepseek:deepseek-chat'?' selected':''}>deepseek-chat</option>
           </optgroup>
