@@ -51,6 +51,8 @@
       <button class="sb-nav-item" data-view="vault"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="8" cy="15" r="3.8"/><path d="m10.7 12.3 8.8-8.8M16 7l3 3M13.5 9.5l2 2"/></svg></span> Vault</button>
       <button class="sb-nav-item" data-view="guardrails"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3.2 19.5 6v5.6c0 4.4-3.1 7.5-7.5 9.2-4.4-1.7-7.5-4.8-7.5-9.2V6z"/><path d="m9 12 2.2 2.2L15.2 10"/></svg></span> Guardrails</button>
       <div class="sb-nav-separator"></div>
+      <button class="sb-nav-item" data-view="c2"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16v11H4z"/><path d="M8 20h8M12 16v4"/><path d="m7 9 2.5 2L7 13M12 13h4"/></svg></span> C2 &amp; Shells</button>
+      <button class="sb-nav-item" data-view="toolbox"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="7" cy="7" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="17" cy="17" r="1"/></svg></span> Toolbox</button>
       <button class="sb-nav-item" id="sbTerminal"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 7 5 5-5 5M12.5 18H19"/></svg></span> Terminal</button>
       <button class="sb-nav-item" data-view="integrations"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 3v5M15 3v5M6.5 8h11v3.5a5.5 5.5 0 0 1-11 0zM12 17v4"/></svg></span> Integrations</button>
       <button class="sb-nav-item" data-view="settings"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17" r="2"/></svg></span> Settings</button>
@@ -260,6 +262,32 @@
           </div>
         </div>
       </div>
+    </section>
+
+    <!-- ============ TOOLBOX ============ -->
+    <section class="page-view" id="toolboxView" hidden>
+      <header class="topbar">
+        <div>
+          <div class="topbar-title">Toolbox</div>
+          <div class="topbar-sub">200+ real pentest tools (web, infra, Active Directory, cloud, container, mobile, binary, forensics, AI) and MCP tool servers</div>
+        </div>
+        <div class="topbar-spacer"></div>
+        <button class="btn btn-sm" id="btnToolboxRefresh">Refresh</button>
+      </header>
+      <div class="page-body" id="toolboxBody"><div class="empty-state">Loading…</div></div>
+    </section>
+
+    <!-- ============ C2 & SHELLS ============ -->
+    <section class="page-view" id="c2View" hidden>
+      <header class="topbar">
+        <div>
+          <div class="topbar-title">C2 &amp; Shells</div>
+          <div class="topbar-sub">Command &amp; Control and WebShell management for authorized internal engagements — opt-in, private-scope first, fully audited</div>
+        </div>
+        <div class="topbar-spacer"></div>
+        <button class="btn btn-sm" id="btnC2Refresh">Refresh</button>
+      </header>
+      <div class="page-body" id="c2Body"><div class="empty-state">Loading…</div></div>
     </section>
 
     <!-- ============ GUARDRAILS ============ -->
@@ -671,6 +699,14 @@
                 <option value="default">Kali container (kalilinux/kali-rolling)</option>
               </select>
               <div class="field-help">Runs attack commands off the host, with the Kali toolbox. Needs docker or podman.</div>
+            </div>
+            <div class="field-group">
+              <label class="field-label">C2 / post-exploitation</label>
+              <div class="check-row"><input type="checkbox" id="fieldC2" /> <label for="fieldC2"><b>Enable C2</b> for this internal engagement</label></div>
+              <input id="fieldC2Auth" type="text" placeholder="Authorization reference (SOW / ticket / bug-bounty URL)" />
+              <div class="check-row"><input type="checkbox" id="fieldC2Persistence" /> <label for="fieldC2Persistence">Allow persistence tasks</label></div>
+              <div class="check-row"><input type="checkbox" id="fieldC2Lateral" /> <label for="fieldC2Lateral">Allow lateral movement &amp; uploads</label></div>
+              <div class="field-help">Opt-in. Listeners bind loopback by default; WebShell targets must resolve to private space unless allow-listed. Persistence and lateral movement are separate explicit opt-ins. All actions are audited under <code>.neurosploit/c2/</code>.</div>
             </div>
             <div class="field-group"><label class="field-label">PoC re-validation</label>
               <div class="check-row"><input type="checkbox" id="fieldRevalidatePoc" /> <label for="fieldRevalidatePoc">Re-run every PoC; demote what no longer reproduces</label></div>

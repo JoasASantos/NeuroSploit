@@ -157,6 +157,7 @@ pub(crate) const ACCEPTED: &[&str] = &[
     "/sandbox", "/scope", "/scope-out", "/show", "/status", "/stop", "/sub", "/subscription", "/target",
     "/temp-email", "/tempmail", "/theme", "/timeout", "/ua", "/url", "/useragent", "/validate",
     "/votes",
+    "/c2", "/webshell", "/tools",
 ];
 
 /// All slash-commands, for Tab completion.
@@ -167,6 +168,7 @@ const COMMANDS: &[&str] = &[
     "/status", "/logs", "/diff", "/retest", "/validate", "/finding", "/pocs", "/expand", "/integrations",
     "/memory", "/forget", "/graph", "/inscope", "/observe", "/guardrail", "/policy",
     "/compliance", "/budget", "/capability", "/audit", "/quit",
+    "/c2", "/webshell", "/tools",
 ];
 
 /// rustyline helper: Tab-completes `/commands` and `@filesystem-paths`,
@@ -1488,6 +1490,22 @@ pub async fn repl(base: &Path, auth: SessionAuth) -> anyhow::Result<()> {
                     _ => println!("  no active run — /logs shows the live activity feed while a run streams."),
                 }
             }
+            "/c2" | "/webshell" | "/tools" => {
+                let mut argv = vec![cmd.trim_start_matches('/').to_string()];
+                argv.extend(split_cli_args(arg));
+                match std::env::current_exe() {
+                    Ok(exe) => match std::process::Command::new(exe).args(&argv).output() {
+                        Ok(out) => {
+                            let stdout = String::from_utf8_lossy(&out.stdout);
+                            let stderr = String::from_utf8_lossy(&out.stderr);
+                            if !stdout.trim().is_empty() { print!("{stdout}"); }
+                            if !stderr.trim().is_empty() { eprint!("{stderr}"); }
+                        }
+                        Err(e) => println!("  C2/WebShell command failed: {e}"),
+                    },
+                    Err(e) => println!("  cannot locate neurosploit binary: {e}"),
+                }
+            }
             "/quit" | "/exit" | "/q" => {
                 if active.as_ref().map(|a| !a.done.load(Ordering::Relaxed)).unwrap_or(false) {
                     if let Some(a) = &active { a.cancel.store(true, Ordering::Relaxed); }
@@ -2713,6 +2731,38 @@ fn show(s: &Session) {
     println!("  └─ /run to launch  ·  edit with /target /repo /auth /creds /focus /model");
 }
 
+/// Split a REPL argument string into argv, honouring single/double quotes and
+/// backslash escapes. Used by `/c2` and `/webshell` so the operator can pass a
+/// command with spaces without the shell being involved.
+fn split_cli_args(input: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for c in input.chars() {
+        if escaped {
+            cur.push(c);
+            escaped = false;
+            continue;
+        }
+        match (quote, c) {
+            (_, '\\') => escaped = true,
+            (Some(q), ch) if ch == q => quote = None,
+            (None, '\'' | '"') => quote = Some(c),
+            (None, ch) if ch.is_whitespace() => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            (_, ch) => cur.push(ch),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
 fn help() {
     let h = |c: &str, d: &str| println!("    \x1b[36m{c:<20}\x1b[0m {d}");
     println!("\n  \x1b[1mNeuroSploit REPL — commands\x1b[0m");
@@ -2768,6 +2818,9 @@ fn help() {
     h("/memory [text]",     "what the harness learned (working·engagement·technique·reusable); search with text");
     h("/forget <text>",     "drop every memory whose text matches");
     h("/graph",             "attack knowledge graph: entities, top attack paths, unproven frontier");
+    h("/c2 <args>",         "C2 for authorized internal engagements: status · enable · listener · session · task · payload");
+    h("/webshell <args>",   "WebShell manager: list · add · test · exec · file (same verbs as `neurosploit webshell`)");
+    h("/tools <args>",      "Toolbox: list · search · info · check · run · install · mcp (same verbs as `neurosploit tools`)");
 
     println!("\n  \x1b[2mINTEGRATIONS\x1b[0m");
     h("/integrations",      "show · enable/disable github|gitlab|jira · setup <name>");

@@ -302,3 +302,60 @@ to the CLI — the console never re-implements harness logic.
 | `GET` | `/api/runs/:id/findings/:findingId/traffic` | The HTTP exchanges that back one finding: the exchanges the harness measured (`evidence_data` — baseline/attack, the identity pair, matrix probes, the oracle), each with its wire `provenance`; the finding's `wire` check summary; and the recorded `flows.jsonl` entries on the same endpoint. Real bytes, not the agent's prose. |
 
 `GET /api/runs/:id` now also returns `extras`: `{ graph, todo, traces, flows, deliverables[] }`.
+
+---
+
+## Toolbox (200+ tools) and MCP tool servers
+
+These endpoints shell out to `neurosploit tools … --json`; the catalog, scope
+checks and runner live in the harness. Nothing runs until the operator clicks
+Run (or an agent with opt-in tool access requests it).
+
+| Method | Path | What |
+|---|---|---|
+| `GET` | `/api/tools?q=&category=` | Catalog list/search. Returns the `ToolSpec` array (`id, name, binary, category, description, usage, tags, intrusive, requires_root, install, mcp`). |
+| `GET` | `/api/tools/profiles` | Recommended tool IDs per engagement mode (`run`, `host`, `ad`, `cloud`, `container`, `mobile`, `binary`, `aitest`). |
+| `GET` | `/api/tools/:id` | One tool's descriptor + install hints. |
+| `GET/POST` | `/api/tools/:id/check` | `neurosploit tools check <id>`; body `{ "sandbox": true }` checks inside Kali. Never runs a scan. |
+| `POST` | `/api/tools/run` | Body `{ tool, target?, args?, sandbox?, provision?, timeout? }`. Returns `{ tool, command, code, timed_out, duration_ms, stdout, stderr }`. |
+| `POST` | `/api/tools/install` | Body `{ tool, sandbox? }`. Explicit provisioning (apt/pipx/go/cargo/npm/gem/docker). |
+| `GET` | `/api/mcp/servers` | Curated MCP server catalog plus `configured` flags and the local `mcp.servers.json` path. |
+| `POST` | `/api/mcp/servers` | Body `{ action: "add"\|"remove", server }`. Writes `./mcp.servers.json`, merged into `.mcp.json` on the next `--mcp` run. |
+| `POST` | `/api/mcp/servers/test` | Body `{ server }` — checks the executable on PATH, or the HTTP endpoint. |
+| `GET` | `/api/mcp/servers/:name` | JSON `mcpServers` snippet for that server. |
+
+---
+
+## C2 and WebShell management
+
+Opt-in and disabled by default. Mutating calls fail closed until
+`POST /api/c2/enable` receives an authorization reference. State and the audit
+trail live under `.neurosploit/c2/`; the local daemon binds `127.0.0.1`.
+
+| Method | Path | What |
+|---|---|---|
+| `GET` | `/api/c2/status` | `{ policy, listeners, sessions, tasks, webshells, events, payloads, counts }`. |
+| `POST` | `/api/c2/enable` | Body `{ authorization, persistence?, lateral?, allowPublic?, hosts? }`. Required to use C2. |
+| `POST` | `/api/c2/disable` | Stops every listener and disables the module. |
+| `PUT/POST` | `/api/c2/policy` | Update guardrails (`allow_persistence`, `allow_lateral`, `allow_public_targets`, `allowed_hosts`, …). |
+| `GET/POST` | `/api/c2/listeners` | List/create HTTP beacon listeners (loopback by default). |
+| `POST` | `/api/c2/listeners/:id/start` · `/stop` | Listener lifecycle. |
+| `DELETE` | `/api/c2/listeners/:id` | Delete listener + its sessions/tasks. |
+| `GET` | `/api/c2/sessions` | Sessions (`hostname, username, os, arch, internal_ip, status, sleep_seconds, note`). |
+| `POST` | `/api/c2/sessions/:id/sleep` | Body `{ seconds, jitter }`. |
+| `POST` | `/api/c2/sessions/:id/note` | Body `{ note }`. |
+| `DELETE` | `/api/c2/sessions/:id` | Mark killed and cancel queued tasks. |
+| `GET/POST` | `/api/c2/tasks` | List/enqueue tasks (`exec`, `persist`, `lateral`, `pwd`, `ls`, `cd`, `upload`, `download`, `sleep`, `exit`). |
+| `GET` | `/api/c2/tasks/:id` · `/wait?timeout=` | Task result. `wait` blocks up to the timeout. |
+| `POST` | `/api/c2/tasks/:id/cancel` | Cancel a queued task. |
+| `GET` | `/api/c2/events?limit=` | Recent audit events. |
+| `GET` | `/api/c2/payloads` | Generated payloads (metadata). |
+| `GET` | `/api/c2/payloads/:name` | Raw payload download (0600 on disk). |
+| `POST` | `/api/c2/payloads/webshell` | Body `{ shell_type, password?, pass_param?, cmd_param?, filename? }`. |
+| `POST` | `/api/c2/payloads/beacon` | Body `{ listener_id, kind: bash\|python\|powershell\|php, host?, filename? }`. |
+| `POST` | `/api/c2/payloads/oneliner` | Body `{ listener_id }`. |
+| `GET/POST` | `/api/webshell/connections` | Saved WebShell connections (passwords never returned). |
+| `PUT/DELETE` | `/api/webshell/connections/:id` | Update/delete a connection. |
+| `POST` | `/api/webshell/connections/:id/test` | OS probe + `whoami`. |
+| `POST` | `/api/webshell/connections/:id/exec` | Body `{ command }`. |
+| `POST` | `/api/webshell/connections/:id/file` | Body `{ action: list\|read\|write\|upload\|delete\|mkdir\|rename, path, content?, target_path? }`. |

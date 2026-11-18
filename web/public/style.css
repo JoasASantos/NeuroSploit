@@ -1544,3 +1544,35 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
 
 .btn-link { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font-size: inherit; text-decoration: underline; }
 .btn-link:hover { opacity: 0.8; }
+
+/* ============================================================ C2 & Shells */
+#c2View .run-tabs { margin-bottom: var(--sp-3); }
+#c2View .run-tab { cursor: pointer; }
+.c2-selected td { background: var(--surface-2, rgba(127,127,127,.08)); }
+.c2-output {
+  margin: 0;
+  padding: var(--sp-3);
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  background: var(--surface-2, rgba(127,127,127,.06));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.c2-payload {
+  width: 100%;
+  min-height: 180px;
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  background: var(--surface-2, rgba(127,127,127,.06));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--sp-3);
+}
+#c2View .badge { display: inline-block; font-size: var(--fs-xs); font-weight: 600; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); }
+#c2View .badge-ok { color: var(--sev-low-fg, #1a7f37); border-color: var(--sev-low-fg, #1a7f37); background: var(--sev-low-bg, rgba(26,127,55,.08)); }
+#c2View .badge-warn { color: var(--sev-medium-fg, #9a6700); border-color: var(--sev-medium-fg, #9a6700); background: var(--sev-medium-bg, rgba(154,103,0,.08)); }
+#c2View .badge-muted { color: var(--text-faint); }

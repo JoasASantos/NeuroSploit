@@ -117,6 +117,12 @@ pub async fn run_reactive(
                 "mobile-ios" => crate::mcp_profiles::Profile::MobileIos,
                 "binary" => crate::mcp_profiles::Profile::BinaryAnalysis,
                 "burp" => crate::mcp_profiles::Profile::BurpSuite,
+                "infra" | "host" => crate::mcp_profiles::Profile::Infra,
+                "ad" | "internal" => crate::mcp_profiles::Profile::Ad,
+                "cloud" => crate::mcp_profiles::Profile::Cloud,
+                "kali" => crate::mcp_profiles::Profile::Kali,
+                "nmap" => crate::mcp_profiles::Profile::Nmap,
+                "full" => crate::mcp_profiles::Profile::Full,
                 other => crate::mcp_profiles::Profile::Custom(other.to_string()),
             };
             let ctx = crate::mcp_profiles::prompt_context(&profile);

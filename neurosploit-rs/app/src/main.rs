@@ -1,5 +1,7 @@
 //! NeuroSploit — interactive harness + CLI (`run` / `whitebox` / `agents` / `models`).
 
+mod c2cli;
+mod toolscli;
 mod rectify;
 mod repl;
 mod tui;
@@ -108,6 +110,36 @@ struct Cli {
     /// subscription-CLI backends (claude/codex/…) expose no temperature knob.
     #[arg(long = "temperature", global = true)]
     temperature: Option<f32>,
+    /// Opt-in: give the agents the local C2 (listeners, sessions, tasks,
+    /// persistence, lateral movement) for this authorized internal engagement.
+    /// Requires --c2-authorization.
+    #[arg(long = "c2", global = true)]
+    c2: bool,
+    /// SOW / ticket / bug-bounty URL authorizing C2 use. Required by --c2.
+    #[arg(long = "c2-authorization", global = true)]
+    c2_authorization: Option<String>,
+    /// Allow persistence tasks on implants (requires --c2).
+    #[arg(long = "c2-persistence", global = true)]
+    c2_persistence: bool,
+    /// Allow lateral-movement/upload tasks (requires --c2).
+    #[arg(long = "c2-lateral", global = true)]
+    c2_lateral: bool,
+    /// Allow C2/WebShell targets outside private address space (explicit opt-in).
+    #[arg(long = "c2-allow-public", global = true)]
+    c2_allow_public: bool,
+    /// Opt-in: enable the 200+ tool toolbox and its doctrine for this run.
+    #[arg(long = "tools", global = true)]
+    tools: bool,
+    /// Opt-in: let API-model agents request cataloged tools in a bounded loop.
+    #[arg(long = "agent-tools", global = true)]
+    agent_tools: bool,
+    /// Explicitly allow the toolbox to install missing tools (apt/pipx/go/...).
+    #[arg(long = "provision", global = true)]
+    provision: bool,
+    /// Extra MCP tool server from the curated catalog (nmap, kali, playwright,
+    /// burp, rea, neurosploit). Repeatable.
+    #[arg(long = "mcp-server", global = true)]
+    mcp_server: Vec<String>,
 }
 
 #[derive(Subcommand)]
@@ -223,6 +255,22 @@ enum Cmd {
         /// shared intent queue. Experimental opt-in.
         #[arg(long)]
         reactive: bool,
+    },
+    /// Toolbox: list/check/run 200+ pentest tools and manage MCP tool servers.
+    Tools {
+        #[command(subcommand)]
+        cmd: toolscli::ToolsCmd,
+    },
+    /// Command & Control for authorized internal engagements: listeners,
+    /// sessions, tasks, payloads, persistence and lateral movement.
+    C2 {
+        #[command(subcommand)]
+        cmd: c2cli::C2Cmd,
+    },
+    /// WebShell management: saved connections, command exec, file operations.
+    Webshell {
+        #[command(subcommand)]
+        cmd: c2cli::WebshellCmd,
     },
     /// Run NeuroSploit as an MCP server (stdio) so Claude Code, Codex, Cursor
     /// and other MCP clients can drive it as a set of tools.
@@ -851,6 +899,54 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // C2 opt-in: bootstrap the local daemon/policy before the engagement runs,
+    // so the agents see the same sessions and guardrails the CLI enforces.
+    let invoking_c2_tool = matches!(
+        &cli.cmd,
+        Some(Cmd::C2 { .. }) | Some(Cmd::Webshell { .. })
+    );
+    if cli.c2 && !invoking_c2_tool {
+        let auth = cli.c2_authorization.clone().unwrap_or_default();
+        if auth.trim().is_empty() {
+            anyhow::bail!(
+                "--c2 requires --c2-authorization \"SOW/ticket/URL\" (C2 is opt-in and auditable)"
+            );
+        }
+        std::env::set_var("NEUROSPLOIT_C2", "1");
+        if cli.c2_persistence {
+            std::env::set_var("NEUROSPLOIT_C2_PERSIST", "1");
+        }
+        if cli.c2_lateral {
+            std::env::set_var("NEUROSPLOIT_C2_LATERAL", "1");
+        }
+        if let Err(e) = harness::c2::bootstrap(
+            &auth,
+            cli.c2_persistence,
+            cli.c2_lateral,
+            cli.c2_allow_public,
+        )
+        .await
+        {
+            anyhow::bail!("C2 bootstrap failed: {e}");
+        }
+        eprintln!("  [*] C2 enabled for this engagement (authorization: {auth})");
+    }
+
+    // Toolbox opt-in: the tool catalog is always available, but the doctrine and
+    // the agent tool loop only activate when the operator asks for them.
+    if cli.tools || cli.agent_tools {
+        std::env::set_var("NEUROSPLOIT_TOOLS", "1");
+    }
+    if cli.agent_tools {
+        std::env::set_var("NEUROSPLOIT_AGENT_TOOLS", "1");
+    }
+    if cli.provision {
+        std::env::set_var("NEUROSPLOIT_PROVISION", "1");
+    }
+    if !cli.mcp_server.is_empty() {
+        std::env::set_var("NEUROSPLOIT_MCP_SERVERS", cli.mcp_server.join(","));
+    }
+
     // No subcommand → launch the Claude-Code-style interactive session.
     let cmd = match cli.cmd.take() {
         Some(c) => c,
@@ -889,6 +985,9 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Cmd::Tools { cmd } => { toolscli::handle(cmd).await?; }
+        Cmd::C2 { cmd } => { c2cli::handle_c2(cmd).await?; }
+        Cmd::Webshell { cmd } => { c2cli::handle_webshell(cmd).await?; }
         Cmd::Mcp => { mcp::serve()?; }
         Cmd::Rebuild { run } => {
             // Accept either a path or a bare run id, resolved against the same

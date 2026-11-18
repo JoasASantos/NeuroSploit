@@ -122,6 +122,67 @@ const VERSION = binaryVersion();
 
 const PORT = Number(process.env.NEUROSPLOIT_WEB_PORT || process.env.PORT || 4173);
 
+
+
+// ---------------------------------------------------------------------------
+// Toolbox / MCP tool servers — thin proxy over `neurosploit tools`.
+// The tool catalog and runner live in the harness; the console only drives it.
+// Nothing is executed unless the operator clicks Run (and target scope is
+// enforced by the CLI).
+// ---------------------------------------------------------------------------
+
+async function toolsCall(args) {
+  const out = await runCli(['tools', ...args, '--json']);
+  const text = stripAnsi(out.buf || '').trim();
+  if (out.code !== 0) {
+    let msg = text || 'tool command failed';
+    try { const v = JSON.parse(text); msg = v.error || msg; } catch { /* keep text */ }
+    throw new Error(msg);
+  }
+  try { return JSON.parse(text); }
+  catch {
+    const m = text.match(/\{[\s\S]*\}\s*$/);
+    if (m) { try { return JSON.parse(m[0]); } catch { /* fall through */ } }
+    throw new Error(text || 'tool command returned no JSON');
+  }
+}
+
+async function toolsText(args) {
+  const out = await runCli(['tools', ...args]);
+  if (out.code !== 0) throw new Error(stripAnsi(out.buf || '').trim() || 'tool command failed');
+  return stripAnsi(out.buf || '').trim();
+}
+
+// ---------------------------------------------------------------------------
+// C2 / WebShell — thin proxy over the local C2 daemon (spawned by the CLI).
+// The daemon owns listener sockets, sessions, tasks and the audit trail; the
+// console never re-implements them. Disabled by default: every mutating call
+// fails closed until the operator enables it with an authorization reference.
+// ---------------------------------------------------------------------------
+
+async function c2Call(args) {
+  const prefix = args[0] === 'webshell' ? [] : ['c2'];
+  const out = await runCli([...prefix, ...args, '--json']);
+  const text = stripAnsi(out.buf || '').trim();
+  if (out.code !== 0) {
+    let msg = text || 'C2 command failed';
+    try { const v = JSON.parse(text); msg = v.error || msg; } catch { /* keep text */ }
+    throw new Error(msg);
+  }
+  try { return JSON.parse(text); }
+  catch {
+    const m = text.match(/\{[\s\S]*\}\s*$/);
+    if (m) { try { return JSON.parse(m[0]); } catch { /* fall through */ } }
+    throw new Error(text || 'C2 returned no JSON');
+  }
+}
+
+/// Values that become argv entries; the daemon re-validates everything.
+function c2PushStr(args, flag, value) {
+  if (value !== undefined && value !== null && String(value).length) args.push(flag, String(value));
+}
+function c2PushBool(args, flag, on) { if (on) args.push(flag); }
+
 // ---------------------------------------------------------------------------
 // Providers — mirrors crates/harness/src/models.rs `providers()`. Kept as a
 // literal table (not parsed from CLI output) so `kind` ("cli" = usable via a
@@ -1299,6 +1360,13 @@ function buildArgs(body) {
   if (body.reactive) args.push('--reactive');
   if (body.mcpProfile) args.push('--mcp-profile', body.mcpProfile);
   if (body.autonomy && body.autonomy !== 'standard') args.push('--autonomy', body.autonomy);
+  // C2 is opt-in: without an authorization reference the CLI refuses to run it.
+  if (body.c2) {
+    if (body.c2Authorization) args.push('--c2-authorization', body.c2Authorization);
+    if (body.c2Persistence) args.push('--c2-persistence');
+    if (body.c2Lateral) args.push('--c2-lateral');
+    args.push('--c2');
+  }
   args.push('--verbose');
   return args;
 }
@@ -1374,6 +1442,13 @@ function authArgs(body) {
   if (body.decisionBackend) args.push('--decision-backend', body.decisionBackend);
   if (body.intercept && body.intercept !== 'off') args.push('--intercept', body.intercept);
   if (body.sandbox) args.push('--sandbox', body.sandbox === 'default' ? '' : body.sandbox);
+  // C2 is global (launcher-level), like the authorization ceiling.
+  if (body.c2) {
+    if (body.c2Authorization) args.push('--c2-authorization', body.c2Authorization);
+    if (body.c2Persistence) args.push('--c2-persistence');
+    if (body.c2Lateral) args.push('--c2-lateral');
+    args.push('--c2');
+  }
   return args;
 }
 
@@ -1401,6 +1476,10 @@ function sanitizeLaunch(body) {
     quick: !!body.quick,
     research: !!body.research,
     maxAgents: body.maxAgents || undefined,
+    c2: !!body.c2,
+    c2Authorization: body.c2Authorization || undefined,
+    c2Persistence: !!body.c2Persistence,
+    c2Lateral: !!body.c2Lateral,
   };
 }
 
@@ -2154,6 +2233,270 @@ const server = http.createServer(async (req, res) => {
         pdf: built.includes('report.pdf'),
         note: built.includes('report.pdf') ? '' : 'PDF needs the `typst` binary on PATH — the HTML and Markdown reports were rebuilt.',
       });
+    }
+
+
+
+    // ---- Toolbox / MCP tool servers ---------------------------------------
+    if (p.startsWith('/api/tools') || p.startsWith('/api/mcp')) {
+      try {
+        if (req.method === 'GET' && p === '/api/tools') {
+          const q = u.searchParams.get('q');
+          const cat = u.searchParams.get('category');
+          const args = q ? ['search', q] : ['list'];
+          if (cat) args.push('--category', cat);
+          return sendJson(res, 200, await toolsCall(args));
+        }
+        if (req.method === 'GET' && p === '/api/tools/profiles') {
+          return sendJson(res, 200, await toolsCall(['profiles']));
+        }
+        let tm = p.match(/^\/api\/tools\/([\w.-]+)\/check$/);
+        if ((req.method === 'GET' || req.method === 'POST') && tm) {
+          const args = ['check', tm[1]];
+          const body = req.method === 'POST' ? await readBody(req).catch(() => ({})) : {};
+          if (body.sandbox || u.searchParams.get('sandbox') === '1') args.push('--sandbox');
+          return sendJson(res, 200, await toolsCall(args));
+        }
+        tm = p.match(/^\/api\/tools\/([\w.-]+)$/);
+        if (req.method === 'GET' && tm) {
+          return sendJson(res, 200, await toolsCall(['info', tm[1]]));
+        }
+        if (req.method === 'POST' && p === '/api/tools/run') {
+          const b = await readBody(req);
+          const args = ['run', String(b.tool || '')];
+          c2PushStr(args, '--target', b.target);
+          c2PushStr(args, '--args', b.args);
+          if (b.sandbox) args.push('--sandbox');
+          if (b.provision) args.push('--provision');
+          if (b.timeout) args.push('--timeout', String(Number(b.timeout) || 300));
+          return sendJson(res, 200, await toolsCall(args));
+        }
+        if (req.method === 'POST' && p === '/api/tools/install') {
+          const b = await readBody(req);
+          const args = ['install', String(b.tool || '')];
+          if (b.sandbox) args.push('--sandbox');
+          return sendJson(res, 200, await toolsCall(args));
+        }
+
+        if (req.method === 'GET' && p === '/api/mcp/servers') {
+          return sendJson(res, 200, await toolsCall(['mcp', 'list']));
+        }
+        if (req.method === 'POST' && p === '/api/mcp/servers') {
+          const b = await readBody(req);
+          const action = String(b.action || 'add');
+          if (!['add', 'remove'].includes(action)) return sendJson(res, 400, { error: 'action must be add or remove' });
+          const out = await toolsText(['mcp', action, String(b.server || '')]);
+          return sendJson(res, 200, { ok: true, output: out, ...(await toolsCall(['mcp', 'list'])) });
+        }
+        if (req.method === 'POST' && p === '/api/mcp/servers/test') {
+          const b = await readBody(req);
+          return sendJson(res, 200, await toolsCall(['mcp', 'test', String(b.server || '')]));
+        }
+        tm = p.match(/^\/api\/mcp\/servers\/([\w.-]+)$/);
+        if (req.method === 'GET' && tm) {
+          return sendJson(res, 200, await toolsCall(['mcp', 'json', tm[1]]));
+        }
+        return sendJson(res, 404, { error: 'not found' });
+      } catch (e) {
+        return sendJson(res, 400, { error: e.message });
+      }
+    }
+
+    // ---- C2 / WebShell management ------------------------------------------
+    if (p.startsWith('/api/c2') || p.startsWith('/api/webshell')) {
+      try {
+        if (req.method === 'GET' && p === '/api/c2/status') {
+          return sendJson(res, 200, await c2Call(['status']));
+        }
+        if (req.method === 'POST' && p === '/api/c2/enable') {
+          const b = await readBody(req);
+          if (!b.authorization || !String(b.authorization).trim()) {
+            return sendJson(res, 400, { error: 'authorization reference is required to enable C2' });
+          }
+          const args = ['enable', '--authorization', String(b.authorization).trim()];
+          c2PushBool(args, '--persistence', b.persistence);
+          c2PushBool(args, '--lateral', b.lateral);
+          c2PushBool(args, '--allow-public', b.allowPublic || b.allow_public);
+          for (const h of String(b.hosts || '').split(/[,;\s]+/).filter(Boolean)) args.push('--host', h);
+          return sendJson(res, 200, await c2Call(args));
+        }
+        if (req.method === 'POST' && p === '/api/c2/disable') {
+          return sendJson(res, 200, await c2Call(['disable']));
+        }
+        if ((req.method === 'PUT' || req.method === 'POST') && p === '/api/c2/policy') {
+          const b = await readBody(req);
+          const args = ['policy'];
+          c2PushStr(args, '--authorized-by', b.authorized_by);
+          if (typeof b.allow_persistence === 'boolean') args.push('--persistence', String(b.allow_persistence));
+          if (typeof b.allow_lateral === 'boolean') args.push('--lateral', String(b.allow_lateral));
+          if (typeof b.allow_public_targets === 'boolean') args.push('--allow-public', String(b.allow_public_targets));
+          if (Array.isArray(b.allowed_hosts) && b.allowed_hosts.length) {
+            for (const h of b.allowed_hosts) args.push('--host', String(h));
+          }
+          return sendJson(res, 200, await c2Call(args));
+        }
+
+        if (req.method === 'GET' && p === '/api/c2/listeners') {
+          return sendJson(res, 200, await c2Call(['listener', 'list']));
+        }
+        if (req.method === 'POST' && p === '/api/c2/listeners') {
+          const b = await readBody(req);
+          const args = ['listener', 'create', '--name', String(b.name || 'listener')];
+          c2PushStr(args, '--bind-host', b.bind_host);
+          if (b.bind_port) args.push('--bind-port', String(Number(b.bind_port) || 8443));
+          c2PushStr(args, '--callback-host', b.callback_host);
+          if (b.sleep_seconds) args.push('--sleep', String(Number(b.sleep_seconds) || 5));
+          if (b.jitter_percent) args.push('--jitter', String(Number(b.jitter_percent) || 0));
+          return sendJson(res, 200, await c2Call(args));
+        }
+        let m2 = p.match(/^\/api\/c2\/listeners\/([\w.-]+)\/(start|stop)$/);
+        if (req.method === 'POST' && m2) {
+          return sendJson(res, 200, await c2Call(['listener', m2[2], m2[1]]));
+        }
+        m2 = p.match(/^\/api\/c2\/listeners\/([\w.-]+)$/);
+        if (req.method === 'DELETE' && m2) {
+          return sendJson(res, 200, await c2Call(['listener', 'delete', m2[1]]));
+        }
+
+        if (req.method === 'GET' && p === '/api/c2/sessions') {
+          return sendJson(res, 200, await c2Call(['session', 'list']));
+        }
+        m2 = p.match(/^\/api\/c2\/sessions\/([\w.-]+)\/sleep$/);
+        if (req.method === 'POST' && m2) {
+          const b = await readBody(req);
+          const args = ['session', 'sleep', m2[1]];
+          if (b.seconds) args.push('--seconds', String(Number(b.seconds) || 5));
+          if (b.jitter) args.push('--jitter', String(Number(b.jitter) || 0));
+          return sendJson(res, 200, await c2Call(args));
+        }
+        m2 = p.match(/^\/api\/c2\/sessions\/([\w.-]+)\/note$/);
+        if (req.method === 'POST' && m2) {
+          const b = await readBody(req);
+          return sendJson(res, 200, await c2Call(['session', 'note', m2[1], '--note', String(b.note || '')]));
+        }
+        m2 = p.match(/^\/api\/c2\/sessions\/([\w.-]+)$/);
+        if (req.method === 'DELETE' && m2) {
+          return sendJson(res, 200, await c2Call(['session', 'kill', m2[1]]));
+        }
+
+        if (req.method === 'GET' && p === '/api/c2/tasks') {
+          const args = ['task', 'list'];
+          if (u.searchParams.get('session_id')) args.push('--session', u.searchParams.get('session_id'));
+          if (u.searchParams.get('status')) args.push('--status', u.searchParams.get('status'));
+          return sendJson(res, 200, await c2Call(args));
+        }
+        if (req.method === 'POST' && p === '/api/c2/tasks') {
+          const b = await readBody(req);
+          const args = ['task', 'enqueue', '--session', String(b.session_id || ''), '--type', String(b.task_type || 'exec')];
+          const payload = b.payload || {};
+          args.push('--payload', JSON.stringify(payload));
+          if (b.wait) args.push('--wait');
+          if (b.timeout) args.push('--timeout', String(Number(b.timeout) || 60));
+          return sendJson(res, 200, await c2Call(args));
+        }
+        m2 = p.match(/^\/api\/c2\/tasks\/([\w.-]+)\/wait$/);
+        if (req.method === 'GET' && m2) {
+          const t = Number(u.searchParams.get('timeout') || 60);
+          return sendJson(res, 200, await c2Call(['task', 'wait', m2[1], '--timeout', String(t)]));
+        }
+        m2 = p.match(/^\/api\/c2\/tasks\/([\w.-]+)\/cancel$/);
+        if (req.method === 'POST' && m2) {
+          return sendJson(res, 200, await c2Call(['task', 'cancel', m2[1]]));
+        }
+        m2 = p.match(/^\/api\/c2\/tasks\/([\w.-]+)$/);
+        if (req.method === 'GET' && m2) {
+          return sendJson(res, 200, await c2Call(['task', 'get', m2[1]]));
+        }
+
+        if (req.method === 'GET' && p === '/api/c2/events') {
+          const n = Number(u.searchParams.get('limit') || 100);
+          return sendJson(res, 200, await c2Call(['events', '--limit', String(n)]));
+        }
+
+        if (req.method === 'GET' && p === '/api/c2/payloads') {
+          return sendJson(res, 200, await c2Call(['payload', 'list']));
+        }
+        m2 = p.match(/^\/api\/c2\/payloads\/([\w.-]+)$/);
+        if (req.method === 'GET' && m2) {
+          const safe = m2[1];
+          const file = path.join(ROOT, '.neurosploit', 'c2', 'payloads', safe);
+          if (!file.startsWith(path.join(ROOT, '.neurosploit', 'c2', 'payloads') + path.sep) || !fs.existsSync(file)) {
+            return sendJson(res, 404, { error: 'payload not found' });
+          }
+          res.writeHead(200, {
+            'Content-Type': 'application/octet-stream',
+            'Content-Disposition': `attachment; filename="${safe.replace(/[^a-zA-Z0-9_.-]/g, '_')}"`,
+          });
+          return fs.createReadStream(file).pipe(res);
+        }
+        if (req.method === 'POST' && p === '/api/c2/payloads/webshell') {
+          const b = await readBody(req);
+          const args = ['payload', 'webshell', '--shell-type', String(b.shell_type || 'php')];
+          c2PushStr(args, '--password', b.password);
+          c2PushStr(args, '--pass-param', b.pass_param);
+          c2PushStr(args, '--cmd-param', b.cmd_param);
+          c2PushStr(args, '--filename', b.filename);
+          return sendJson(res, 200, await c2Call(args));
+        }
+        if (req.method === 'POST' && p === '/api/c2/payloads/beacon') {
+          const b = await readBody(req);
+          const args = ['payload', 'beacon', '--listener', String(b.listener_id || ''), '--kind', String(b.kind || 'bash')];
+          c2PushStr(args, '--host', b.host);
+          c2PushStr(args, '--filename', b.filename);
+          return sendJson(res, 200, await c2Call(args));
+        }
+        if (req.method === 'POST' && p === '/api/c2/payloads/oneliner') {
+          const b = await readBody(req);
+          return sendJson(res, 200, await c2Call(['payload', 'oneliner', '--listener', String(b.listener_id || '')]));
+        }
+
+        if (req.method === 'GET' && p === '/api/webshell/connections') {
+          return sendJson(res, 200, await c2Call(['webshell', 'list']));
+        }
+        if (req.method === 'POST' && p === '/api/webshell/connections') {
+          const b = await readBody(req);
+          const args = ['webshell', 'add', '--url', String(b.url || '')];
+          c2PushStr(args, '--name', b.name);
+          c2PushStr(args, '--password', b.password);
+          c2PushStr(args, '--shell-type', b.shell_type);
+          c2PushStr(args, '--method', b.method);
+          c2PushStr(args, '--cmd-param', b.cmd_param);
+          c2PushStr(args, '--pass-param', b.pass_param);
+          c2PushStr(args, '--os', b.os);
+          c2PushStr(args, '--encoding', b.encoding);
+          c2PushStr(args, '--note', b.note);
+          return sendJson(res, 200, await c2Call(args));
+        }
+        m2 = p.match(/^\/api\/webshell\/connections\/([\w.-]+)$/);
+        if ((req.method === 'PUT' || req.method === 'PATCH') && m2) {
+          const b = await readBody(req);
+          const args = ['webshell', 'update', m2[1]];
+          for (const k of ['url', 'name', 'password', 'shell_type', 'method', 'cmd_param', 'pass_param', 'os', 'encoding', 'note']) {
+            if (b[k] !== undefined) args.push('--' + k.replace(/_/g, '-'), String(b[k]));
+          }
+          return sendJson(res, 200, await c2Call(args));
+        }
+        if (req.method === 'DELETE' && m2) {
+          return sendJson(res, 200, await c2Call(['webshell', 'delete', m2[1]]));
+        }
+        m2 = p.match(/^\/api\/webshell\/connections\/([\w.-]+)\/(test|exec|file)$/);
+        if (req.method === 'POST' && m2) {
+          const b = await readBody(req);
+          if (m2[2] === 'test') return sendJson(res, 200, await c2Call(['webshell', 'test', m2[1]]));
+          if (m2[2] === 'exec') {
+            return sendJson(res, 200, await c2Call(['webshell', 'exec', '--id', m2[1], '--command', String(b.command || '')]));
+          }
+          const args = ['webshell', 'file', '--id', m2[1], '--action', String(b.action || 'list')];
+          c2PushStr(args, '--path', b.path);
+          c2PushStr(args, '--content', b.content);
+          c2PushStr(args, '--target-path', b.target_path);
+          return sendJson(res, 200, await c2Call(args));
+        }
+
+        return sendJson(res, 404, { error: 'not found' });
+      } catch (e) {
+        return sendJson(res, 400, { error: e.message });
+      }
     }
 
     // ---- aggregate stats for the dashboard ----

@@ -462,7 +462,7 @@ fn tool_doctrine(mcp_on: bool) -> String {
          console.log(await p.content()); await p.screenshot({path:'/tmp/shot.png'}); await b.close(); })();\nEOF`\n\
          then `node /tmp/pw.js <url>` to get the rendered DOM + the XHR/fetch URLs the app calls (that reveals the real API). Use `npx playwright screenshot <url> out.png` for quick proof. Combine with curl for the discovered API endpoints."
     };
-    format!(
+    let mut doctrine = format!(
         "TOOLING (authorized; best on Kali Linux or the kalilinux/kali-rolling Docker image):\n\
          - HTTP: `curl` (dump ALL response headers with -i/-D-, follow/inspect redirects, set methods/params/cookies), `wget`.\n\
          - Ports/services: `rustscan` if present, else `nmap`; if neither is installed you may \
@@ -520,7 +520,18 @@ fn tool_doctrine(mcp_on: bool) -> String {
         ua = ua_line(),
         proxy = proxy_line(),
         pocs = pocs_line(),
-    )
+    );
+    if std::env::var("NEUROSPLOIT_C2").ok().as_deref() == Some("1") {
+        doctrine.push_str("\n");
+        doctrine.push_str(crate::c2::doctrine());
+        doctrine.push_str("\n");
+    }
+    if std::env::var("NEUROSPLOIT_TOOLS").ok().as_deref() == Some("1") {
+        doctrine.push_str("\n");
+        doctrine.push_str(&crate::toolbox::doctrine());
+        doctrine.push_str("\n");
+    }
+    doctrine
 }
 
 /// Default identifying User-Agent so target owners (and the operator) can tell
@@ -1377,7 +1388,19 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
         kali_tool_recon(&cfg, &live_hosts, &tx).await
     };
 
-    let probe_facts = format!("{probe_facts}{subdomains}{tool_recon}");
+    // OPT-IN: let the model pick a bounded set of real tools from the catalog
+    // (nmap/rustscan/httpx/nuclei/ffuf/netexec/...) and feed their raw output
+    // into recon. This is the API-model path; subscription CLIs can already run
+    // the same tools directly. Never runs in offline mode.
+    let agent_tools = if cfg.offline
+        || std::env::var("NEUROSPLOIT_AGENT_TOOLS").ok().as_deref() != Some("1")
+    {
+        String::new()
+    } else {
+        agent_tool_round(&cfg, pool, &format!("{probe_facts}{subdomains}{tool_recon}"), &tx).await
+    };
+
+    let probe_facts = format!("{probe_facts}{subdomains}{tool_recon}{agent_tools}");
 
     let recon = if cfg.offline {
         let _ = tx.send("recon: offline mode — skipping model calls".into()).await;
@@ -2282,8 +2305,9 @@ async fn chain_from_seed(pool: &ModelPool, target: &str, directives: &str, recon
         loot.iter().take(30).map(|l| format!("- {l}")).collect::<Vec<_>>().join("\n")
     };
     let short: String = seed.title.chars().take(28).collect();
+    let c2 = crate::c2::agent_context().await;
     let user = format!(
-        "AUTHORIZED engagement on {target}.\n\n{directives}{react}{depth}{decision}{chain}{safety}{doctrine}\
+        "AUTHORIZED engagement on {target}.\n\n{directives}{react}{depth}{decision}{chain}{safety}{doctrine}{c2}\
          FOOTHOLD TO EXPAND (round {round}/{max}):\n- [{}] {} @ {} ({})\n  payload: {}\n  evidence: {}\n\n\
          LOOT GATHERED (reuse it):\n{loot_block}\n\n{recipe_block}RECON:\n{recon_ctx}\n\n\
          From THIS foothold, DECIDE the best directions and PROVE new impact — post-exploitation (loot creds/keys/config/source), credential reuse, privilege escalation (horizontal & vertical), lateral movement to adjacent services/hosts, data exfiltration, and NEW attack surface it exposes. Every claim needs a real tool receipt.\n\n\
@@ -5171,6 +5195,117 @@ async fn kali_tool_recon(cfg: &RunConfig, hosts: &[String], tx: &Sender<String>)
         block.push_str(&format!("Harvested URLs (sample of {}):\n", urls.len()));
         for u in urls.iter().take(80) { block.push_str(&format!("- {u}\n")); }
     }
+    block
+}
+
+const TOOLBOX_SYS: &str = "You are a tool-selection planner on an AUTHORIZED security engagement. \
+Given recon facts and a catalog of real security tools, choose a SMALL, TARGETED set of tools to run now. \
+Reply ONLY a JSON array of objects: [{\"tool\":\"<catalog id>\",\"args\":\"<flags / arguments>\",\"why\":\"<short reason>\"}]. \
+Rules: at most 6 entries; use only IDs from the catalog; stay in scope; no destructive, DoS, phishing or persistence actions; \
+do not repeat a scan whose result is already in RECON; prefer targeted flags over full-range scans; omit args to use the catalog default. \
+If no additional tool is useful, reply [].";
+
+/// Bounded, opt-in agent tool loop for the recon phase. The model only selects
+/// catalog IDs + flags; the runner enforces scope, constraints, timeouts and
+/// provisioning. Output is appended to the recon facts for downstream agents.
+async fn agent_tool_round(
+    cfg: &RunConfig,
+    pool: &ModelPool,
+    recon_facts: &str,
+    tx: &Sender<String>,
+) -> String {
+    let catalog = crate::toolbox::agent_catalog("run");
+    let recon_trim: String = recon_facts.chars().take(9000).collect();
+    let user = format!(
+        "TARGET: {}\n\n{}\n\nRECON FACTS (truncated):\n{}\n\nPick the next tools to run (JSON array only).",
+        cfg.target, catalog, recon_trim
+    );
+    let reply = match pool.complete_routed(Task::Recon, "toolbox", TOOLBOX_SYS, &user).await {
+        Ok((m, text)) => {
+            let _ = tx.send(format!("🧰 toolbox planner via {} — selecting real tools", m.label())).await;
+            text
+        }
+        Err(e) => {
+            let _ = tx.send(format!("🧰 toolbox planner unavailable: {e}")).await;
+            return String::new();
+        }
+    };
+    let Some(value) = crate::json_extract::parse_reply(&reply) else {
+        let _ = tx.send("🧰 toolbox planner returned no parseable plan — continuing without it".into()).await;
+        return String::new();
+    };
+    let entries = match value {
+        serde_json::Value::Array(a) => a,
+        serde_json::Value::Object(mut o) => o
+            .remove("tool_calls")
+            .or_else(|| o.remove("plan"))
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    if entries.is_empty() {
+        let _ = tx.send("🧰 toolbox planner chose no additional tools".into()).await;
+        return String::new();
+    }
+    let run_cfg = crate::toolbox::ToolRunConfig {
+        sandbox: cfg.sandbox.clone(),
+        provision: std::env::var("NEUROSPLOIT_PROVISION").ok().as_deref() == Some("1"),
+        timeout_secs: Some(180),
+        audit_dir: cfg.workdir.as_ref().map(|w| std::path::PathBuf::from(w).join("toolbox")),
+        scope: Some(effective_scope(cfg)),
+        constraints: operator_constraints(cfg),
+    };
+    let mut block = String::from("\n\nAGENT TOOLBOX OUTPUT (real tools selected by the model; raw output):\n");
+    let mut ran = 0usize;
+    let mut seen = std::collections::BTreeSet::new();
+    for e in entries.into_iter().take(6) {
+        let (tool, args) = match e {
+            serde_json::Value::String(id) => (id, None),
+            serde_json::Value::Object(o) => {
+                let id = o.get("tool").or_else(|| o.get("id")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let args = o.get("args").and_then(|v| v.as_str()).map(|s| s.to_string());
+                (id, args)
+            }
+            _ => continue,
+        };
+        let tool = tool.trim().to_ascii_lowercase();
+        if tool.is_empty() || !seen.insert(tool.clone()) {
+            continue;
+        }
+        if crate::toolbox::find(&tool).is_none() {
+            let _ = tx.send(format!("🧰 toolbox: skipping unknown tool '{tool}'")).await;
+            continue;
+        }
+        let _ = tx.send(format!("🧰 running {}…", tool)).await;
+        match crate::toolbox::run(&tool, args.as_deref(), &cfg.target, &run_cfg).await {
+            Ok(run) => {
+                ran += 1;
+                let _ = tx.send(format!(
+                    "🧰 {} → exit {}{} ({} ms)",
+                    run.name, run.code,
+                    if run.timed_out { " · TIMED OUT" } else { "" },
+                    run.duration_ms
+                )).await;
+                block.push_str(&format!(
+                    "\n### {} [{}] `{}` → exit {}{}\n",
+                    run.name, run.tool, run.command, run.code,
+                    if run.timed_out { " (timed out)" } else { "" }
+                ));
+                let out = if run.stdout.trim().is_empty() { &run.stderr } else { &run.stdout };
+                let capped: String = out.chars().take(7000).collect();
+                block.push_str(&capped);
+                block.push('\n');
+            }
+            Err(e) => {
+                let _ = tx.send(format!("🧰 {tool} not run: {e}")).await;
+                block.push_str(&format!("\n### {tool} → NOT RUN: {e}\n"));
+            }
+        }
+    }
+    if ran == 0 {
+        return String::new();
+    }
+    let _ = tx.send(format!("🧰 toolbox: {} real tool run(s) added to recon facts", ran)).await;
     block
 }
 
