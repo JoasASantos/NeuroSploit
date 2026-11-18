@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# neurosploit-mcp — wrapper that locates the neurosploit binary and runs it in
+# MCP server mode (stdio JSON-RPC). Installed globally so any MCP client can
+# reference it by name.
+set -euo pipefail
+
+# 1. Explicit override
+if [[ -n "${NEUROSPLOIT_BIN:-}" ]] && [[ -x "$NEUROSPLOIT_BIN" ]]; then
+  exec "$NEUROSPLOIT_BIN" mcp "$@"
+fi
+
+# 2. In PATH
+if command -v neurosploit &>/dev/null; then
+  exec neurosploit mcp "$@"
+fi
+
+# 3. Known install locations
+for candidate in \
+  /usr/local/bin/neurosploit \
+  /opt/neurosploit-rs/neurosploit-rs/target/release/neurosploit \
+  "$HOME/.neurosploit/bin/neurosploit" \
+  "$HOME/.cargo/bin/neurosploit"; do
+  if [[ -x "$candidate" ]]; then
+    exec "$candidate" mcp "$@"
+  fi
+done
+
+echo '{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"neurosploit binary not found. Set NEUROSPLOIT_BIN or run: cargo install --path neurosploit-rs/app"}}' >&2
+exit 1

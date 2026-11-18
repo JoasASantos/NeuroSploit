@@ -1,0 +1,7 @@
+{
+  "neurosploit": {
+    "command": "neurosploit-mcp",
+    "args": [],
+    "disabled": false
+  }
+}

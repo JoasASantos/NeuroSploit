@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "neurosploit": {
+      "command": "neurosploit-mcp",
+      "args": [],
+      "env": {}
+    }
+  }
+}

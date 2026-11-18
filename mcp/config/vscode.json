@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "neurosploit": {
+      "type": "stdio",
+      "command": "neurosploit-mcp",
+      "args": []
+    }
+  }
+}
