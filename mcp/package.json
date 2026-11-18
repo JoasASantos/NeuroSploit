@@ -1,0 +1,35 @@
+{
+  "name": "@neurosploit/mcp-server",
+  "version": "4.5.0",
+  "description": "NeuroSploit MCP Server — 39 security tools for Claude Code, Cursor, Windsurf and any MCP client. Pentesting, code review, C2, toolbox, graph reasoning, all as MCP tools.",
+  "license": "MIT",
+  "bin": {
+    "neurosploit-mcp": "./bin/neurosploit-mcp"
+  },
+  "files": [
+    "bin/",
+    "install.sh",
+    "README.md",
+    "config/"
+  ],
+  "scripts": {
+    "postinstall": "node bin/postinstall.js",
+    "install-mcp": "bash install.sh"
+  },
+  "keywords": [
+    "mcp",
+    "security",
+    "pentest",
+    "neurosploit",
+    "claude-code",
+    "cursor",
+    "windsurf"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ]
+}

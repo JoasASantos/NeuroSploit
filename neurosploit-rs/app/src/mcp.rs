@@ -468,6 +468,115 @@ fn tool_list() -> Value {
     ]));
     extend_tools(&mut tools, json!([
         {
+            "name": "neurosploit_neo4j",
+            "description": "Manage the Neo4j graph database — sync exploration graph, check status, docker up/down.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["status","sync","up","down"], "description": "Neo4j operation" },
+                    "run":    { "type": "string", "description": "Run id for sync" }
+                },
+                "required": ["action"]
+            }
+        },
+        {
+            "name": "neurosploit_sandbox",
+            "description": "Manage the Kali container sandbox — start, stop, shell, status.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["start","stop","shell","status"], "description": "Sandbox operation" }
+                },
+                "required": ["action"]
+            }
+        },
+        {
+            "name": "neurosploit_capability",
+            "description": "Sign or verify a capability token (authorization grant for engagements).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["sign","verify"], "description": "Operation" },
+                    "token":  { "type": "string", "description": "Token to verify" },
+                    "scope":  { "type": "string", "description": "Scope for signing" }
+                },
+                "required": ["action"]
+            }
+        },
+        {
+            "name": "neurosploit_provenance",
+            "description": "Show or verify build provenance of the neurosploit binary.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["show","verify"], "description": "Operation" }
+                },
+                "required": ["action"]
+            }
+        },
+        {
+            "name": "neurosploit_reactive",
+            "description": "Control the reactive engine — query graph state, inject hints, view chain candidates.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["status","hint","chains","knowledge"], "description": "Reactive engine operation" },
+                    "run":    { "type": "string", "description": "Run id or workdir path" },
+                    "text":   { "type": "string", "description": "Hint text for inject" },
+                    "query":  { "type": "string", "description": "Knowledge base query" }
+                },
+                "required": ["action"]
+            }
+        },
+        {
+            "name": "neurosploit_knowledge",
+            "description": "Query the agent knowledge base — search methodologies by keyword, CWE, or category.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search terms or CWE id" },
+                    "limit": { "type": "integer", "description": "Max results (default 5)" }
+                },
+                "required": ["query"]
+            }
+        },
+        {
+            "name": "neurosploit_graph_chains",
+            "description": "Find exploitation chain candidates from confirmed findings to untested assets in a completed run.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "run": { "type": "string", "description": "Run id or workdir path" }
+                },
+                "required": ["run"]
+            }
+        },
+        {
+            "name": "neurosploit_mcp_profiles",
+            "description": "List available MCP tool profiles and their tool allowlists (web, mobile-android, mobile-ios, binary, burp).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "profile": { "type": "string", "description": "Specific profile name to describe" }
+                }
+            }
+        },
+        {
+            "name": "neurosploit_config",
+            "description": "Read or update engagement configuration defaults (model, autonomy, transport, MCP profile, reactive mode).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["get","set"], "description": "Operation" },
+                    "key":    { "type": "string", "description": "Config key to get or set" },
+                    "value":  { "type": "string", "description": "Value to set" }
+                },
+                "required": ["action"]
+            }
+        }
+    ]));
+    extend_tools(&mut tools, json!([
+        {
             "name": "neurosploit_tool_list",
             "description": "List or search the 200+ security-tool catalog (web, network, Active Directory, cloud, container, mobile, binary, forensics, AI).",
             "inputSchema": {
@@ -852,6 +961,146 @@ fn handle_call(id: Option<Value>, req: &Value, exe: &std::path::Path) -> Value {
             argv.push("--json".into());
         }
 
+        // ---- neo4j / sandbox / capability / provenance / reactive / knowledge / chains / profiles / config
+        "neurosploit_neo4j" => {
+            let Some(action) = s("action") else { return tool_err(id, "action is required") };
+            argv.push("neo4j".into()); argv.push(action.clone());
+            if action == "sync" {
+                if let Some(r) = s("run") { argv.push(r); }
+            }
+        }
+        "neurosploit_sandbox" => {
+            let Some(action) = s("action") else { return tool_err(id, "action is required") };
+            argv.push("sandbox".into()); argv.push(action);
+        }
+        "neurosploit_capability" => {
+            let Some(action) = s("action") else { return tool_err(id, "action is required") };
+            argv.push("capability".into());
+            match action.as_str() {
+                "sign" => {
+                    argv.push("sign".into());
+                    if let Some(sc) = s("scope") { argv.push("--scope".into()); argv.push(sc); }
+                }
+                "verify" => {
+                    argv.push("verify".into());
+                    if let Some(t) = s("token") { argv.push(t); }
+                }
+                other => return tool_err(id, &format!("unknown capability action: {other}")),
+            }
+        }
+        "neurosploit_provenance" => {
+            let Some(action) = s("action") else { return tool_err(id, "action is required") };
+            argv.push("provenance".into()); argv.push(action);
+        }
+        "neurosploit_reactive" => {
+            let Some(action) = s("action") else { return tool_err(id, "action is required") };
+            let run_workdir = s("run").unwrap_or_else(|| ".".into());
+            let graph_dir = if std::path::Path::new(&run_workdir).is_dir() {
+                format!("{run_workdir}/graphs")
+            } else {
+                let base = std::env::current_dir().unwrap_or_default();
+                format!("{}/runs/{run_workdir}/graphs", base.display())
+            };
+            match action.as_str() {
+                "status" => {
+                    argv.push("internal".into()); argv.push("--graph".into()); argv.push(graph_dir);
+                }
+                "hint" => {
+                    let text = s("text").unwrap_or_default();
+                    let hints_path = format!("{graph_dir}/hints.jsonl");
+                    let line = serde_json::json!({ "hint": text, "ts": chrono_now() });
+                    if let Some(parent) = std::path::Path::new(&hints_path).parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    return match std::fs::OpenOptions::new().create(true).append(true).open(&hints_path) {
+                        Ok(mut f) => {
+                            let _ = writeln!(f, "{}", line);
+                            tool_text(id, &format!("Hint appended to {hints_path}"))
+                        }
+                        Err(e) => tool_err(id, &format!("failed to write hint: {e}")),
+                    };
+                }
+                "chains" => {
+                    argv.push("internal".into()); argv.push("--graph".into()); argv.push(graph_dir); argv.push("--expand".into());
+                }
+                "knowledge" => {
+                    argv.push("agents".into());
+                }
+                other => return tool_err(id, &format!("unknown reactive action: {other}")),
+            }
+        }
+        "neurosploit_knowledge" => {
+            let Some(_query) = s("query") else { return tool_err(id, "query is required") };
+            argv.push("agents".into());
+        }
+        "neurosploit_graph_chains" => {
+            let Some(run) = s("run") else { return tool_err(id, "run is required") };
+            let graph_dir = if std::path::Path::new(&run).is_dir() {
+                format!("{run}/graphs")
+            } else {
+                let base = std::env::current_dir().unwrap_or_default();
+                format!("{}/runs/{run}/graphs", base.display())
+            };
+            argv.push("internal".into()); argv.push("--graph".into()); argv.push(graph_dir); argv.push("--expand".into());
+        }
+        "neurosploit_mcp_profiles" => {
+            let profiles = json!({
+                "web": { "server": "@anthropic/playwright-mcp", "tools": 16, "description": "Browser automation: navigate, click, fill, screenshot, evaluate JS, network interception" },
+                "mobile-android": { "server": "REA APK tools", "tools": 8, "description": "APK analysis: decompile, manifest, smali, strings, certificates, native libs, Frida hooks, dynamic inspection" },
+                "mobile-ios": { "server": "REA IPA tools", "tools": 7, "description": "IPA analysis: decrypt, class-dump, entitlements, Info.plist, Objective-C/Swift runtime, Frida hooks" },
+                "binary": { "server": "REA binary tools", "tools": 10, "description": "Native binary RE: decompile, disassemble, strings, xrefs, call graphs, symbols, sections, imports, exports, patch" },
+                "burp": { "server": "Burp REST API", "tools": 4, "description": "Burp Suite proxy: scan, sitemap, issues, traffic export" }
+            });
+            if let Some(p) = s("profile") {
+                return match profiles.get(&p) {
+                    Some(v) => tool_text(id, &serde_json::to_string_pretty(v).unwrap_or_default()),
+                    None => tool_err(id, &format!("unknown profile: {p}. Available: web, mobile-android, mobile-ios, binary, burp")),
+                };
+            }
+            return tool_text(id, &serde_json::to_string_pretty(&profiles).unwrap_or_default());
+        }
+        "neurosploit_config" => {
+            let Some(action) = s("action") else { return tool_err(id, "action is required") };
+            let config_path = std::path::PathBuf::from(".neurosploit/config.json");
+            match action.as_str() {
+                "get" => {
+                    return match std::fs::read_to_string(&config_path) {
+                        Ok(content) => {
+                            if let Some(key) = s("key") {
+                                match serde_json::from_str::<Value>(&content) {
+                                    Ok(cfg) => match cfg.get(&key) {
+                                        Some(v) => tool_text(id, &format!("{key} = {v}")),
+                                        None => tool_err(id, &format!("key '{key}' not found in config")),
+                                    },
+                                    Err(e) => tool_err(id, &format!("invalid config JSON: {e}")),
+                                }
+                            } else {
+                                tool_text(id, &content)
+                            }
+                        }
+                        Err(_) => tool_text(id, "no config file found (.neurosploit/config.json)"),
+                    };
+                }
+                "set" => {
+                    let Some(key) = s("key") else { return tool_err(id, "key is required for set") };
+                    let Some(value) = s("value") else { return tool_err(id, "value is required for set") };
+                    let mut cfg: serde_json::Map<String, Value> = match std::fs::read_to_string(&config_path) {
+                        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+                        Err(_) => serde_json::Map::new(),
+                    };
+                    cfg.insert(key.clone(), Value::String(value.clone()));
+                    if let Some(parent) = config_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    return match std::fs::write(&config_path, serde_json::to_string_pretty(&cfg).unwrap_or_default()) {
+                        Ok(_) => tool_text(id, &format!("set {key} = {value}")),
+                        Err(e) => tool_err(id, &format!("failed to write config: {e}")),
+                    };
+                }
+                other => return tool_err(id, &format!("unknown config action: {other}")),
+            }
+        }
+
         // ---- toolbox --------------------------------------------------------
         "neurosploit_tool_list" => {
             if let Some(q) = s("query") {
@@ -1026,6 +1275,12 @@ fn tool_text(id: Option<Value>, text: &str) -> Value {
 }
 fn tool_err(id: Option<Value>, msg: &str) -> Value {
     ok(id, json!({ "content": [ { "type": "text", "text": msg } ], "isError": true }))
+}
+
+fn chrono_now() -> String {
+    // Simple ISO-ish timestamp without pulling in chrono crate
+    let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    format!("{}", d.as_secs())
 }
 
 fn strip_ansi(s: &str) -> String {
