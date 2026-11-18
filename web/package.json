@@ -1,8 +1,8 @@
 {
   "name": "neurosploit-web",
-  "version": "4.4.2",
+  "version": "4.4.3",
   "private": true,
-  "description": "NeuroSploit v4.4.2 web console — lead board + REPL, backed by the neurosploit CLI harness.",
+  "description": "NeuroSploit v4.4.3 web console — lead board + REPL, backed by the neurosploit CLI harness.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

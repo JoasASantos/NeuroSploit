@@ -1,3 +1,32 @@
+# NeuroSploit v4.4.3 — Release Notes
+
+**Credits:** Joas A Santos & Red Team Leaders
+
+## v4.4.3 — Global MCP server, C2 framework, reactive engine and 200+ tool catalog
+
+- **Global MCP server package** (`mcp/`). `bash mcp/install.sh` builds the binary,
+  links it to `/usr/local/bin`, and auto-registers the NeuroSploit MCP server in
+  Claude Code, Cursor, Windsurf and VS Code. 48 MCP tools expose the full platform:
+  pentesting, code review, C2, toolbox, graph reasoning, reactive engine, Neo4j,
+  sandbox, capability tokens and more. Any MCP client can now drive NeuroSploit.
+- **9 new MCP tools**: `neo4j` (graph DB management), `sandbox` (Kali container),
+  `capability` (token sign/verify), `provenance` (build verification), `reactive`
+  (engine control), `knowledge` (agent methodology queries), `graph_chains`
+  (exploitation chain discovery), `mcp_profiles` (tool profile descriptions),
+  `config` (engagement defaults).
+- **C2 framework** with local daemon, HTTP listener, session management, task dispatch,
+  beacon protocol and WebShell support. Full MCP integration.
+- **200+ security tools catalog** (`toolbox/`) with structured output parsing,
+  install checks, and MCP tool server management.
+- **Reactive engine** — event-driven planner/worker loop with graph reasoning (BFS
+  chain discovery from findings to untested assets), knowledge base, MCP profiles
+  (web/mobile/binary/burp), session resume, heartbeat lease, hint injection, and
+  intelligent replan trigger.
+- **Web UI** — reactive engine toggle, MCP profile selector, autonomy level, modals
+  for feature info and profile descriptions, settings integration.
+
+---
+
 # NeuroSploit v4.4.2 — Release Notes
 
 **Credits:** Joas A Santos & Red Team Leaders
