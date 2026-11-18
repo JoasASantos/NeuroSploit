@@ -236,8 +236,25 @@ const PROVIDERS = [
     models: ['qwen2.5-coder-32b-instruct', 'dolphin-2.9-llama3-70b', 'deepseek-r1-distill-qwen-32b', 'llama-3.3-70b-instruct'] },
 ];
 
-// In-memory only — never written to disk. Cleared on server restart.
 const apiKeys = new Map(); // provider key -> secret
+const KEYS_FILE = path.join(CONFIG_DIR, 'keys.json');
+
+async function loadKeys() {
+  try {
+    const raw = await fsp.readFile(KEYS_FILE, 'utf8');
+    const obj = JSON.parse(raw);
+    for (const [k, v] of Object.entries(obj)) {
+      if (v && PROVIDERS.some(p => p.key === k)) apiKeys.set(k, v);
+    }
+  } catch { /* first run or corrupted — start empty */ }
+}
+
+async function persistKeys() {
+  await ensureConfigDir();
+  const obj = {};
+  for (const [k, v] of apiKeys) obj[k] = v;
+  await fsp.writeFile(KEYS_FILE, JSON.stringify(obj, null, 2), { mode: 0o600 });
+}
 
 // A cheap authenticated endpoint per provider, to confirm a key works. GET a
 // models/account list — a 200 means the key authenticates, 401/403 means it does
@@ -1359,6 +1376,7 @@ function buildArgs(body) {
   for (const a of body.agents || []) args.push('--only', a);
   if (body.reactive) args.push('--reactive');
   if (body.mcpProfile) args.push('--mcp-profile', body.mcpProfile);
+  args.push('--agent-tools');
   if (body.autonomy && body.autonomy !== 'standard') args.push('--autonomy', body.autonomy);
   // C2 is opt-in: without an authorization reference the CLI refuses to run it.
   if (body.c2) {
@@ -2508,7 +2526,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { version: VERSION, binary: BIN, root: ROOT });
     }
 
-    // ---- providers / API keys (in-memory only, never persisted) ----
+    // ---- providers / API keys (persisted to .neurosploit/keys.json) ----
     if (req.method === 'GET' && p === '/api/providers') {
       return sendJson(res, 200, PROVIDERS.map(({ key, label, kind, models }) => ({ key, label, kind, models })));
     }
@@ -2522,9 +2540,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (body.key) apiKeys.set(body.provider, body.key);
       else apiKeys.delete(body.provider);
-      // Save also verifies the key with a cheap authenticated call, so the
-      // operator knows it works before a run depends on it. The key is saved
-      // either way (some providers can't be auto-verified from here).
+      await persistKeys();
       let verify = { ok: null, message: 'saved' };
       if (body.key && body.verify !== false) verify = await verifyKey(body.provider, body.key);
       return sendJson(res, 200, { ok: true, verify });
@@ -2539,6 +2555,7 @@ const server = http.createServer(async (req, res) => {
     m = p.match(/^\/api\/keys\/([^/]+)$/);
     if (req.method === 'DELETE' && m) {
       apiKeys.delete(decodeURIComponent(m[1]));
+      await persistKeys();
       return sendJson(res, 200, { ok: true });
     }
 
@@ -2663,6 +2680,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 loadPersistedJobs();
+loadKeys();
 
 server.listen(PORT, () => {
   console.log(`NeuroSploit v${VERSION} web console → http://localhost:${PORT}`);
