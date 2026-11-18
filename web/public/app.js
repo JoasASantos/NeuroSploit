@@ -125,7 +125,7 @@ function clearFieldErrors() { $$('.field-error').forEach((el) => { el.textConten
 // view navigation
 // ---------------------------------------------------------------------------
 
-const ALL_VIEWS = ['homeView','dashView','wizardView','liveView','detailView','pentestsView','prreviewsView','issuesView','reposView','domainsView','networksView','vaultView','guardrailsView','integrationsView','settingsView'];
+const ALL_VIEWS = ['homeView','dashView','wizardView','liveView','detailView','pentestsView','prreviewsView','issuesView','reposView','domainsView','networksView','vaultView','guardrailsView','integrationsView','settingsView','c2View','toolboxView'];
 
 function switchView(viewName) {
   state.activeView = viewName;
@@ -147,6 +147,8 @@ function switchView(viewName) {
   if (viewName === 'prreviews') loadPrReviews();
   if (viewName === 'vault') loadVault();
   if (viewName === 'guardrails') loadGuardrails();
+  if (viewName === 'c2') loadC2();
+  if (viewName === 'toolbox') loadToolbox();
   if (viewName === 'dash') renderDashboard();
   if (viewName === 'home') renderHome();
 }
@@ -676,6 +678,7 @@ function renderReview() {
     { k: 'Intercept', v: $('#fieldIntercept').value === 'off' ? 'direct' : $('#fieldIntercept').value },
     { k: 'Sandbox', v: $('#fieldSandbox').value ? 'Kali container' : 'host' },
     { k: 'PoC re-validation', v: $('#fieldRevalidatePoc').checked ? 'on' : 'off' },
+    { k: 'C2 / post-exploitation', v: $('#fieldC2')?.checked ? `on${$('#fieldC2Persistence')?.checked ? ' · persistence' : ''}${$('#fieldC2Lateral')?.checked ? ' · lateral' : ''}` : 'off' },
     { k: 'TypeSafe', v: $('#fieldTypesafe') ? $('#fieldTypesafe').value : 'auto' },
     { k: 'Compliance', v: (['fieldCompPci', 'fieldCompHipaa', 'fieldCompSoc2', 'fieldCompGdpr'].map((id) => $(`#${id}`).checked && $(`#${id}`).value).filter(Boolean).join(', ')) || 'none' },
     { k: 'Autonomy', v: $('#fieldAutonomy')?.value || 'standard' },
@@ -753,6 +756,10 @@ async function startExploitation() {
     reactive: $('#fieldReactive')?.checked || false,
     mcpProfile: $('#fieldMcpProfile')?.value || undefined,
     autonomy: $('#fieldAutonomy')?.value || 'standard',
+    c2: !!$('#fieldC2')?.checked,
+    c2Authorization: $('#fieldC2Auth')?.value.trim() || undefined,
+    c2Persistence: !!$('#fieldC2Persistence')?.checked,
+    c2Lateral: !!$('#fieldC2Lateral')?.checked,
   };
 
   $('#btnLaunch').disabled = true;
@@ -3121,6 +3128,696 @@ document.addEventListener('keydown', (e) => {
     }
   }
 });
+
+
+// ---------------------------------------------------------------------------
+// C2 & Shells — opt-in Command & Control and WebShell management
+// ---------------------------------------------------------------------------
+
+const c2State = { data: null, tab: 'sessions', session: '', webshell: '', output: '', payload: null, timer: null };
+
+function c2Time(ts) {
+  if (!ts) return '—';
+  try { return new Date(ts).toLocaleTimeString(); } catch { return String(ts); }
+}
+function c2Badge(on, onText, offText) {
+  return `<span class="badge ${on ? 'badge-ok' : 'badge-muted'}">${esc(on ? onText : offText)}</span>`;
+}
+function c2SetOutput(value) {
+  c2State.output = String(value || '');
+}
+
+async function loadC2() {
+  if (state.activeView !== 'c2') return;
+  const body = $('#c2Body');
+  try {
+    const data = await api('/api/c2/status');
+    c2State.data = data;
+    const sessions = data.sessions || [];
+    if (!c2State.session || !sessions.some((x) => x.id === c2State.session)) {
+      const active = sessions.find((x) => x.status === 'active') || sessions[0];
+      c2State.session = active ? active.id : '';
+    }
+    const shells = data.webshells || [];
+    if (!c2State.webshell || !shells.some((x) => x.id === c2State.webshell)) {
+      c2State.webshell = shells[0] ? shells[0].id : '';
+    }
+    renderC2();
+    if (!c2State.timer) {
+      c2State.timer = setInterval(() => {
+        if (state.activeView === 'c2') loadC2();
+      }, 5000);
+    }
+  } catch (e) {
+    if (body) body.innerHTML = `<div class="empty-state">C2 unavailable — ${esc(e.message)}</div>`;
+  }
+}
+
+function renderC2() {
+  const body = $('#c2Body');
+  if (!body) return;
+  const d = c2State.data || {};
+  const p = d.policy || {};
+  if (!p.enabled) {
+    body.innerHTML = `
+      <div class="config-card" style="max-width:780px;margin:24px auto;">
+        <div class="config-card-title">C2 &amp; WebShells are disabled</div>
+        <div class="config-card-desc">
+          This layer is opt-in and auditable. It exists for <b>authorized internal-network engagements</b>:
+          listeners bind loopback by default, WebShell targets must resolve to private/loopback space unless
+          explicitly allow-listed, and persistence/lateral movement each need their own opt-in.
+          State and the audit trail live under <code>.neurosploit/c2/</code>.
+        </div>
+        <div class="form-group">
+          <label for="c2Auth">Authorization reference (required)</label>
+          <input id="c2Auth" type="text" placeholder="SOW / ticket / bug-bounty URL" />
+          <div class="field-help">Recorded in every audit entry. A run launched with C2 also passes this to the agents.</div>
+        </div>
+        <div class="form-group">
+          <label>Additional authorized hosts / domains (optional, comma-separated)</label>
+          <input id="c2Hosts" type="text" placeholder="10.20.0.0/24 · *.corp.local" />
+          <div class="field-help">Targets outside private address space require an entry here (or explicit allow-public, below).</div>
+        </div>
+        <div class="check-row"><input type="checkbox" id="c2Persist" /> <label for="c2Persist">Allow <b>persistence</b> tasks (cron/bashrc/systemd/schtasks/registry)</label></div>
+        <div class="check-row"><input type="checkbox" id="c2Lateral" /> <label for="c2Lateral">Allow <b>lateral movement</b> and file uploads</label></div>
+        <div class="check-row"><input type="checkbox" id="c2Public" /> <label for="c2Public">Allow public targets (explicit opt-in — only for authorized external assets)</label></div>
+        <div class="config-card-actions">
+          <button class="btn btn-accent" data-c2-action="enable">Enable C2</button>
+        </div>
+        <div class="field-error" id="c2EnableError"></div>
+      </div>`;
+    return;
+  }
+
+  const counts = d.counts || {};
+  const tabs = [['sessions','Sessions'],['listeners','Listeners'],['tasks','Tasks'],['webshells','WebShells'],['payloads','Payloads'],['events','Events']];
+  body.innerHTML = `
+    <div class="config-card" style="margin-bottom:16px;">
+      <div class="config-card-title">
+        C2 enabled ${c2Badge(true, 'ON', 'OFF')}
+        ${c2Badge(!!p.allow_persistence, 'persistence', 'no persistence')}
+        ${c2Badge(!!p.allow_lateral, 'lateral', 'no lateral')}
+        ${c2Badge(!!p.allow_public_targets, 'public targets', 'private-only')}
+        <span class="config-card-meta" style="margin-left:auto;">auth: ${esc(p.authorized_by || '—')}</span>
+      </div>
+      <div class="config-card-desc" style="margin-bottom:8px;">
+        ${counts.sessions_active || 0} active / ${counts.sessions_total || 0} sessions ·
+        ${counts.listeners || 0} listeners · ${counts.tasks_queued || 0} queued tasks ·
+        ${counts.webshells || 0} WebShells.
+        <span class="mono">allow-list: ${esc((p.allowed_hosts || []).join(', ') || '(private space only)')}</span>
+      </div>
+      <div class="config-card-actions" style="border-top:none;padding-top:0;margin-top:0;">
+        <button class="btn btn-sm" data-c2-action="disable">Disable C2</button>
+        <button class="btn btn-sm" data-c2-action="refresh">Refresh</button>
+      </div>
+    </div>
+    <nav class="run-tabs" style="margin-bottom:12px;">
+      ${tabs.map(([id, label]) => `<button class="run-tab ${c2State.tab === id ? 'active' : ''}" data-c2-tab="${id}">${label}</button>`).join('')}
+    </nav>
+    <div id="c2Panel">${renderC2Panel(d, p)}</div>
+    ${c2State.output ? `<div class="config-card" style="margin-top:16px;"><div class="config-card-title">Output</div><pre class="c2-output">${esc(c2State.output)}</pre></div>` : ''}`;
+}
+
+function renderC2Panel(d, p) {
+  const tab = c2State.tab;
+  if (tab === 'listeners') return renderC2Listeners(d);
+  if (tab === 'tasks') return renderC2Tasks(d);
+  if (tab === 'webshells') return renderC2Webshells(d);
+  if (tab === 'payloads') return renderC2Payloads(d);
+  if (tab === 'events') return renderC2Events(d);
+  return renderC2Sessions(d);
+}
+
+function renderC2Sessions(d) {
+  const sessions = d.sessions || [];
+  const sel = sessions.find((x) => x.id === c2State.session) || null;
+  const rows = sessions.map((s) => `
+    <tr class="${s.id === c2State.session ? 'c2-selected' : ''}" data-c2-session="${esc(s.id)}">
+      <td class="mono">${esc(s.id)}</td>
+      <td>${esc(s.hostname || '?')}</td>
+      <td class="mono">${esc(s.username || '?')}${s.is_admin ? ' (admin)' : ''}</td>
+      <td>${esc(s.os || '?')}/${esc(s.arch || '?')}</td>
+      <td class="mono">${esc(s.internal_ip || '?')}</td>
+      <td><span class="badge ${s.status === 'active' ? 'badge-ok' : 'badge-muted'}">${esc(s.status)}</span></td>
+      <td class="mono">${esc(c2Time(s.last_seen))}</td>
+      <td class="mono">${esc(s.sleep_seconds)}s</td>
+      <td>
+        <button class="btn btn-sm" data-c2-action="session-sleep" data-id="${esc(s.id)}">sleep 10s</button>
+        <button class="btn btn-sm" data-c2-action="session-note" data-id="${esc(s.id)}">note</button>
+        <button class="btn btn-sm" data-c2-action="session-kill" data-id="${esc(s.id)}">kill</button>
+      </td>
+    </tr>`).join('');
+  return `
+    <div class="table-wrap"><table class="data-table">
+      <thead><tr><th>Session</th><th>Host</th><th>User</th><th>OS/arch</th><th>Internal IP</th><th>Status</th><th>Last seen</th><th>Sleep</th><th></th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="9" class="empty-state">No sessions yet — start a listener and deploy an authorized beacon.</td></tr>'}</tbody>
+    </table></div>
+    ${sel ? `
+      <div class="config-card" style="margin-top:16px;">
+        <div class="config-card-title">Task console — ${esc(sel.hostname)} <span class="mono">${esc(sel.id)}</span></div>
+        <div class="config-card-desc">${esc(sel.username)}@${esc(sel.hostname)} · ${esc(sel.os)}/${esc(sel.arch)} · ${esc(sel.internal_ip)} ${sel.note ? `· note: ${esc(sel.note)}` : ''}</div>
+        <div class="field-row">
+          <div class="field-group" style="flex:3;">
+            <label class="field-label" for="c2Cmd">Command (exec / lateral movement)</label>
+            <input id="c2Cmd" type="text" placeholder="id; hostname; net view /domain" />
+          </div>
+          <div class="field-group" style="flex:1;">
+            <label class="field-label" for="c2PersistMethod">Persistence method</label>
+            <select id="c2PersistMethod">
+              <option value="auto">auto</option><option value="cron">cron</option><option value="bashrc">bashrc</option>
+              <option value="systemd">systemd (user)</option><option value="schtasks">schtasks</option><option value="registry">registry Run key</option>
+            </select>
+          </div>
+        </div>
+        <div class="config-card-actions">
+          <button class="btn btn-accent" data-c2-action="task-exec">Run command</button>
+          <button class="btn" data-c2-action="task-persist">Install persistence</button>
+          <button class="btn" data-c2-action="task-lateral">Lateral movement</button>
+        </div>
+        <div class="field-help">Persistence and lateral tasks fail unless enabled in the policy. Every action is audited.</div>
+      </div>` : ''}`;
+}
+
+function renderC2Listeners(d) {
+  const rows = (d.listeners || []).map((l) => `
+    <tr>
+      <td class="mono">${esc(l.id)}</td>
+      <td>${esc(l.name)}</td>
+      <td class="mono">${esc(l.bind_host)}:${esc(l.bind_port)}</td>
+      <td class="mono">${esc(l.callback_host || '—')}</td>
+      <td><span class="badge ${l.status === 'running' ? 'badge-ok' : 'badge-muted'}">${esc(l.status)}</span></td>
+      <td class="mono">${esc(l.sleep_seconds)}s</td>
+      <td>
+        <button class="btn btn-sm" data-c2-action="listener-start" data-id="${esc(l.id)}">start</button>
+        <button class="btn btn-sm" data-c2-action="listener-stop" data-id="${esc(l.id)}">stop</button>
+        <button class="btn btn-sm" data-c2-action="listener-delete" data-id="${esc(l.id)}">delete</button>
+      </td>
+    </tr>`).join('');
+  return `
+    <div class="config-card" style="margin-bottom:16px;">
+      <div class="config-card-title">New HTTP beacon listener</div>
+      <div class="field-row">
+        <div class="field-group"><label class="field-label" for="c2ListenerName">Name</label><input id="c2ListenerName" placeholder="lab-beacon" /></div>
+        <div class="field-group"><label class="field-label" for="c2ListenerHost">Bind host</label><input id="c2ListenerHost" value="127.0.0.1" /></div>
+        <div class="field-group"><label class="field-label" for="c2ListenerPort">Port</label><input id="c2ListenerPort" type="number" value="8443" /></div>
+        <div class="field-group"><label class="field-label" for="c2ListenerCb">Callback host</label><input id="c2ListenerCb" placeholder="defaults to bind host" /></div>
+        <div class="field-group"><label class="field-label" for="c2ListenerSleep">Sleep (s)</label><input id="c2ListenerSleep" type="number" value="5" /></div>
+      </div>
+      <div class="config-card-actions"><button class="btn btn-accent" data-c2-action="listener-create">Create listener</button></div>
+      <div class="field-help">Binds loopback by default. Use a private address for a lab; public bind addresses require explicit allow-public.</div>
+    </div>
+    <div class="table-wrap"><table class="data-table">
+      <thead><tr><th>Listener</th><th>Name</th><th>Bind</th><th>Callback</th><th>Status</th><th>Sleep</th><th></th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="7" class="empty-state">No listeners yet.</td></tr>'}</tbody>
+    </table></div>`;
+}
+
+function renderC2Tasks(d) {
+  const rows = (d.tasks || []).slice().reverse().slice(0, 100).map((t) => `
+    <tr>
+      <td class="mono">${esc(t.id)}</td>
+      <td class="mono">${esc(t.session_id)}</td>
+      <td>${esc(t.task_type)}</td>
+      <td><span class="badge ${t.status === 'success' ? 'badge-ok' : (t.status === 'failed' || t.status === 'cancelled' ? 'badge-muted' : 'badge-warn')}">${esc(t.status)}</span></td>
+      <td class="mono">${esc(c2Time(t.created_at))}</td>
+      <td>
+        <button class="btn btn-sm" data-c2-action="task-get" data-id="${esc(t.id)}">output</button>
+        <button class="btn btn-sm" data-c2-action="task-cancel" data-id="${esc(t.id)}">cancel</button>
+      </td>
+    </tr>`).join('');
+  return `<div class="table-wrap"><table class="data-table">
+    <thead><tr><th>Task</th><th>Session</th><th>Type</th><th>Status</th><th>Created</th><th></th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="6" class="empty-state">No tasks yet.</td></tr>'}</tbody>
+  </table></div>`;
+}
+
+function renderC2Webshells(d) {
+  const shells = d.webshells || [];
+  const sel = shells.find((w) => w.id === c2State.webshell) || null;
+  const rows = shells.map((w) => `
+    <tr class="${w.id === c2State.webshell ? 'c2-selected' : ''}" data-c2-ws="${esc(w.id)}">
+      <td class="mono">${esc(w.id)}</td>
+      <td>${esc(w.name || '—')}</td>
+      <td class="mono">${esc(w.url)}</td>
+      <td>${esc(w.shell_type)}/${esc(w.method)}</td>
+      <td>${esc(w.os || 'auto')}</td>
+      <td class="mono">${esc(c2Time(w.last_seen))}</td>
+      <td>
+        <button class="btn btn-sm" data-c2-action="ws-test" data-id="${esc(w.id)}">test</button>
+        <button class="btn btn-sm" data-c2-action="ws-delete" data-id="${esc(w.id)}">delete</button>
+      </td>
+    </tr>`).join('');
+  return `
+    <div class="config-card" style="margin-bottom:16px;">
+      <div class="config-card-title">Add WebShell connection</div>
+      <div class="field-row">
+        <div class="field-group" style="flex:2;"><label class="field-label" for="c2WsUrl">URL</label><input id="c2WsUrl" placeholder="http://10.0.0.5/uploads/shell.php" /></div>
+        <div class="field-group"><label class="field-label" for="c2WsName">Name</label><input id="c2WsName" placeholder="web01" /></div>
+        <div class="field-group"><label class="field-label" for="c2WsPass">Password</label><input id="c2WsPass" type="password" placeholder="shell password" /></div>
+        <div class="field-group"><label class="field-label" for="c2WsType">Type</label>
+          <select id="c2WsType"><option>php</option><option>aspx</option><option>asp</option><option>jsp</option><option>custom</option></select>
+        </div>
+        <div class="field-group"><label class="field-label" for="c2WsMethod">Method</label>
+          <select id="c2WsMethod"><option>POST</option><option>GET</option></select>
+        </div>
+        <div class="field-group"><label class="field-label" for="c2WsOs">OS</label>
+          <select id="c2WsOs"><option>auto</option><option>linux</option><option>windows</option></select>
+        </div>
+      </div>
+      <div class="config-card-actions"><button class="btn btn-accent" data-c2-action="ws-add">Save connection</button></div>
+      <div class="field-help">Only private/loopback or explicitly allow-listed hosts are accepted.</div>
+    </div>
+    <div class="table-wrap"><table class="data-table">
+      <thead><tr><th>Connection</th><th>Name</th><th>URL</th><th>Type</th><th>OS</th><th>Last seen</th><th></th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="7" class="empty-state">No WebShell connections yet.</td></tr>'}</tbody>
+    </table></div>
+    ${sel ? `
+      <div class="config-card" style="margin-top:16px;">
+        <div class="config-card-title">WebShell console — ${esc(sel.name)} <span class="mono">${esc(sel.id)}</span></div>
+        <div class="field-group"><label class="field-label" for="c2WsCmd">Command</label><input id="c2WsCmd" placeholder="id; uname -a; dir C:\\" /></div>
+        <div class="config-card-actions"><button class="btn btn-accent" data-c2-action="ws-exec">Execute</button></div>
+        <div class="field-row" style="margin-top:10px;">
+          <div class="field-group"><label class="field-label" for="c2WsFileAction">File action</label>
+            <select id="c2WsFileAction"><option>list</option><option>read</option><option>write</option><option>delete</option><option>mkdir</option><option>rename</option></select>
+          </div>
+          <div class="field-group" style="flex:2;"><label class="field-label" for="c2WsPath">Path</label><input id="c2WsPath" placeholder="/tmp" /></div>
+          <div class="field-group" style="flex:2;"><label class="field-label" for="c2WsTarget">Target path (rename)</label><input id="c2WsTarget" placeholder="/tmp/new-name" /></div>
+        </div>
+        <div class="field-group"><label class="field-label" for="c2WsContent">Content (write)</label><textarea id="c2WsContent" rows="3" placeholder="file content"></textarea></div>
+        <div class="config-card-actions"><button class="btn" data-c2-action="ws-file">Run file action</button></div>
+      </div>` : ''}`;
+}
+
+function renderC2Payloads(d) {
+  const listeners = d.listeners || [];
+  const opts = listeners.map((l) => `<option value="${esc(l.id)}">${esc(l.name)} (${esc(l.bind_host)}:${esc(l.bind_port)})</option>`).join('');
+  const plist = (d.payloads || []).slice().reverse().slice(0, 40).map((pl) => `
+    <tr><td class="mono">${esc(pl.name)}</td><td>${esc(pl.kind)}</td><td class="mono">${esc(pl.size)}</td><td class="mono">${esc(c2Time(pl.created_at))}</td>
+    <td><a class="btn btn-sm" href="/api/c2/payloads/${encodeURIComponent(pl.name)}">download</a></td></tr>`).join('');
+  return `
+    <div class="config-card" style="margin-bottom:16px;">
+      <div class="config-card-title">Generate payload</div>
+      <div class="field-row">
+        <div class="field-group" style="flex:2;">
+          <label class="field-label" for="c2PayloadListener">Listener</label>
+          <select id="c2PayloadListener">${opts || '<option value="">create a listener first</option>'}</select>
+        </div>
+        <div class="field-group"><label class="field-label" for="c2PayloadKind">Beacon language</label>
+          <select id="c2PayloadKind"><option>bash</option><option>python</option><option>powershell</option><option>php</option></select>
+        </div>
+        <div class="field-group"><label class="field-label" for="c2PayloadType">WebShell type</label>
+          <select id="c2PayloadType"><option>php</option><option>aspx</option><option>asp</option><option>jsp</option></select>
+        </div>
+        <div class="field-group"><label class="field-label" for="c2PayloadPass">WebShell password</label>
+          <input id="c2PayloadPass" placeholder="ns_pass" />
+        </div>
+      </div>
+      <div class="config-card-actions">
+        <button class="btn btn-accent" data-c2-action="payload-beacon">Generate beacon</button>
+        <button class="btn" data-c2-action="payload-webshell">Generate WebShell</button>
+        <button class="btn" data-c2-action="payload-oneliner">One-liner</button>
+      </div>
+      <div class="field-help">Payloads are written to <code>.neurosploit/c2/payloads/</code> with 0600 permissions and recorded in the audit log.</div>
+    </div>
+    ${c2State.payload ? `<div class="config-card" style="margin-bottom:16px;"><div class="config-card-title">${esc(c2State.payload.name || c2State.payload.kind)}</div>
+      <div class="config-card-desc mono">${esc(c2State.payload.path || c2State.payload.callback || '')}</div>
+      <textarea rows="12" class="c2-payload">${esc(c2State.payload.content || c2State.payload.oneliner || '')}</textarea>
+      ${c2State.payload.name ? `<div class="config-card-actions"><a class="btn btn-sm" href="/api/c2/payloads/${encodeURIComponent(c2State.payload.name)}">Download</a></div>` : ''}
+    </div>` : ''}
+    <div class="table-wrap"><table class="data-table">
+      <thead><tr><th>Name</th><th>Kind</th><th>Size</th><th>Created</th><th></th></tr></thead>
+      <tbody>${plist || '<tr><td colspan="5" class="empty-state">No payloads generated yet.</td></tr>'}</tbody>
+    </table></div>`;
+}
+
+function renderC2Events(d) {
+  const rows = (d.events || []).map((e) => `
+    <tr><td class="mono">${esc(new Date(e.ts).toLocaleString())}</td><td>${esc(e.level)}</td><td>${esc(e.kind)}</td><td>${esc(e.message)}</td></tr>`).join('');
+  return `<div class="table-wrap"><table class="data-table">
+    <thead><tr><th>Time</th><th>Level</th><th>Kind</th><th>Message</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="4" class="empty-state">No events yet.</td></tr>'}</tbody>
+  </table></div>`;
+}
+
+async function c2Post(path, body) {
+  const r = await api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  return r;
+}
+
+document.addEventListener('click', async (ev) => {
+  const tab = ev.target.closest('[data-c2-tab]');
+  if (tab) { c2State.tab = tab.dataset.c2Tab; renderC2(); return; }
+  const sess = ev.target.closest('[data-c2-session]');
+  if (sess) { c2State.session = sess.dataset.c2Session; renderC2(); return; }
+  const ws = ev.target.closest('[data-c2-ws]');
+  if (ws) { c2State.webshell = ws.dataset.c2Ws; renderC2(); return; }
+  const el = ev.target.closest('[data-c2-action]');
+  if (!el || !el.closest('#c2Body')) return;
+  const action = el.dataset.c2Action;
+  const id = el.dataset.id || '';
+  try {
+    if (action === 'enable') {
+      const auth = $('#c2Auth')?.value.trim();
+      if (!auth) { fieldError('c2EnableError', 'an authorization reference is required'); return; }
+      await c2Post('/api/c2/enable', {
+        authorization: auth,
+        hosts: $('#c2Hosts')?.value || '',
+        persistence: !!$('#c2Persist')?.checked,
+        lateral: !!$('#c2Lateral')?.checked,
+        allowPublic: !!$('#c2Public')?.checked,
+      });
+      toast('C2 enabled — listeners still need to be started explicitly', 'info');
+      await loadC2(); return;
+    }
+    if (action === 'disable') { await c2Post('/api/c2/disable'); c2SetOutput(''); await loadC2(); return; }
+    if (action === 'refresh') { await loadC2(); return; }
+    if (action === 'listener-create') {
+      await c2Post('/api/c2/listeners', {
+        name: $('#c2ListenerName')?.value || 'listener',
+        bind_host: $('#c2ListenerHost')?.value || '127.0.0.1',
+        bind_port: Number($('#c2ListenerPort')?.value) || 8443,
+        callback_host: $('#c2ListenerCb')?.value || '',
+        sleep_seconds: Number($('#c2ListenerSleep')?.value) || 5,
+      });
+      await loadC2(); return;
+    }
+    if (action === 'listener-start' || action === 'listener-stop' || action === 'listener-delete') {
+      const path = action === 'listener-delete'
+        ? `/api/c2/listeners/${encodeURIComponent(id)}`
+        : `/api/c2/listeners/${encodeURIComponent(id)}/${action === 'listener-start' ? 'start' : 'stop'}`;
+      await api(path, { method: action === 'listener-delete' ? 'DELETE' : 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      await loadC2(); return;
+    }
+    if (action === 'session-sleep') {
+      await c2Post(`/api/c2/sessions/${encodeURIComponent(id)}/sleep`, { seconds: 10, jitter: 10 });
+      await loadC2(); return;
+    }
+    if (action === 'session-note') {
+      const note = window.prompt('Session note:');
+      if (note === null) return;
+      await c2Post(`/api/c2/sessions/${encodeURIComponent(id)}/note`, { note });
+      await loadC2(); return;
+    }
+    if (action === 'session-kill') {
+      if (!window.confirm('Mark this session killed and cancel queued tasks?')) return;
+      await api(`/api/c2/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      await loadC2(); return;
+    }
+    if (action === 'task-exec' || action === 'task-lateral') {
+      if (!c2State.session) { toast('select a session first', 'error'); return; }
+      const command = $('#c2Cmd')?.value.trim();
+      if (!command) { toast('enter a command', 'error'); return; }
+      const r = await c2Post('/api/c2/tasks', {
+        session_id: c2State.session,
+        task_type: action === 'task-lateral' ? 'lateral' : 'exec',
+        payload: { command }, wait: true, timeout: 40,
+      });
+      c2SetOutput(r.task ? `${r.task.id} · ${r.task.status}\n${r.task.output || ''}\n${r.task.error || ''}` : JSON.stringify(r, null, 2));
+      await loadC2(); return;
+    }
+    if (action === 'task-persist') {
+      if (!c2State.session) { toast('select a session first', 'error'); return; }
+      const method = $('#c2PersistMethod')?.value || 'auto';
+      const r = await c2Post('/api/c2/tasks', {
+        session_id: c2State.session, task_type: 'persist', payload: { method }, wait: true, timeout: 60,
+      });
+      c2SetOutput(r.task ? `${r.task.id} · ${r.task.status}\n${r.task.output || ''}\n${r.task.error || ''}` : JSON.stringify(r, null, 2));
+      await loadC2(); return;
+    }
+    if (action === 'task-get') {
+      const r = await api(`/api/c2/tasks/${encodeURIComponent(id)}`);
+      c2SetOutput(r.task ? `${r.task.id} · ${r.task.status}\n${r.task.output || ''}\n${r.task.error || ''}` : JSON.stringify(r, null, 2));
+      await loadC2(); return;
+    }
+    if (action === 'task-cancel') {
+      await c2Post(`/api/c2/tasks/${encodeURIComponent(id)}/cancel`, {});
+      await loadC2(); return;
+    }
+    if (action === 'ws-add') {
+      await c2Post('/api/webshell/connections', {
+        url: $('#c2WsUrl')?.value.trim(), name: $('#c2WsName')?.value.trim(),
+        password: $('#c2WsPass')?.value || '', shell_type: $('#c2WsType')?.value || 'php',
+        method: $('#c2WsMethod')?.value || 'POST', os: $('#c2WsOs')?.value || 'auto',
+      });
+      await loadC2(); return;
+    }
+    if (action === 'ws-test') {
+      const r = await c2Post(`/api/webshell/connections/${encodeURIComponent(id)}/test`, {});
+      c2SetOutput(`ok=${r.ok} http=${r.http_status} os=${r.detected_os}\n${r.output || ''}`);
+      await loadC2(); return;
+    }
+    if (action === 'ws-exec') {
+      if (!c2State.webshell) { toast('select a WebShell first', 'error'); return; }
+      const command = $('#c2WsCmd')?.value.trim();
+      if (!command) { toast('enter a command', 'error'); return; }
+      const r = await c2Post(`/api/webshell/connections/${encodeURIComponent(c2State.webshell)}/exec`, { command });
+      c2SetOutput(`http=${r.http_status} ok=${r.ok}\n${r.output || ''}`);
+      await loadC2(); return;
+    }
+    if (action === 'ws-file') {
+      if (!c2State.webshell) { toast('select a WebShell first', 'error'); return; }
+      const r = await c2Post(`/api/webshell/connections/${encodeURIComponent(c2State.webshell)}/file`, {
+        action: $('#c2WsFileAction')?.value || 'list',
+        path: $('#c2WsPath')?.value || '.',
+        target_path: $('#c2WsTarget')?.value || '',
+        content: $('#c2WsContent')?.value || '',
+      });
+      c2SetOutput(`http=${r.http_status} ok=${r.ok}\n${r.output || ''}`);
+      await loadC2(); return;
+    }
+    if (action === 'ws-delete') {
+      if (!window.confirm('Delete this saved WebShell connection?')) return;
+      await api(`/api/webshell/connections/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      await loadC2(); return;
+    }
+    if (action === 'payload-beacon' || action === 'payload-oneliner') {
+      const listener = $('#c2PayloadListener')?.value;
+      if (!listener) { toast('create and select a listener first', 'error'); return; }
+      const body = action === 'payload-oneliner'
+        ? { listener_id: listener }
+        : { listener_id: listener, kind: $('#c2PayloadKind')?.value || 'bash' };
+      const r = await c2Post(action === 'payload-oneliner' ? '/api/c2/payloads/oneliner' : '/api/c2/payloads/beacon', body);
+      c2State.payload = r;
+      c2SetOutput('');
+      await loadC2(); return;
+    }
+    if (action === 'payload-webshell') {
+      const r = await c2Post('/api/c2/payloads/webshell', {
+        shell_type: $('#c2PayloadType')?.value || 'php',
+        password: $('#c2PayloadPass')?.value || '',
+      });
+      c2State.payload = r;
+      c2SetOutput('');
+      await loadC2(); return;
+    }
+  } catch (e) {
+    toast(e.message, 'error', 9000);
+  }
+});
+
+$('#btnC2Refresh')?.addEventListener('click', () => loadC2());
+
+
+// ---------------------------------------------------------------------------
+// Toolbox — 200+ real tools + MCP tool servers
+// ---------------------------------------------------------------------------
+
+const toolboxState = { catalog: [], mcp: null, check: {}, selected: '', output: '', profiles: null, filter: '', category: '' };
+
+async function loadToolbox() {
+  if (state.activeView !== 'toolbox') return;
+  const body = $('#toolboxBody');
+  try {
+    const [catalog, mcp] = await Promise.all([
+      api('/api/tools'),
+      api('/api/mcp/servers').catch(() => ({ servers: [], config: '' })),
+    ]);
+    toolboxState.catalog = catalog || [];
+    toolboxState.mcp = mcp || {};
+    renderToolbox();
+  } catch (e) {
+    if (body) body.innerHTML = `<div class="empty-state">Toolbox unavailable — ${esc(e.message)}</div>`;
+  }
+}
+
+function toolboxCategories() {
+  const counts = {};
+  for (const t of toolboxState.catalog) counts[t.category] = (counts[t.category] || 0) + 1;
+  return Object.entries(counts).sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+function toolboxFiltered() {
+  let items = toolboxState.catalog;
+  if (toolboxState.category) items = items.filter((t) => t.category === toolboxState.category);
+  const q = toolboxState.filter.trim().toLowerCase();
+  if (q) {
+    items = items.filter((t) => [t.id, t.name, t.binary, t.category, t.description, ...(t.tags || [])]
+      .join(' ').toLowerCase().includes(q));
+  }
+  return items;
+}
+
+function renderToolbox() {
+  const body = $('#toolboxBody');
+  if (!body) return;
+  const cats = toolboxCategories();
+  const items = toolboxFiltered();
+  const mcp = toolboxState.mcp || {};
+  const servers = mcp.servers || [];
+  const selected = toolboxState.catalog.find((t) => t.id === toolboxState.selected) || null;
+  const rows = items.slice(0, 400).map((t) => {
+    const chk = toolboxState.check[t.id];
+    const status = chk
+      ? (chk.installed ? `<span class="badge badge-ok">installed</span>` : `<span class="badge badge-muted">missing</span>`)
+      : '';
+    return `<tr class="${t.id === toolboxState.selected ? 'c2-selected' : ''}">
+      <td class="mono">${esc(t.id)}</td>
+      <td>${esc(t.category)}</td>
+      <td class="mono">${esc(t.binary)}</td>
+      <td>${esc(t.description)} ${status}</td>
+      <td class="mono">${chk && chk.version ? esc(chk.version.slice(0, 60)) : ''}</td>
+      <td>
+        <button class="btn btn-sm" data-tool-action="select" data-id="${esc(t.id)}">run</button>
+        <button class="btn btn-sm" data-tool-action="check" data-id="${esc(t.id)}">check</button>
+        ${chk && !chk.installed ? `<button class="btn btn-sm" data-tool-action="install" data-id="${esc(t.id)}">install</button>` : ''}
+      </td>
+    </tr>`;
+  }).join('');
+
+  body.innerHTML = `
+    <div class="config-card" style="margin-bottom:16px;">
+      <div class="config-card-title">${toolboxState.catalog.length} real tools across ${cats.length} categories</div>
+      <div class="config-card-desc">Run them directly here, or let agents use the same catalog with <code>--tools</code> / <code>--agent-tools</code>. Scope, operator constraints and timeouts are enforced by the CLI runner.</div>
+      <div class="field-row">
+        <div class="field-group" style="flex:2;">
+          <label class="field-label" for="toolboxSearch">Search</label>
+          <input id="toolboxSearch" placeholder="nmap, kerberos, sqli, cloud…" value="${esc(toolboxState.filter)}" />
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="toolboxCategory">Category</label>
+          <select id="toolboxCategory">
+            <option value="">all (${toolboxState.catalog.length})</option>
+            ${cats.map(([c, n]) => `<option value="${esc(c)}" ${toolboxState.category === c ? 'selected' : ''}>${esc(c)} (${n})</option>`).join('')}
+          </select>
+        </div>
+        <div class="field-group" style="flex:0;min-width:auto;">
+          <label class="field-label">&nbsp;</label>
+          <button class="btn" data-tool-action="profiles">Recommended by mode</button>
+        </div>
+      </div>
+    </div>
+
+    ${selected ? `
+      <div class="config-card" style="margin-bottom:16px;">
+        <div class="config-card-title">Run ${esc(selected.name)} <span class="mono">${esc(selected.id)}</span></div>
+        <div class="config-card-desc mono">${esc(selected.usage)}</div>
+        <div class="field-row">
+          <div class="field-group" style="flex:2;"><label class="field-label" for="toolboxTarget">Target</label><input id="toolboxTarget" placeholder="10.0.0.5 or https://app" /></div>
+          <div class="field-group" style="flex:3;"><label class="field-label" for="toolboxArgs">Args (optional)</label><input id="toolboxArgs" placeholder="-sV -p 22,80,443" /></div>
+          <div class="field-group" style="flex:0;min-width:auto;"><label class="field-label" for="toolboxTimeout">Timeout (s)</label><input id="toolboxTimeout" type="number" value="300" style="width:90px;" /></div>
+        </div>
+        <div class="check-row"><input type="checkbox" id="toolboxSandbox" /> <label for="toolboxSandbox">Run in Kali sandbox</label></div>
+        <div class="check-row"><input type="checkbox" id="toolboxProvision" /> <label for="toolboxProvision">Allow install if missing (explicit)</label></div>
+        <div class="config-card-actions">
+          <button class="btn btn-accent" data-tool-action="run">Run tool</button>
+          <button class="btn" data-tool-action="check" data-id="${esc(selected.id)}">Check install</button>
+        </div>
+        <div class="field-help">${selected.intrusive ? '<b>Intrusive:</b> actively probes the target. ' : ''}${selected.requires_root ? 'May require root/CAP_NET_RAW. ' : ''}Stay within the authorized scope.</div>
+      </div>` : ''}
+
+    ${toolboxState.output ? `<div class="config-card" style="margin-bottom:16px;"><div class="config-card-title">Last tool output</div><pre class="c2-output">${esc(toolboxState.output)}</pre></div>` : ''}
+    ${toolboxState.profiles ? `<div class="config-card" style="margin-bottom:16px;"><div class="config-card-title">Recommended toolchains</div><pre class="c2-output">${esc(toolboxState.profiles)}</pre></div>` : ''}
+
+    <div class="table-wrap" style="margin-bottom:20px;"><table class="data-table">
+      <thead><tr><th>ID</th><th>Category</th><th>Binary</th><th>Description</th><th>Version</th><th></th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="6" class="empty-state">No tools match.</td></tr>'}</tbody>
+    </table></div>
+
+    <div class="config-card">
+      <div class="config-card-title">MCP tool servers <span class="config-card-meta">${esc(mcp.config || '')}</span></div>
+      <div class="config-card-desc">Add a curated server to <code>mcp.servers.json</code>; the next <code>--mcp</code> run merges it into the agent's tool list.</div>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Server</th><th>Transport</th><th>Description</th><th>Status</th><th></th></tr></thead>
+        <tbody>${servers.map((s) => `
+          <tr>
+            <td class="mono">${esc(s.name)}</td>
+            <td>${esc(s.transport)}</td>
+            <td>${esc(s.description)}</td>
+            <td>${s.configured ? '<span class="badge badge-ok">configured</span>' : '<span class="badge badge-muted">not configured</span>'}</td>
+            <td>
+              <button class="btn btn-sm" data-tool-action="mcp-add" data-id="${esc(s.name)}">add</button>
+              <button class="btn btn-sm" data-tool-action="mcp-test" data-id="${esc(s.name)}">test</button>
+              <button class="btn btn-sm" data-tool-action="mcp-remove" data-id="${esc(s.name)}">remove</button>
+            </td>
+          </tr>`).join('') || '<tr><td colspan="5" class="empty-state">No MCP servers available.</td></tr>'}
+        </tbody>
+      </table></div>
+      <div class="field-help">nmap MCP uses <code>npx gc-nmap-mcp</code>; Kali uses the <code>kali-mcp</code> entrypoint (pipx/Docker). Configure credentials/URLs in <code>mcp.servers.json</code>.</div>
+    </div>`;
+}
+
+async function toolboxCheck(id) {
+  const r = await api(`/api/tools/${encodeURIComponent(id)}/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sandbox: !!$('#toolboxSandbox')?.checked }) });
+  const check = Array.isArray(r) ? r[0] : r;
+  if (check) toolboxState.check[id] = check;
+  renderToolbox();
+}
+
+document.addEventListener('click', async (ev) => {
+  const el = ev.target.closest('[data-tool-action]');
+  if (!el || !el.closest('#toolboxBody')) return;
+  const action = el.dataset.toolAction;
+  const id = el.dataset.id || '';
+  try {
+    if (action === 'select') { toolboxState.selected = id; renderToolbox(); return; }
+    if (action === 'check') { await toolboxCheck(id); return; }
+    if (action === 'install') {
+      if (!window.confirm(`Install ${id}? This runs the catalog installer (apt/pipx/go/...) with your permission.`)) return;
+      const r = await api('/api/tools/install', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tool: id, sandbox: !!$('#toolboxSandbox')?.checked }) });
+      toolboxState.output = JSON.stringify(r, null, 2);
+      await toolboxCheck(id);
+      return;
+    }
+    if (action === 'run') {
+      if (!toolboxState.selected) return;
+      const target = $('#toolboxTarget')?.value.trim() || '';
+      const args = $('#toolboxArgs')?.value.trim() || '';
+      const r = await api('/api/tools/run', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tool: toolboxState.selected, target, args,
+          sandbox: !!$('#toolboxSandbox')?.checked,
+          provision: !!$('#toolboxProvision')?.checked,
+          timeout: Number($('#toolboxTimeout')?.value) || 300,
+        }),
+      });
+      toolboxState.output = `$ ${r.command}\n${r.timed_out ? '[TIMED OUT]\n' : ''}${r.stdout || ''}${r.stderr ? `\n--- stderr ---\n${r.stderr}` : ''}`;
+      renderToolbox();
+      return;
+    }
+    if (action === 'profiles') {
+      const r = await api('/api/tools/profiles');
+      toolboxState.profiles = (r || []).map((p) => `${p.mode.padEnd(10)} ${(p.tools || []).join(', ')}`).join('\n');
+      renderToolbox();
+      return;
+    }
+    if (action === 'mcp-add' || action === 'mcp-remove') {
+      const r = await api('/api/mcp/servers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: action === 'mcp-add' ? 'add' : 'remove', server: id }) });
+      toolboxState.mcp = r;
+      renderToolbox();
+      return;
+    }
+    if (action === 'mcp-test') {
+      const r = await api('/api/mcp/servers/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ server: id }) });
+      toast(`${id}: ${r.ok ? 'OK' : 'not ready'} — ${r.detail || ''}`, r.ok ? 'info' : 'error', 8000);
+      return;
+    }
+  } catch (e) {
+    toast(e.message, 'error', 9000);
+  }
+});
+
+$('#btnToolboxRefresh')?.addEventListener('click', () => loadToolbox());
 
 // ---------------------------------------------------------------------------
 // boot

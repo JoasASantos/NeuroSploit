@@ -968,6 +968,23 @@ pub fn write_mcp_config(dir: &std::path::Path, extra_servers: Option<&std::path:
             }
         }
     }
+    // Curated MCP tool servers selected with --mcp-server (nmap, kali, ...).
+    if let Some(dst) = servers.as_object_mut() {
+        crate::toolbox::mcp_catalog::merge_selected(dst);
+    }
+    // C2 opt-in: expose NeuroSploit's own MCP server to the agentic CLI so the
+    // LLM can drive listeners, sessions, tasks and WebShells with the same
+    // guardrails the CLI enforces (the daemon fails closed when C2 is off).
+    if std::env::var("NEUROSPLOIT_C2").ok().as_deref() == Some("1") {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dst) = servers.as_object_mut() {
+                dst.insert("neurosploit".to_string(), serde_json::json!({
+                    "command": exe.display().to_string(),
+                    "args": ["mcp"]
+                }));
+            }
+        }
+    }
     let cfg = serde_json::json!({ "mcpServers": servers });
     let path = dir.join(".mcp.json");
     std::fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap_or_default())?;

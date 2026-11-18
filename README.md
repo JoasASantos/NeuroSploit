@@ -111,6 +111,22 @@ No subscription? Use an **API key** for any provider instead — see [TUTORIAL.m
 | **Container** | `neurosploit container <image:tag>` | OCI image scan + SBOM (trivy/grype/syft) |
 | **Mission Control** | `neurosploit tui <url>` | live TUI panels + a composer you type in mid-run |
 
+## Add-ons: Toolbox, MCP tool servers, C2 & WebShells
+
+- **Toolbox (225 tools, opt-in).** Run the right pentest tool instead of only
+  curl/scripts: nmap, rustscan, httpx, nuclei, ffuf, netexec, impacket,
+  bloodhound, trivy, apktool, ghidra and more. `neurosploit tools list` /
+  `run nmap --target 10.0.0.5`; `--tools` gives agents the doctrine and
+  `--agent-tools` lets API models request cataloged tools in a bounded loop.
+- **MCP tool servers.** Curated nmap / Kali / Playwright / Burp / REA templates:
+  `neurosploit tools mcp add nmap`, then run with `--mcp`.
+- **C2 & WebShell management (authorized internal engagements only).** Disabled
+  by default; enabling requires an authorization reference. Listeners, sessions,
+  tasks, payloads, persistence/lateral opt-ins, WebShell exec/file ops, and an
+  append-only audit trail under `.neurosploit/c2/`.
+
+See [`docs/TOOLBOX.md`](docs/TOOLBOX.md) for guardrails and the full surface.
+
 ## What makes it different
 
 - **The harness is the pentester.** Agent selection is recon-driven; findings

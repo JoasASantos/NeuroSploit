@@ -1,0 +1,3859 @@
+{
+  "version": 1,
+  "updated": "2026-11-18",
+  "tools": [
+    {
+      "id": "adidnsdump",
+      "name": "adidnsdump",
+      "binary": "adidnsdump",
+      "category": "ad",
+      "description": "Dump AD-integrated DNS records.",
+      "usage": "adidnsdump -u {domain}\\{user} -p {password} {host}",
+      "tags": [
+        "ad",
+        "dns"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "adidnsdump"
+      },
+      "mcp": null
+    },
+    {
+      "id": "bloodhound_python",
+      "name": "BloodHound Python",
+      "binary": "bloodhound-python",
+      "category": "ad",
+      "description": "Collect AD relationships for BloodHound.",
+      "usage": "bloodhound-python -d {domain} -u {user} -p {password} -ns {host} -c All",
+      "tags": [
+        "ad",
+        "graph"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "bloodhound"
+      },
+      "mcp": null
+    },
+    {
+      "id": "certipy",
+      "name": "Certipy",
+      "binary": "certipy",
+      "category": "ad",
+      "description": "AD Certificate Services enumeration and exploitation.",
+      "usage": "certipy find -u {user}@{domain} -p {password} -dc-ip {host}",
+      "tags": [
+        "ad",
+        "adcs"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "certipy-ad"
+      },
+      "mcp": null
+    },
+    {
+      "id": "crackmapexec",
+      "name": "CrackMapExec",
+      "binary": "cme",
+      "category": "ad",
+      "description": "Network attack/assessment tool for AD environments.",
+      "usage": "cme smb {host}",
+      "tags": [
+        "ad",
+        "smb"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "crackmapexec"
+      },
+      "mcp": null
+    },
+    {
+      "id": "enum4linux_ng",
+      "name": "Enum4linux-ng",
+      "binary": "enum4linux-ng",
+      "category": "ad",
+      "description": "Modern SMB/AD enumeration.",
+      "usage": "enum4linux-ng -A {host}",
+      "tags": [
+        "smb",
+        "ad"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "enum4linux-ng"
+      },
+      "mcp": null
+    },
+    {
+      "id": "evil_winrm",
+      "name": "Evil-WinRM",
+      "binary": "evil-winrm",
+      "category": "ad",
+      "description": "WinRM shell for authorized Windows hosts.",
+      "usage": "evil-winrm -i {host} -u {user} -p {password}",
+      "tags": [
+        "ad",
+        "shell"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "gem": "evil-winrm"
+      },
+      "mcp": null
+    },
+    {
+      "id": "impacket_getnpusers",
+      "name": "Impacket GetNPUsers",
+      "binary": "impacket-GetNPUsers",
+      "category": "ad",
+      "description": "AS-REP roasting for accounts without pre-auth.",
+      "usage": "impacket-GetNPUsers {domain}/ -dc-ip {host} -usersfile users.txt -no-pass",
+      "tags": [
+        "ad",
+        "kerberos"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "impacket"
+      },
+      "mcp": null
+    },
+    {
+      "id": "impacket_getuserspns",
+      "name": "Impacket GetUserSPNs",
+      "binary": "impacket-GetUserSPNs",
+      "category": "ad",
+      "description": "Kerberoasting: request service tickets.",
+      "usage": "impacket-GetUserSPNs {domain}/{user}:{password} -dc-ip {host} -request",
+      "tags": [
+        "ad",
+        "kerberos"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "impacket"
+      },
+      "mcp": null
+    },
+    {
+      "id": "impacket_ntlmrelayx",
+      "name": "Impacket ntlmrelayx",
+      "binary": "impacket-ntlmrelayx",
+      "category": "ad",
+      "description": "NTLM relay attacks.",
+      "usage": "impacket-ntlmrelayx -tf targets.txt -smb2support",
+      "tags": [
+        "ad",
+        "relay"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "impacket"
+      },
+      "mcp": null
+    },
+    {
+      "id": "impacket_psexec",
+      "name": "Impacket psexec",
+      "binary": "impacket-psexec",
+      "category": "ad",
+      "description": "Remote command execution via SMB.",
+      "usage": "impacket-psexec {domain}/{user}:{password}@{host}",
+      "tags": [
+        "ad",
+        "exec"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "impacket"
+      },
+      "mcp": null
+    },
+    {
+      "id": "impacket_secretsdump",
+      "name": "Impacket secretsdump",
+      "binary": "impacket-secretsdump",
+      "category": "ad",
+      "description": "Dump SAM/LSA/NTDS secrets.",
+      "usage": "impacket-secretsdump -just-dc {domain}/{user}:{password}@{host}",
+      "tags": [
+        "ad",
+        "creds"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "impacket"
+      },
+      "mcp": null
+    },
+    {
+      "id": "impacket_smbexec",
+      "name": "Impacket smbexec",
+      "binary": "impacket-smbexec",
+      "category": "ad",
+      "description": "Remote command execution via SMB service.",
+      "usage": "impacket-smbexec {domain}/{user}:{password}@{host}",
+      "tags": [
+        "ad",
+        "exec"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "impacket"
+      },
+      "mcp": null
+    },
+    {
+      "id": "impacket_ticketer",
+      "name": "Impacket ticketer",
+      "binary": "impacket-ticketer",
+      "category": "ad",
+      "description": "Create golden/silver Kerberos tickets.",
+      "usage": "impacket-ticketer -nthash <hash> -domain-sid <sid> -domain <domain> <user>",
+      "tags": [
+        "ad",
+        "kerberos"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "impacket"
+      },
+      "mcp": null
+    },
+    {
+      "id": "impacket_wmiexec",
+      "name": "Impacket wmiexec",
+      "binary": "impacket-wmiexec",
+      "category": "ad",
+      "description": "Remote command execution via WMI.",
+      "usage": "impacket-wmiexec {domain}/{user}:{password}@{host}",
+      "tags": [
+        "ad",
+        "exec"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "impacket"
+      },
+      "mcp": null
+    },
+    {
+      "id": "kerbrute",
+      "name": "Kerbrute",
+      "binary": "kerbrute",
+      "category": "ad",
+      "description": "Kerberos user enumeration and password spraying.",
+      "usage": "kerbrute userenum --dc {host} -d {domain} users.txt",
+      "tags": [
+        "ad",
+        "kerberos"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/ropnop/kerbrute"
+      },
+      "mcp": null
+    },
+    {
+      "id": "ldapdomaindump",
+      "name": "ldapdomaindump",
+      "binary": "ldapdomaindump",
+      "category": "ad",
+      "description": "Dump AD info over LDAP.",
+      "usage": "ldapdomaindump -u '{domain}\\{user}' -p {password} {host}",
+      "tags": [
+        "ldap",
+        "ad"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "ldapdomaindump"
+      },
+      "mcp": null
+    },
+    {
+      "id": "ldapsearch",
+      "name": "ldapsearch",
+      "binary": "ldapsearch",
+      "category": "ad",
+      "description": "LDAP directory queries.",
+      "usage": "ldapsearch -x -H ldap://{host} -b 'dc=example,dc=com'",
+      "tags": [
+        "ldap"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "ldap-utils"
+      },
+      "mcp": null
+    },
+    {
+      "id": "mitm6",
+      "name": "mitm6",
+      "binary": "mitm6",
+      "category": "ad",
+      "description": "IPv6 DNS takeover for AD.",
+      "usage": "mitm6 -d {domain}",
+      "tags": [
+        "ad",
+        "mitm"
+      ],
+      "intrusive": true,
+      "requires_root": true,
+      "install": {
+        "pipx": "mitm6"
+      },
+      "mcp": null
+    },
+    {
+      "id": "netexec",
+      "name": "NetExec",
+      "binary": "nxc",
+      "category": "ad",
+      "description": "Swiss-army knife for SMB/WinRM/LDAP/SSH/MSSQL.",
+      "usage": "nxc smb {host} -u '' -p '' --shares",
+      "tags": [
+        "ad",
+        "smb"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "netexec"
+      },
+      "mcp": null
+    },
+    {
+      "id": "responder",
+      "name": "Responder",
+      "binary": "responder",
+      "category": "ad",
+      "description": "LLMNR/NBT-NS/mDNS poisoner.",
+      "usage": "responder -I eth0 -wrf",
+      "tags": [
+        "ad",
+        "mitm"
+      ],
+      "intrusive": true,
+      "requires_root": true,
+      "install": {
+        "apt": "responder"
+      },
+      "mcp": null
+    },
+    {
+      "id": "deepeval",
+      "name": "DeepEval",
+      "binary": "deepeval",
+      "category": "ai",
+      "description": "LLM evaluation harness.",
+      "usage": "deepeval",
+      "tags": [
+        "llm"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "deepeval"
+      },
+      "mcp": null
+    },
+    {
+      "id": "garak",
+      "name": "Garak",
+      "binary": "garak",
+      "category": "ai",
+      "description": "LLM vulnerability scanner.",
+      "usage": "garak --model_type openai --model_name gpt-4",
+      "tags": [
+        "llm"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "garak"
+      },
+      "mcp": null
+    },
+    {
+      "id": "giskard",
+      "name": "Giskard",
+      "binary": "giskard",
+      "category": "ai",
+      "description": "AI/ML model testing and red teaming.",
+      "usage": "python3 -m giskard",
+      "tags": [
+        "llm"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "giskard"
+      },
+      "mcp": null
+    },
+    {
+      "id": "llm_guard",
+      "name": "LLM Guard",
+      "binary": "llm-guard",
+      "category": "ai",
+      "description": "LLM input/output safety scanner.",
+      "usage": "python3 -m llm_guard",
+      "tags": [
+        "llm"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "llm-guard"
+      },
+      "mcp": null
+    },
+    {
+      "id": "promptfoo",
+      "name": "Promptfoo",
+      "binary": "promptfoo",
+      "category": "ai",
+      "description": "LLM prompt/eval and red-team harness.",
+      "usage": "promptfoo redteam run",
+      "tags": [
+        "llm"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "npm": "promptfoo"
+      },
+      "mcp": null
+    },
+    {
+      "id": "pyrit",
+      "name": "PyRIT",
+      "binary": "pyrit",
+      "category": "ai",
+      "description": "Microsoft AI red-team framework.",
+      "usage": "python3 -m pyrit",
+      "tags": [
+        "llm"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "pyrit"
+      },
+      "mcp": null
+    },
+    {
+      "id": "strix",
+      "name": "Strix",
+      "binary": "strix",
+      "category": "ai",
+      "description": "AI agent security testing.",
+      "usage": "strix --target {target}",
+      "tags": [
+        "llm"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "strix"
+      },
+      "mcp": null
+    },
+    {
+      "id": "binwalk",
+      "name": "Binwalk",
+      "binary": "binwalk",
+      "category": "binary",
+      "description": "Firmware and embedded-file analysis.",
+      "usage": "binwalk -e {target}",
+      "tags": [
+        "firmware"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "binwalk"
+      },
+      "mcp": null
+    },
+    {
+      "id": "checksec",
+      "name": "Checksec",
+      "binary": "checksec",
+      "category": "binary",
+      "description": "ELF/PE mitigation checks.",
+      "usage": "checksec --file={target}",
+      "tags": [
+        "re"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "checksec"
+      },
+      "mcp": null
+    },
+    {
+      "id": "file",
+      "name": "file",
+      "binary": "file",
+      "category": "binary",
+      "description": "Identify file type.",
+      "usage": "file {target}",
+      "tags": [
+        "re"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {},
+      "mcp": null
+    },
+    {
+      "id": "gdb",
+      "name": "GDB",
+      "binary": "gdb",
+      "category": "binary",
+      "description": "GNU debugger.",
+      "usage": "gdb -q {target}",
+      "tags": [
+        "debug"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "gdb"
+      },
+      "mcp": null
+    },
+    {
+      "id": "ghidra_headless",
+      "name": "Ghidra headless",
+      "binary": "analyzeHeadless",
+      "category": "binary",
+      "description": "Headless binary reverse engineering.",
+      "usage": "analyzeHeadless /tmp/ghidra proj -import {target}",
+      "tags": [
+        "re",
+        "decompile"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "ghidra"
+      },
+      "mcp": null
+    },
+    {
+      "id": "lldb",
+      "name": "LLDB",
+      "binary": "lldb",
+      "category": "binary",
+      "description": "LLVM debugger.",
+      "usage": "lldb {target}",
+      "tags": [
+        "debug"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "lldb"
+      },
+      "mcp": null
+    },
+    {
+      "id": "nm",
+      "name": "nm",
+      "binary": "nm",
+      "category": "binary",
+      "description": "Symbol table inspection.",
+      "usage": "nm -an {target}",
+      "tags": [
+        "re"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "binutils"
+      },
+      "mcp": null
+    },
+    {
+      "id": "objdump",
+      "name": "objdump",
+      "binary": "objdump",
+      "category": "binary",
+      "description": "Binary disassembly and headers.",
+      "usage": "objdump -d {target}",
+      "tags": [
+        "re"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "binutils"
+      },
+      "mcp": null
+    },
+    {
+      "id": "otool",
+      "name": "otool",
+      "binary": "otool",
+      "category": "binary",
+      "description": "Mach-O analysis (macOS).",
+      "usage": "otool -L {target}",
+      "tags": [
+        "re"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {},
+      "mcp": null
+    },
+    {
+      "id": "radare2",
+      "name": "radare2",
+      "binary": "r2",
+      "category": "binary",
+      "description": "Reverse-engineering framework.",
+      "usage": "r2 -A {target}",
+      "tags": [
+        "re"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "radare2"
+      },
+      "mcp": null
+    },
+    {
+      "id": "rizin",
+      "name": "Rizin",
+      "binary": "rizin",
+      "category": "binary",
+      "description": "Reverse-engineering framework (radare2 fork).",
+      "usage": "rizin -A {target}",
+      "tags": [
+        "re"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "rizin"
+      },
+      "mcp": null
+    },
+    {
+      "id": "rizin_bin",
+      "name": "rz-bin",
+      "binary": "rz-bin",
+      "category": "binary",
+      "description": "Binary information extraction (Rizin).",
+      "usage": "rz-bin -I {target}",
+      "tags": [
+        "re"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "rizin"
+      },
+      "mcp": null
+    },
+    {
+      "id": "strings",
+      "name": "strings",
+      "binary": "strings",
+      "category": "binary",
+      "description": "Extract printable strings.",
+      "usage": "strings -a {target}",
+      "tags": [
+        "re"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "binutils"
+      },
+      "mcp": null
+    },
+    {
+      "id": "awscli",
+      "name": "AWS CLI",
+      "binary": "aws",
+      "category": "cloud",
+      "description": "AWS command-line interface.",
+      "usage": "aws sts get-caller-identity",
+      "tags": [
+        "cloud"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "awscli"
+      },
+      "mcp": null
+    },
+    {
+      "id": "azcli",
+      "name": "Azure CLI",
+      "binary": "az",
+      "category": "cloud",
+      "description": "Azure command-line interface.",
+      "usage": "az account show",
+      "tags": [
+        "cloud"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "azure-cli"
+      },
+      "mcp": null
+    },
+    {
+      "id": "azurehound",
+      "name": "AzureHound",
+      "binary": "azurehound",
+      "category": "cloud",
+      "description": "Azure/Entra ID attack-path collector.",
+      "usage": "azurehound -u {user} -p {password} list",
+      "tags": [
+        "cloud",
+        "azure"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/BloodHoundAD/AzureHound"
+      },
+      "mcp": null
+    },
+    {
+      "id": "checkov",
+      "name": "Checkov",
+      "binary": "checkov",
+      "category": "cloud",
+      "description": "IaC misconfiguration scanner.",
+      "usage": "checkov -d {target}",
+      "tags": [
+        "iac"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "checkov"
+      },
+      "mcp": null
+    },
+    {
+      "id": "cloud_enum",
+      "name": "cloud_enum",
+      "binary": "cloud_enum",
+      "category": "cloud",
+      "description": "Multi-cloud public asset enumeration.",
+      "usage": "cloud_enum -k {host}",
+      "tags": [
+        "cloud"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "cloud-enum"
+      },
+      "mcp": null
+    },
+    {
+      "id": "cloudsplaining",
+      "name": "Cloudsplaining",
+      "binary": "cloudsplaining",
+      "category": "cloud",
+      "description": "AWS IAM policy risk analyzer.",
+      "usage": "cloudsplaining scan --input-file {target}",
+      "tags": [
+        "aws",
+        "iam"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "cloudsplaining"
+      },
+      "mcp": null
+    },
+    {
+      "id": "enumerate_iam",
+      "name": "enumerate-iam",
+      "binary": "enumerate-iam",
+      "category": "cloud",
+      "description": "Enumerate AWS IAM permissions.",
+      "usage": "enumerate-iam --access-key {user} --secret-key {password}",
+      "tags": [
+        "aws",
+        "iam"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "enumerate-iam"
+      },
+      "mcp": null
+    },
+    {
+      "id": "gcloud",
+      "name": "gcloud",
+      "binary": "gcloud",
+      "category": "cloud",
+      "description": "Google Cloud CLI.",
+      "usage": "gcloud auth list",
+      "tags": [
+        "cloud"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "google-cloud-cli"
+      },
+      "mcp": null
+    },
+    {
+      "id": "gcp_scanner",
+      "name": "GCP Scanner",
+      "binary": "gcp-scanner",
+      "category": "cloud",
+      "description": "GCP resource/credential scanner.",
+      "usage": "gcp-scanner -o out",
+      "tags": [
+        "cloud"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "gcp-scanner"
+      },
+      "mcp": null
+    },
+    {
+      "id": "kics",
+      "name": "KICS",
+      "binary": "kics",
+      "category": "cloud",
+      "description": "IaC security scanner.",
+      "usage": "kics scan -p {target}",
+      "tags": [
+        "iac"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "kics"
+      },
+      "mcp": null
+    },
+    {
+      "id": "kube_bench",
+      "name": "kube-bench",
+      "binary": "kube-bench",
+      "category": "cloud",
+      "description": "CIS Kubernetes benchmark checks.",
+      "usage": "kube-bench run",
+      "tags": [
+        "k8s"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "kube-bench"
+      },
+      "mcp": null
+    },
+    {
+      "id": "kube_hunter",
+      "name": "kube-hunter",
+      "binary": "kube-hunter",
+      "category": "cloud",
+      "description": "Kubernetes penetration testing.",
+      "usage": "kube-hunter --remote {host}",
+      "tags": [
+        "k8s"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "kube-hunter"
+      },
+      "mcp": null
+    },
+    {
+      "id": "kubectl",
+      "name": "kubectl",
+      "binary": "kubectl",
+      "category": "cloud",
+      "description": "Kubernetes control client.",
+      "usage": "kubectl --server={target} get pods",
+      "tags": [
+        "k8s"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "kubectl"
+      },
+      "mcp": null
+    },
+    {
+      "id": "kubectl_WhoCan",
+      "name": "kubectl-who-can",
+      "binary": "kubectl-who-can",
+      "category": "cloud",
+      "description": "Show Kubernetes RBAC permissions.",
+      "usage": "kubectl-who-can create pods",
+      "tags": [
+        "k8s"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/aquasecurity/kubectl-who-can"
+      },
+      "mcp": null
+    },
+    {
+      "id": "kubescape",
+      "name": "Kubescape",
+      "binary": "kubescape",
+      "category": "cloud",
+      "description": "Kubernetes posture and compliance scanner.",
+      "usage": "kubescape scan",
+      "tags": [
+        "k8s"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "kubescape"
+      },
+      "mcp": null
+    },
+    {
+      "id": "monkey365",
+      "name": "Monkey365",
+      "binary": "Monkey365",
+      "category": "cloud",
+      "description": "Microsoft 365/ Azure security assessment.",
+      "usage": "Monkey365 -args",
+      "tags": [
+        "cloud",
+        "azure"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "monkey365"
+      },
+      "mcp": null
+    },
+    {
+      "id": "pacu",
+      "name": "Pacu",
+      "binary": "pacu",
+      "category": "cloud",
+      "description": "AWS exploitation framework (authorized only).",
+      "usage": "pacu",
+      "tags": [
+        "cloud",
+        "exploit"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "pacu"
+      },
+      "mcp": null
+    },
+    {
+      "id": "prowler",
+      "name": "Prowler",
+      "binary": "prowler",
+      "category": "cloud",
+      "description": "Cloud security assessment (AWS/Azure/GCP).",
+      "usage": "prowler aws",
+      "tags": [
+        "cloud",
+        "audit"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "prowler"
+      },
+      "mcp": null
+    },
+    {
+      "id": "roadrecon",
+      "name": "ROADrecon",
+      "binary": "roadrecon",
+      "category": "cloud",
+      "description": "Azure AD enumeration.",
+      "usage": "roadrecon gather",
+      "tags": [
+        "cloud",
+        "azure"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "roadrecon"
+      },
+      "mcp": null
+    },
+    {
+      "id": "s3scanner",
+      "name": "S3Scanner",
+      "binary": "s3scanner",
+      "category": "cloud",
+      "description": "Enumerate and audit exposed S3 buckets.",
+      "usage": "s3scanner scan --bucket {host}",
+      "tags": [
+        "s3"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "s3scanner"
+      },
+      "mcp": null
+    },
+    {
+      "id": "scoutsuite",
+      "name": "ScoutSuite",
+      "binary": "scout",
+      "category": "cloud",
+      "description": "Multi-cloud security auditing.",
+      "usage": "scout aws",
+      "tags": [
+        "cloud",
+        "audit"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "scoutsuite"
+      },
+      "mcp": null
+    },
+    {
+      "id": "terrascan",
+      "name": "Terrascan",
+      "binary": "terrascan",
+      "category": "cloud",
+      "description": "IaC security scanner.",
+      "usage": "terrascan scan -d {target}",
+      "tags": [
+        "iac"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "terrascan"
+      },
+      "mcp": null
+    },
+    {
+      "id": "clair",
+      "name": "Clair",
+      "binary": "clair",
+      "category": "container",
+      "description": "Container vulnerability scanner (service).",
+      "usage": "clair -conf config.yaml",
+      "tags": [
+        "container"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "clair"
+      },
+      "mcp": null
+    },
+    {
+      "id": "crane",
+      "name": "crane",
+      "binary": "crane",
+      "category": "container",
+      "description": "Inspect/export container images without a daemon.",
+      "usage": "crane config {target}",
+      "tags": [
+        "container"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/google/go-containerregistry/cmd/crane"
+      },
+      "mcp": null
+    },
+    {
+      "id": "docker_bench",
+      "name": "Docker Bench",
+      "binary": "docker-bench-security",
+      "category": "container",
+      "description": "Docker CIS benchmark.",
+      "usage": "docker-bench-security",
+      "tags": [
+        "container"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "docker-bench-security"
+      },
+      "mcp": null
+    },
+    {
+      "id": "dockle",
+      "name": "Dockle",
+      "binary": "dockle",
+      "category": "container",
+      "description": "Container image linter.",
+      "usage": "dockle {target}",
+      "tags": [
+        "container"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "dockle"
+      },
+      "mcp": null
+    },
+    {
+      "id": "grype",
+      "name": "Grype",
+      "binary": "grype",
+      "category": "container",
+      "description": "Vulnerability scanner for container images and SBOMs.",
+      "usage": "grype {target}",
+      "tags": [
+        "scanner"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "grype"
+      },
+      "mcp": null
+    },
+    {
+      "id": "hadolint",
+      "name": "Hadolint",
+      "binary": "hadolint",
+      "category": "container",
+      "description": "Dockerfile linter.",
+      "usage": "hadolint {target}",
+      "tags": [
+        "container"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "hadolint"
+      },
+      "mcp": null
+    },
+    {
+      "id": "skopeo",
+      "name": "Skopeo",
+      "binary": "skopeo",
+      "category": "container",
+      "description": "Copy/inspect container images.",
+      "usage": "skopeo inspect {target}",
+      "tags": [
+        "container"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "skopeo"
+      },
+      "mcp": null
+    },
+    {
+      "id": "syft",
+      "name": "Syft",
+      "binary": "syft",
+      "category": "container",
+      "description": "Generate SBOMs for images and filesystems.",
+      "usage": "syft {target} -o cyclonedx-json",
+      "tags": [
+        "sbom"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "syft"
+      },
+      "mcp": null
+    },
+    {
+      "id": "trivy",
+      "name": "Trivy",
+      "binary": "trivy",
+      "category": "container",
+      "description": "Container/image/filesystem vulnerability and secret scanner.",
+      "usage": "trivy image {target}",
+      "tags": [
+        "scanner",
+        "container"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "trivy"
+      },
+      "mcp": null
+    },
+    {
+      "id": "cewl",
+      "name": "CeWL",
+      "binary": "cewl",
+      "category": "creds",
+      "description": "Generate wordlists by crawling a site.",
+      "usage": "cewl {target} -w words.txt",
+      "tags": [
+        "wordlist"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "cewl"
+      },
+      "mcp": null
+    },
+    {
+      "id": "crunch",
+      "name": "Crunch",
+      "binary": "crunch",
+      "category": "creds",
+      "description": "Wordlist generator.",
+      "usage": "crunch 8 8 -o words.txt",
+      "tags": [
+        "wordlist"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "crunch"
+      },
+      "mcp": null
+    },
+    {
+      "id": "cupp",
+      "name": "CUPP",
+      "binary": "cupp",
+      "category": "creds",
+      "description": "Profile-based password wordlist generator.",
+      "usage": "cupp -i",
+      "tags": [
+        "wordlist"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "cupp"
+      },
+      "mcp": null
+    },
+    {
+      "id": "fcrackzip",
+      "name": "fcrackzip",
+      "binary": "fcrackzip",
+      "category": "creds",
+      "description": "ZIP password cracker.",
+      "usage": "fcrackzip -u -D -p wordlist.txt {target}",
+      "tags": [
+        "crack"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "fcrackzip"
+      },
+      "mcp": null
+    },
+    {
+      "id": "haiti",
+      "name": "Haiti",
+      "binary": "haiti",
+      "category": "creds",
+      "description": "Hash type identification.",
+      "usage": "haiti '{target}'",
+      "tags": [
+        "hash"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "gem": "haiti"
+      },
+      "mcp": null
+    },
+    {
+      "id": "hashcat",
+      "name": "Hashcat",
+      "binary": "hashcat",
+      "category": "creds",
+      "description": "GPU/CPU password recovery.",
+      "usage": "hashcat -m 0 {target} wordlist.txt",
+      "tags": [
+        "crack"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "hashcat"
+      },
+      "mcp": null
+    },
+    {
+      "id": "hashid",
+      "name": "HashID",
+      "binary": "hashid",
+      "category": "creds",
+      "description": "Identify hash types.",
+      "usage": "hashid '{target}'",
+      "tags": [
+        "hash"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "hashid"
+      },
+      "mcp": null
+    },
+    {
+      "id": "hydra",
+      "name": "Hydra",
+      "binary": "hydra",
+      "category": "creds",
+      "description": "Fast online credential brute forcing.",
+      "usage": "hydra -L users.txt -P passwords.txt {host} ssh",
+      "tags": [
+        "brute"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "hydra"
+      },
+      "mcp": null
+    },
+    {
+      "id": "john",
+      "name": "John the Ripper",
+      "binary": "john",
+      "category": "creds",
+      "description": "Password cracker.",
+      "usage": "john --wordlist=wordlist.txt {target}",
+      "tags": [
+        "crack"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "john"
+      },
+      "mcp": null
+    },
+    {
+      "id": "medusa",
+      "name": "Medusa",
+      "binary": "medusa",
+      "category": "creds",
+      "description": "Parallel network login brute forcer.",
+      "usage": "medusa -h {host} -U users.txt -P passwords.txt -M ssh",
+      "tags": [
+        "brute"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "medusa"
+      },
+      "mcp": null
+    },
+    {
+      "id": "ncrack",
+      "name": "Ncrack",
+      "binary": "ncrack",
+      "category": "creds",
+      "description": "High-speed network authentication cracking.",
+      "usage": "ncrack -U users.txt -P passwords.txt ssh://{host}",
+      "tags": [
+        "brute"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "ncrack"
+      },
+      "mcp": null
+    },
+    {
+      "id": "patator",
+      "name": "Patator",
+      "binary": "patator",
+      "category": "creds",
+      "description": "Modular brute-forcing tool.",
+      "usage": "patator ssh_login host={host} user=FILE0 password=FILE1 0=users.txt 1=passwords.txt",
+      "tags": [
+        "brute"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "patator"
+      },
+      "mcp": null
+    },
+    {
+      "id": "pdfcrack",
+      "name": "pdfcrack",
+      "binary": "pdfcrack",
+      "category": "creds",
+      "description": "PDF password cracker.",
+      "usage": "pdfcrack -w wordlist.txt {target}",
+      "tags": [
+        "crack"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "pdfcrack"
+      },
+      "mcp": null
+    },
+    {
+      "id": "seclists",
+      "name": "SecLists",
+      "binary": "seclists",
+      "category": "creds",
+      "description": "Curated security wordlists (installed as a data package).",
+      "usage": "ls /usr/share/seclists",
+      "tags": [
+        "wordlist"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "seclists"
+      },
+      "mcp": null
+    },
+    {
+      "id": "metasploit",
+      "name": "Metasploit",
+      "binary": "msfconsole",
+      "category": "exploit",
+      "description": "Exploitation framework (authorized, surgical use).",
+      "usage": "msfconsole -q -x 'search {target}; exit'",
+      "tags": [
+        "exploit"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "metasploit-framework"
+      },
+      "mcp": null
+    },
+    {
+      "id": "msfvenom",
+      "name": "msfvenom",
+      "binary": "msfvenom",
+      "category": "exploit",
+      "description": "Payload generator.",
+      "usage": "msfvenom -p linux/x64/shell_reverse_tcp LHOST={host} LPORT=4444 -f elf",
+      "tags": [
+        "payload"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "metasploit-framework"
+      },
+      "mcp": null
+    },
+    {
+      "id": "one_gadget",
+      "name": "one_gadget",
+      "binary": "one_gadget",
+      "category": "exploit",
+      "description": "Find one-gadget RCEs in libc.",
+      "usage": "one_gadget {target}",
+      "tags": [
+        "rop"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "gem": "one_gadget"
+      },
+      "mcp": null
+    },
+    {
+      "id": "pwntools",
+      "name": "Pwntools",
+      "binary": "pwn",
+      "category": "exploit",
+      "description": "CTF/exploit development toolkit.",
+      "usage": "python3 -c 'from pwn import *'",
+      "tags": [
+        "exploit"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "pwntools"
+      },
+      "mcp": null
+    },
+    {
+      "id": "ropgadget",
+      "name": "ROPgadget",
+      "binary": "ROPgadget",
+      "category": "exploit",
+      "description": "ROP gadget finder.",
+      "usage": "ROPgadget --binary {target}",
+      "tags": [
+        "rop"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "ropgadget"
+      },
+      "mcp": null
+    },
+    {
+      "id": "ropper",
+      "name": "Ropper",
+      "binary": "ropper",
+      "category": "exploit",
+      "description": "ROP gadget finder.",
+      "usage": "ropper -f {target} --search 'pop rdi'",
+      "tags": [
+        "rop"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "ropper"
+      },
+      "mcp": null
+    },
+    {
+      "id": "searchsploit",
+      "name": "SearchSploit",
+      "binary": "searchsploit",
+      "category": "exploit",
+      "description": "Offline Exploit-DB search.",
+      "usage": "searchsploit {target}",
+      "tags": [
+        "cve",
+        "poc"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "exploitdb"
+      },
+      "mcp": null
+    },
+    {
+      "id": "bulk_extractor",
+      "name": "bulk_extractor",
+      "binary": "bulk_extractor",
+      "category": "forensics",
+      "description": "Forensic feature extraction.",
+      "usage": "bulk_extractor -o out {target}",
+      "tags": [
+        "forensics"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "bulk-extractor"
+      },
+      "mcp": null
+    },
+    {
+      "id": "exiftool",
+      "name": "ExifTool",
+      "binary": "exiftool",
+      "category": "forensics",
+      "description": "Metadata extraction/editing.",
+      "usage": "exiftool {target}",
+      "tags": [
+        "metadata"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "libimage-exiftool-perl"
+      },
+      "mcp": null
+    },
+    {
+      "id": "foremost",
+      "name": "Foremost",
+      "binary": "foremost",
+      "category": "forensics",
+      "description": "File carving/recovery.",
+      "usage": "foremost -i {target} -o out",
+      "tags": [
+        "forensics"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "foremost"
+      },
+      "mcp": null
+    },
+    {
+      "id": "sleuthkit",
+      "name": "SleuthKit",
+      "binary": "fls",
+      "category": "forensics",
+      "description": "File-system forensic analysis.",
+      "usage": "fls -r {target}",
+      "tags": [
+        "forensics"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "sleuthkit"
+      },
+      "mcp": null
+    },
+    {
+      "id": "steghide",
+      "name": "Steghide",
+      "binary": "steghide",
+      "category": "forensics",
+      "description": "Steganography embed/extract.",
+      "usage": "steghide info {target}",
+      "tags": [
+        "stego"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "steghide"
+      },
+      "mcp": null
+    },
+    {
+      "id": "volatility3",
+      "name": "Volatility 3",
+      "binary": "vol.py",
+      "category": "forensics",
+      "description": "Memory forensics framework.",
+      "usage": "vol.py -f {target} windows.info",
+      "tags": [
+        "forensics"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "volatility3"
+      },
+      "mcp": null
+    },
+    {
+      "id": "zsteg",
+      "name": "zsteg",
+      "binary": "zsteg",
+      "category": "forensics",
+      "description": "PNG/BMP steganography detection.",
+      "usage": "zsteg {target}",
+      "tags": [
+        "stego"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "gem": "zsteg"
+      },
+      "mcp": null
+    },
+    {
+      "id": "apkleaks",
+      "name": "APKLeaks",
+      "binary": "apkleaks",
+      "category": "mobile",
+      "description": "Scan APKs for URLs, secrets and endpoints.",
+      "usage": "apkleaks -f {target}",
+      "tags": [
+        "android",
+        "secrets"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "apkleaks"
+      },
+      "mcp": null
+    },
+    {
+      "id": "apktool",
+      "name": "Apktool",
+      "binary": "apktool",
+      "category": "mobile",
+      "description": "Decompile/rebuild Android APKs.",
+      "usage": "apktool d {target}",
+      "tags": [
+        "android"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "apktool"
+      },
+      "mcp": null
+    },
+    {
+      "id": "dex2jar",
+      "name": "dex2jar",
+      "binary": "d2j-dex2jar",
+      "category": "mobile",
+      "description": "Convert DEX to JAR for analysis.",
+      "usage": "d2j-dex2jar {target}",
+      "tags": [
+        "android"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "dex2jar"
+      },
+      "mcp": null
+    },
+    {
+      "id": "frida",
+      "name": "Frida",
+      "binary": "frida",
+      "category": "mobile",
+      "description": "Dynamic instrumentation toolkit.",
+      "usage": "frida -U -f {target}",
+      "tags": [
+        "android",
+        "ios"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "frida-tools"
+      },
+      "mcp": null
+    },
+    {
+      "id": "jadx",
+      "name": "Jadx",
+      "binary": "jadx",
+      "category": "mobile",
+      "description": "Dex-to-Java decompiler.",
+      "usage": "jadx -d out {target}",
+      "tags": [
+        "android"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "jadx"
+      },
+      "mcp": null
+    },
+    {
+      "id": "mobsf",
+      "name": "MobSF",
+      "binary": "mobsf",
+      "category": "mobile",
+      "description": "Mobile security framework (run headless REST API).",
+      "usage": "docker run -p 8000:8000 opensecurity/mobile-security-framework-mobsf",
+      "tags": [
+        "android",
+        "ios"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "docker": "opensecurity/mobile-security-framework-mobsf"
+      },
+      "mcp": null
+    },
+    {
+      "id": "objection",
+      "name": "Objection",
+      "binary": "objection",
+      "category": "mobile",
+      "description": "Frida-powered mobile runtime exploration.",
+      "usage": "objection -g {target} explore",
+      "tags": [
+        "android",
+        "ios"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "objection"
+      },
+      "mcp": null
+    },
+    {
+      "id": "arp_scan",
+      "name": "arp-scan",
+      "binary": "arp-scan",
+      "category": "network",
+      "description": "ARP-based local network discovery.",
+      "usage": "arp-scan --localnet",
+      "tags": [
+        "discovery"
+      ],
+      "intrusive": true,
+      "requires_root": true,
+      "install": {
+        "apt": "arp-scan"
+      },
+      "mcp": null
+    },
+    {
+      "id": "chisel",
+      "name": "Chisel",
+      "binary": "chisel",
+      "category": "network",
+      "description": "TCP/UDP tunnel over HTTP (pivoting).",
+      "usage": "chisel client {url} 8080:127.0.0.1:80",
+      "tags": [
+        "pivot"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/jpillora/chisel"
+      },
+      "mcp": null
+    },
+    {
+      "id": "ligolo",
+      "name": "Ligolo-ng",
+      "binary": "ligolo-ng",
+      "category": "network",
+      "description": "TUN-based reverse tunneling for pivoting.",
+      "usage": "ligolo-ng -selfcert",
+      "tags": [
+        "pivot"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/nicocha30/ligolo-ng"
+      },
+      "mcp": null
+    },
+    {
+      "id": "masscan",
+      "name": "Masscan",
+      "binary": "masscan",
+      "category": "network",
+      "description": "Internet-scale port scanner.",
+      "usage": "masscan -p1-65535 {host} --rate 1000",
+      "tags": [
+        "port-scan"
+      ],
+      "intrusive": true,
+      "requires_root": true,
+      "install": {
+        "apt": "masscan"
+      },
+      "mcp": null
+    },
+    {
+      "id": "mtr",
+      "name": "mtr",
+      "binary": "mtr",
+      "category": "network",
+      "description": "Combined traceroute and ping.",
+      "usage": "mtr -rwzbc 10 {host}",
+      "tags": [
+        "network"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "mtr"
+      },
+      "mcp": null
+    },
+    {
+      "id": "naabu",
+      "name": "Naabu",
+      "binary": "naabu",
+      "category": "network",
+      "description": "Fast port scanner with service detection.",
+      "usage": "naabu -host {host} -silent",
+      "tags": [
+        "port-scan"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/projectdiscovery/naabu/v2/cmd/naabu"
+      },
+      "mcp": null
+    },
+    {
+      "id": "nbtscan",
+      "name": "NBTscan",
+      "binary": "nbtscan",
+      "category": "network",
+      "description": "NetBIOS name scanning.",
+      "usage": "nbtscan {host}/24",
+      "tags": [
+        "netbios"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "nbtscan"
+      },
+      "mcp": null
+    },
+    {
+      "id": "netdiscover",
+      "name": "Netdiscover",
+      "binary": "netdiscover",
+      "category": "network",
+      "description": "ARP network discovery.",
+      "usage": "netdiscover -r {host}/24",
+      "tags": [
+        "discovery"
+      ],
+      "intrusive": true,
+      "requires_root": true,
+      "install": {
+        "apt": "netdiscover"
+      },
+      "mcp": null
+    },
+    {
+      "id": "nmap",
+      "name": "Nmap",
+      "binary": "nmap",
+      "category": "network",
+      "description": "Port scanning, service/version and NSE scripts.",
+      "usage": "nmap -Pn -sV -sC {host}",
+      "tags": [
+        "port-scan",
+        "service"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "nmap"
+      },
+      "mcp": null
+    },
+    {
+      "id": "nmap_nse",
+      "name": "Nmap NSE",
+      "binary": "nmap",
+      "category": "network",
+      "description": "Nmap scripting engine for service checks.",
+      "usage": "nmap --script vuln {host}",
+      "tags": [
+        "nse"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "nmap"
+      },
+      "mcp": null
+    },
+    {
+      "id": "onesixtyone",
+      "name": "onesixtyone",
+      "binary": "onesixtyone",
+      "category": "network",
+      "description": "SNMP community-string scanner.",
+      "usage": "onesixtyone {host} public",
+      "tags": [
+        "snmp"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "onesixtyone"
+      },
+      "mcp": null
+    },
+    {
+      "id": "proxychains",
+      "name": "ProxyChains",
+      "binary": "proxychains4",
+      "category": "network",
+      "description": "Force TCP through proxy chains.",
+      "usage": "proxychains4 nmap -sT -Pn {host}",
+      "tags": [
+        "pivot"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "proxychains4"
+      },
+      "mcp": null
+    },
+    {
+      "id": "rpcclient",
+      "name": "rpcclient",
+      "binary": "rpcclient",
+      "category": "network",
+      "description": "SMB RPC enumeration.",
+      "usage": "rpcclient -U '' -N {host}",
+      "tags": [
+        "smb",
+        "rpc"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "smbclient"
+      },
+      "mcp": null
+    },
+    {
+      "id": "rustscan",
+      "name": "RustScan",
+      "binary": "rustscan",
+      "category": "network",
+      "description": "Ultra-fast port discovery, hands off to Nmap.",
+      "usage": "rustscan -a {host} -- -sV",
+      "tags": [
+        "port-scan"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "cargo": "rustscan"
+      },
+      "mcp": null
+    },
+    {
+      "id": "smbclient",
+      "name": "smbclient",
+      "binary": "smbclient",
+      "category": "network",
+      "description": "SMB/CIFS client for listing and transferring files.",
+      "usage": "smbclient -L //{host}/ -N",
+      "tags": [
+        "smb"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "smbclient"
+      },
+      "mcp": null
+    },
+    {
+      "id": "smbmap",
+      "name": "SMBMap",
+      "binary": "smbmap",
+      "category": "network",
+      "description": "SMB share enumeration and permission mapping.",
+      "usage": "smbmap -H {host}",
+      "tags": [
+        "smb"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "smbmap"
+      },
+      "mcp": null
+    },
+    {
+      "id": "snmpcheck",
+      "name": "snmpcheck",
+      "binary": "snmpcheck",
+      "category": "network",
+      "description": "SNMP information enumeration.",
+      "usage": "snmpcheck -t {host}",
+      "tags": [
+        "snmp"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "snmpcheck"
+      },
+      "mcp": null
+    },
+    {
+      "id": "snmpwalk",
+      "name": "snmpwalk",
+      "binary": "snmpwalk",
+      "category": "network",
+      "description": "SNMP object-tree walk.",
+      "usage": "snmpwalk -v2c -c public {host}",
+      "tags": [
+        "snmp"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "snmp"
+      },
+      "mcp": null
+    },
+    {
+      "id": "socat",
+      "name": "socat",
+      "binary": "socat",
+      "category": "network",
+      "description": "Multipurpose relay for pivoting and shells.",
+      "usage": "socat TCP-LISTEN:8080,fork TCP:{host}:80",
+      "tags": [
+        "pivot"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "socat"
+      },
+      "mcp": null
+    },
+    {
+      "id": "ssh",
+      "name": "OpenSSH client",
+      "binary": "ssh",
+      "category": "network",
+      "description": "Remote shell over SSH.",
+      "usage": "ssh {user}@{host}",
+      "tags": [
+        "ssh"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "openssh-client"
+      },
+      "mcp": null
+    },
+    {
+      "id": "sshpass",
+      "name": "sshpass",
+      "binary": "sshpass",
+      "category": "network",
+      "description": "Non-interactive SSH password auth.",
+      "usage": "sshpass -p {password} ssh {user}@{host}",
+      "tags": [
+        "ssh"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "sshpass"
+      },
+      "mcp": null
+    },
+    {
+      "id": "traceroute",
+      "name": "traceroute",
+      "binary": "traceroute",
+      "category": "network",
+      "description": "Network path discovery.",
+      "usage": "traceroute {host}",
+      "tags": [
+        "network"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "traceroute"
+      },
+      "mcp": null
+    },
+    {
+      "id": "xfreerdp",
+      "name": "FreeRDP",
+      "binary": "xfreerdp",
+      "category": "network",
+      "description": "RDP client (headless-capable).",
+      "usage": "xfreerdp /v:{host} /u:{user} /p:{password} /cert:ignore",
+      "tags": [
+        "rdp"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "freerdp2-x11"
+      },
+      "mcp": null
+    },
+    {
+      "id": "zmap",
+      "name": "ZMap",
+      "binary": "zmap",
+      "category": "network",
+      "description": "Fast single-packet network scanner.",
+      "usage": "zmap -p 443 {host}",
+      "tags": [
+        "port-scan"
+      ],
+      "intrusive": true,
+      "requires_root": true,
+      "install": {
+        "apt": "zmap"
+      },
+      "mcp": null
+    },
+    {
+      "id": "amass",
+      "name": "Amass",
+      "binary": "amass",
+      "category": "recon",
+      "description": "Attack-surface mapping and subdomain enumeration.",
+      "usage": "amass enum -passive -d {host}",
+      "tags": [
+        "subdomain",
+        "osint"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "amass",
+        "go": "github.com/owasp-amass/amass/v4/cmd/amass"
+      },
+      "mcp": null
+    },
+    {
+      "id": "amass_intel",
+      "name": "Amass Intel",
+      "binary": "amass",
+      "category": "recon",
+      "description": "OSINT intelligence gathering.",
+      "usage": "amass intel -d {host}",
+      "tags": [
+        "osint"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "amass"
+      },
+      "mcp": null
+    },
+    {
+      "id": "anew",
+      "name": "anew",
+      "binary": "anew",
+      "category": "recon",
+      "description": "Append only new lines to a file (pipeline helper).",
+      "usage": "cat urls.txt | anew all.txt",
+      "tags": [
+        "utility"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/tomnomnom/anew"
+      },
+      "mcp": null
+    },
+    {
+      "id": "assetfinder",
+      "name": "Assetfinder",
+      "binary": "assetfinder",
+      "category": "recon",
+      "description": "Find domains and subdomains from public sources.",
+      "usage": "assetfinder --subs-only {host}",
+      "tags": [
+        "subdomain"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/tomnomnom/assetfinder"
+      },
+      "mcp": null
+    },
+    {
+      "id": "crt_sh",
+      "name": "crt.sh",
+      "binary": "curl",
+      "category": "recon",
+      "description": "Certificate-transparency subdomain lookup (HTTP API).",
+      "usage": "curl -s 'https://crt.sh/?q=%25.{host}&output=json'",
+      "tags": [
+        "subdomain",
+        "osint"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {},
+      "mcp": null
+    },
+    {
+      "id": "dig",
+      "name": "dig",
+      "binary": "dig",
+      "category": "recon",
+      "description": "DNS query utility.",
+      "usage": "dig +short {host}",
+      "tags": [
+        "dns"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "dnsutils"
+      },
+      "mcp": null
+    },
+    {
+      "id": "dnsenum",
+      "name": "DNSEnum",
+      "binary": "dnsenum",
+      "category": "recon",
+      "description": "DNS information gathering and zone-transfer checks.",
+      "usage": "dnsenum {host}",
+      "tags": [
+        "dns"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "dnsenum"
+      },
+      "mcp": null
+    },
+    {
+      "id": "dnsrecon",
+      "name": "DNSRecon",
+      "binary": "dnsrecon",
+      "category": "recon",
+      "description": "DNS enumeration (records, zone transfer, brute force).",
+      "usage": "dnsrecon -d {host}",
+      "tags": [
+        "dns"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "dnsrecon"
+      },
+      "mcp": null
+    },
+    {
+      "id": "dnsx",
+      "name": "dnsx",
+      "binary": "dnsx",
+      "category": "recon",
+      "description": "DNS toolkit: resolve, brute, wildcard and record queries.",
+      "usage": "dnsx -silent -a -resp -d {host}",
+      "tags": [
+        "dns"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/projectdiscovery/dnsx/cmd/dnsx"
+      },
+      "mcp": null
+    },
+    {
+      "id": "fierce",
+      "name": "Fierce",
+      "binary": "fierce",
+      "category": "recon",
+      "description": "DNS reconnaissance and non-contiguous IP discovery.",
+      "usage": "fierce --domain {host}",
+      "tags": [
+        "dns"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "fierce"
+      },
+      "mcp": null
+    },
+    {
+      "id": "findomain",
+      "name": "Findomain",
+      "binary": "findomain",
+      "category": "recon",
+      "description": "Fast subdomain enumerator combining multiple sources.",
+      "usage": "findomain -t {host} -q",
+      "tags": [
+        "subdomain"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "cargo": "findomain"
+      },
+      "mcp": null
+    },
+    {
+      "id": "gau",
+      "name": "gau",
+      "binary": "gau",
+      "category": "recon",
+      "description": "Fetch known URLs from AlienVault, Wayback and Common Crawl.",
+      "usage": "echo {host} | gau --threads 20",
+      "tags": [
+        "urls",
+        "wayback"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/lc/gau/v2/cmd/gau"
+      },
+      "mcp": null
+    },
+    {
+      "id": "gf",
+      "name": "gf",
+      "binary": "gf",
+      "category": "recon",
+      "description": "Grep patterns for URLs by vulnerability class.",
+      "usage": "cat urls.txt | gf sqli",
+      "tags": [
+        "urls"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/tomnomnom/gf"
+      },
+      "mcp": null
+    },
+    {
+      "id": "gospider",
+      "name": "GoSpider",
+      "binary": "gospider",
+      "category": "recon",
+      "description": "Fast web spider with link and JS discovery.",
+      "usage": "gospider -s {target} -d 3 --robots",
+      "tags": [
+        "crawl"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/jaeles-project/gospider"
+      },
+      "mcp": null
+    },
+    {
+      "id": "hakrawler",
+      "name": "Hakrawler",
+      "binary": "hakrawler",
+      "category": "recon",
+      "description": "Fast web crawler for URLs and JavaScript files.",
+      "usage": "echo {target} | hakrawler -d 3",
+      "tags": [
+        "crawl"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/hakluke/hakrawler"
+      },
+      "mcp": null
+    },
+    {
+      "id": "host",
+      "name": "host",
+      "binary": "host",
+      "category": "recon",
+      "description": "Simple DNS lookup.",
+      "usage": "host {host}",
+      "tags": [
+        "dns"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {},
+      "mcp": null
+    },
+    {
+      "id": "katana",
+      "name": "Katana",
+      "binary": "katana",
+      "category": "recon",
+      "description": "Next-generation web crawler (JS-aware).",
+      "usage": "katana -u {target} -d 3 -jc -silent",
+      "tags": [
+        "crawl"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/projectdiscovery/katana/cmd/katana"
+      },
+      "mcp": null
+    },
+    {
+      "id": "qsreplace",
+      "name": "qsreplace",
+      "binary": "qsreplace",
+      "category": "recon",
+      "description": "Replace query-string values for batch testing.",
+      "usage": "echo {target} | qsreplace",
+      "tags": [
+        "urls"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/tomnomnom/qsreplace"
+      },
+      "mcp": null
+    },
+    {
+      "id": "reconng",
+      "name": "Recon-ng",
+      "binary": "recon-ng",
+      "category": "recon",
+      "description": "Modular OSINT/reconnaissance framework.",
+      "usage": "recon-ng -w recon",
+      "tags": [
+        "osint"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "recon-ng"
+      },
+      "mcp": null
+    },
+    {
+      "id": "spiderfoot",
+      "name": "SpiderFoot",
+      "binary": "sf.py",
+      "category": "recon",
+      "description": "Automated OSINT and attack-surface reconnaissance.",
+      "usage": "sf.py -s {host} -t all",
+      "tags": [
+        "osint"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "spiderfoot"
+      },
+      "mcp": null
+    },
+    {
+      "id": "subfinder",
+      "name": "Subfinder",
+      "binary": "subfinder",
+      "category": "recon",
+      "description": "Passive subdomain enumeration (ProjectDiscovery).",
+      "usage": "subfinder -silent -all -d {host}",
+      "tags": [
+        "subdomain",
+        "osint"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/projectdiscovery/subfinder/v2/cmd/subfinder"
+      },
+      "mcp": null
+    },
+    {
+      "id": "sublist3r",
+      "name": "Sublist3r",
+      "binary": "sublist3r",
+      "category": "recon",
+      "description": "Fast subdomain enumeration via search engines.",
+      "usage": "sublist3r -d {host}",
+      "tags": [
+        "subdomain"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "sublist3r"
+      },
+      "mcp": null
+    },
+    {
+      "id": "thecrawl",
+      "name": "crawl",
+      "binary": "crawl",
+      "category": "recon",
+      "description": "A high-performance web crawler.",
+      "usage": "crawl {target}",
+      "tags": [
+        "crawl"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/s0rg/crawley"
+      },
+      "mcp": null
+    },
+    {
+      "id": "theharvester",
+      "name": "theHarvester",
+      "binary": "theHarvester",
+      "category": "recon",
+      "description": "Emails, hosts, names and URLs from public sources.",
+      "usage": "theHarvester -d {host} -b all",
+      "tags": [
+        "osint",
+        "email"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "theHarvester"
+      },
+      "mcp": null
+    },
+    {
+      "id": "unfurl",
+      "name": "Unfurl",
+      "binary": "unfurl",
+      "category": "recon",
+      "description": "Extract and analyze URLs from input.",
+      "usage": "echo {target} | unfurl keys",
+      "tags": [
+        "urls"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/tomnomnom/unfurl"
+      },
+      "mcp": null
+    },
+    {
+      "id": "waybackpack",
+      "name": "Waybackpack",
+      "binary": "waybackpack",
+      "category": "recon",
+      "description": "Download the full Wayback Machine history of a URL.",
+      "usage": "waybackpack --list {target}",
+      "tags": [
+        "urls",
+        "wayback"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "waybackpack"
+      },
+      "mcp": null
+    },
+    {
+      "id": "waybackurls",
+      "name": "WaybackURLs",
+      "binary": "waybackurls",
+      "category": "recon",
+      "description": "Fetch URLs from the Wayback Machine.",
+      "usage": "echo {host} | waybackurls",
+      "tags": [
+        "urls",
+        "wayback"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/tomnomnom/waybackurls"
+      },
+      "mcp": null
+    },
+    {
+      "id": "waymore",
+      "name": "waymore",
+      "binary": "waymore",
+      "category": "recon",
+      "description": "Fetch URLs from many passive sources.",
+      "usage": "waymore -i {host} -mode U",
+      "tags": [
+        "urls"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "waymore"
+      },
+      "mcp": null
+    },
+    {
+      "id": "whois",
+      "name": "whois",
+      "binary": "whois",
+      "category": "recon",
+      "description": "Domain/IP registration records.",
+      "usage": "whois {host}",
+      "tags": [
+        "osint"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "whois"
+      },
+      "mcp": null
+    },
+    {
+      "id": "jq",
+      "name": "jq",
+      "binary": "jq",
+      "category": "utility",
+      "description": "JSON processor.",
+      "usage": "jq . data.json",
+      "tags": [
+        "json"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "jq"
+      },
+      "mcp": null
+    },
+    {
+      "id": "mitmproxy2swagger",
+      "name": "mitmproxy2swagger",
+      "binary": "mitmproxy2swagger",
+      "category": "utility",
+      "description": "Convert mitmproxy flows into OpenAPI.",
+      "usage": "mitmproxy2swagger -i flows -o spec.yaml",
+      "tags": [
+        "api"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "mitmproxy2swagger"
+      },
+      "mcp": null
+    },
+    {
+      "id": "postman",
+      "name": "Postman CLI",
+      "binary": "newman",
+      "category": "utility",
+      "description": "Run Postman collections headlessly.",
+      "usage": "newman run collection.json",
+      "tags": [
+        "api"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "npm": "newman"
+      },
+      "mcp": null
+    },
+    {
+      "id": "swagger_parser",
+      "name": "Swagger parser",
+      "binary": "swagger-cli",
+      "category": "utility",
+      "description": "Validate and bundle OpenAPI specs.",
+      "usage": "swagger-cli validate {target}",
+      "tags": [
+        "api"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "npm": "@apidevtools/swagger-cli"
+      },
+      "mcp": null
+    },
+    {
+      "id": "yq",
+      "name": "yq",
+      "binary": "yq",
+      "category": "utility",
+      "description": "YAML/JSON processor.",
+      "usage": "yq . file.yaml",
+      "tags": [
+        "yaml"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "yq"
+      },
+      "mcp": null
+    },
+    {
+      "id": "aquatone",
+      "name": "Aquatone",
+      "binary": "aquatone",
+      "category": "web",
+      "description": "Visual inspection of HTTP attack surface.",
+      "usage": "cat hosts.txt | aquatone",
+      "tags": [
+        "screenshot"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/michenriksen/aquatone"
+      },
+      "mcp": null
+    },
+    {
+      "id": "arjun",
+      "name": "Arjun",
+      "binary": "arjun",
+      "category": "web",
+      "description": "HTTP parameter discovery.",
+      "usage": "arjun -u {target} -m GET,POST",
+      "tags": [
+        "params"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "arjun"
+      },
+      "mcp": null
+    },
+    {
+      "id": "clairvoyance",
+      "name": "Clairvoyance",
+      "binary": "clairvoyance",
+      "category": "web",
+      "description": "GraphQL schema extraction with introspection disabled.",
+      "usage": "clairvoyance {target}/graphql -o schema.json",
+      "tags": [
+        "graphql"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "clairvoyance"
+      },
+      "mcp": null
+    },
+    {
+      "id": "commix",
+      "name": "Commix",
+      "binary": "commix",
+      "category": "web",
+      "description": "Command injection detection and exploitation.",
+      "usage": "commix --url={target} --batch",
+      "tags": [
+        "cmdi"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "commix"
+      },
+      "mcp": null
+    },
+    {
+      "id": "cors_scanner",
+      "name": "Cors_Scanner",
+      "binary": "cors_scan",
+      "category": "web",
+      "description": "CORS misconfiguration scanner.",
+      "usage": "cors_scan -u {target}",
+      "tags": [
+        "cors"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {},
+      "mcp": null
+    },
+    {
+      "id": "corsy",
+      "name": "CORSy",
+      "binary": "corsy",
+      "category": "web",
+      "description": "CORS misconfiguration scanner.",
+      "usage": "corsy -u {target}",
+      "tags": [
+        "cors"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "corsy"
+      },
+      "mcp": null
+    },
+    {
+      "id": "crlfuzz",
+      "name": "crlfuzz",
+      "binary": "crlfuzz",
+      "category": "web",
+      "description": "CRLF injection scanner.",
+      "usage": "crlfuzz -u {target}",
+      "tags": [
+        "crlf"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/dwisiswant0/crlfuzz/cmd/crlfuzz"
+      },
+      "mcp": null
+    },
+    {
+      "id": "curl",
+      "name": "curl",
+      "binary": "curl",
+      "category": "web",
+      "description": "Raw HTTP client (always available).",
+      "usage": "curl -isk {target}",
+      "tags": [
+        "http"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {},
+      "mcp": null
+    },
+    {
+      "id": "dalfox",
+      "name": "Dalfox",
+      "binary": "dalfox",
+      "category": "web",
+      "description": "XSS scanner and parameter analyzer.",
+      "usage": "dalfox url {target} --silence",
+      "tags": [
+        "xss"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/hahwul/dalfox/v2"
+      },
+      "mcp": null
+    },
+    {
+      "id": "dirb",
+      "name": "DIRB",
+      "binary": "dirb",
+      "category": "web",
+      "description": "Classic content scanner.",
+      "usage": "dirb {target} wordlist.txt",
+      "tags": [
+        "fuzz"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "dirb"
+      },
+      "mcp": null
+    },
+    {
+      "id": "dirsearch",
+      "name": "dirsearch",
+      "binary": "dirsearch",
+      "category": "web",
+      "description": "Web path discovery.",
+      "usage": "dirsearch -u {target} -w wordlist.txt",
+      "tags": [
+        "fuzz"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "dirsearch"
+      },
+      "mcp": null
+    },
+    {
+      "id": "droopescan",
+      "name": "Droopescan",
+      "binary": "droopescan",
+      "category": "web",
+      "description": "Scan Drupal, Joomla, SilverStripe and WordPress.",
+      "usage": "droopescan scan drupal -u {target}",
+      "tags": [
+        "cms"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "droopescan"
+      },
+      "mcp": null
+    },
+    {
+      "id": "eyewitness",
+      "name": "EyeWitness",
+      "binary": "eyewitness",
+      "category": "web",
+      "description": "Website screenshot and header capture.",
+      "usage": "eyewitness --web -f urls.txt",
+      "tags": [
+        "screenshot"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "eyewitness"
+      },
+      "mcp": null
+    },
+    {
+      "id": "feroxbuster",
+      "name": "Feroxbuster",
+      "binary": "feroxbuster",
+      "category": "web",
+      "description": "Recursive content discovery.",
+      "usage": "feroxbuster -u {target} -w wordlist.txt -q",
+      "tags": [
+        "fuzz"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "feroxbuster"
+      },
+      "mcp": null
+    },
+    {
+      "id": "ffuf",
+      "name": "ffuf",
+      "binary": "ffuf",
+      "category": "web",
+      "description": "Fast web fuzzer for content, parameters and vhosts.",
+      "usage": "ffuf -u {target}/FUZZ -w wordlist.txt -mc 200,301,302,403",
+      "tags": [
+        "fuzz"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/ffuf/ffuf/v2"
+      },
+      "mcp": null
+    },
+    {
+      "id": "git_dumper",
+      "name": "git-dumper",
+      "binary": "git-dumper",
+      "category": "web",
+      "description": "Extract exposed .git repositories.",
+      "usage": "git-dumper {target}/.git ./dump",
+      "tags": [
+        "git"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "git-dumper"
+      },
+      "mcp": null
+    },
+    {
+      "id": "gitjacker",
+      "name": "gitjacker",
+      "binary": "gitjacker",
+      "category": "web",
+      "description": "Find and download exposed .git repos.",
+      "usage": "gitjacker {target}",
+      "tags": [
+        "git"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/liamg/gitjacker"
+      },
+      "mcp": null
+    },
+    {
+      "id": "gitleaks",
+      "name": "Gitleaks",
+      "binary": "gitleaks",
+      "category": "web",
+      "description": "Detect hardcoded secrets in repos/files.",
+      "usage": "gitleaks detect --source {target}",
+      "tags": [
+        "secrets"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/gitleaks/gitleaks/v8"
+      },
+      "mcp": null
+    },
+    {
+      "id": "gobuster",
+      "name": "Gobuster",
+      "binary": "gobuster",
+      "category": "web",
+      "description": "Directory/DNS/vhost brute forcing.",
+      "usage": "gobuster dir -u {target} -w wordlist.txt",
+      "tags": [
+        "fuzz"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "gobuster"
+      },
+      "mcp": null
+    },
+    {
+      "id": "gopherus",
+      "name": "Gopherus",
+      "binary": "gopherus",
+      "category": "web",
+      "description": "Generate gopher payloads for SSRF exploitation.",
+      "usage": "gopherus --exploit mysql",
+      "tags": [
+        "ssrf"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "gopherus"
+      },
+      "mcp": null
+    },
+    {
+      "id": "gowitness",
+      "name": "gowitness",
+      "binary": "gowitness",
+      "category": "web",
+      "description": "Web screenshot and evidence capture.",
+      "usage": "gowitness scan single --url {target}",
+      "tags": [
+        "screenshot"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/sensepost/gowitness"
+      },
+      "mcp": null
+    },
+    {
+      "id": "graphql_cop",
+      "name": "GraphQL Cop",
+      "binary": "graphql-cop",
+      "category": "web",
+      "description": "GraphQL security audit.",
+      "usage": "graphql-cop -t {target}/graphql",
+      "tags": [
+        "graphql"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "graphql-cop"
+      },
+      "mcp": null
+    },
+    {
+      "id": "graphw00f",
+      "name": "graphw00f",
+      "binary": "graphw00f",
+      "category": "web",
+      "description": "GraphQL endpoint fingerprinting.",
+      "usage": "graphw00f -t {target}",
+      "tags": [
+        "graphql"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "graphw00f"
+      },
+      "mcp": null
+    },
+    {
+      "id": "grpcurl",
+      "name": "grpcurl",
+      "binary": "grpcurl",
+      "category": "web",
+      "description": "gRPC reflection client.",
+      "usage": "grpcurl -plaintext {host}:50051 list",
+      "tags": [
+        "grpc"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "grpcurl"
+      },
+      "mcp": null
+    },
+    {
+      "id": "h2csmuggler",
+      "name": "h2cSmuggler",
+      "binary": "h2csmuggler",
+      "category": "web",
+      "description": "HTTP/2 cleartext smuggling.",
+      "usage": "h2csmuggler -x {target}",
+      "tags": [
+        "smuggling"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "h2csmuggler"
+      },
+      "mcp": null
+    },
+    {
+      "id": "httpie",
+      "name": "HTTPie",
+      "binary": "http",
+      "category": "web",
+      "description": "Readable HTTP client for API testing.",
+      "usage": "http GET {target}",
+      "tags": [
+        "http"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "httpie"
+      },
+      "mcp": null
+    },
+    {
+      "id": "httprobe",
+      "name": "httprobe",
+      "binary": "httprobe",
+      "category": "web",
+      "description": "Probe a list of hosts for live HTTP/HTTPS.",
+      "usage": "cat hosts.txt | httprobe",
+      "tags": [
+        "fingerprint"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {},
+      "mcp": null
+    },
+    {
+      "id": "httpx",
+      "name": "httpx",
+      "binary": "httpx",
+      "category": "web",
+      "description": "Fast HTTP probing: status, title, tech, CDN, screenshots.",
+      "usage": "httpx -u {target} -status-code -title -tech-detect -silent",
+      "tags": [
+        "fingerprint"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/projectdiscovery/httpx/cmd/httpx"
+      },
+      "mcp": null
+    },
+    {
+      "id": "jaeles",
+      "name": "Jaeles",
+      "binary": "jaeles",
+      "category": "web",
+      "description": "Signature-based web vulnerability scanner.",
+      "usage": "jaeles scan -s {target}",
+      "tags": [
+        "scanner"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/jaeles-project/jaeles"
+      },
+      "mcp": null
+    },
+    {
+      "id": "joomscan",
+      "name": "JoomScan",
+      "binary": "joomscan",
+      "category": "web",
+      "description": "Joomla vulnerability scanner.",
+      "usage": "joomscan --url {target}",
+      "tags": [
+        "cms"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "joomscan"
+      },
+      "mcp": null
+    },
+    {
+      "id": "jwt_cracker",
+      "name": "JWT Cracker",
+      "binary": "jwtcrack",
+      "category": "web",
+      "description": "Crack weak JWT HMAC secrets.",
+      "usage": "jwtcrack <token>",
+      "tags": [
+        "jwt"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "jwt"
+      },
+      "mcp": null
+    },
+    {
+      "id": "jwt_tool",
+      "name": "jwt_tool",
+      "binary": "jwt_tool",
+      "category": "web",
+      "description": "JWT analysis, tampering and known attacks.",
+      "usage": "jwt_tool <token>",
+      "tags": [
+        "jwt"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "jwt-tool"
+      },
+      "mcp": null
+    },
+    {
+      "id": "kiterunner",
+      "name": "Kiterunner",
+      "binary": "kr",
+      "category": "web",
+      "description": "API endpoint brute forcing.",
+      "usage": "kr scan {target} -w routes.kite",
+      "tags": [
+        "api",
+        "fuzz"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/assetnote/kiterunner/cmd/kr"
+      },
+      "mcp": null
+    },
+    {
+      "id": "linkfinder",
+      "name": "LinkFinder",
+      "binary": "linkfinder",
+      "category": "web",
+      "description": "Extract endpoints from JavaScript files.",
+      "usage": "linkfinder -i {target} -o cli",
+      "tags": [
+        "js"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "linkfinder"
+      },
+      "mcp": null
+    },
+    {
+      "id": "mitmdump",
+      "name": "mitmdump",
+      "binary": "mitmdump",
+      "category": "web",
+      "description": "Non-interactive mitmproxy (record/replay).",
+      "usage": "mitmdump -p 8080 -w flows.mitm",
+      "tags": [
+        "proxy"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "mitmproxy"
+      },
+      "mcp": null
+    },
+    {
+      "id": "mitmproxy",
+      "name": "mitmproxy",
+      "binary": "mitmproxy",
+      "category": "web",
+      "description": "Interactive HTTPS intercepting proxy.",
+      "usage": "mitmproxy -p 8080",
+      "tags": [
+        "proxy"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "mitmproxy"
+      },
+      "mcp": null
+    },
+    {
+      "id": "nikto",
+      "name": "Nikto",
+      "binary": "nikto",
+      "category": "web",
+      "description": "Web server misconfiguration and dangerous-file scanner.",
+      "usage": "nikto -host {target}",
+      "tags": [
+        "scanner"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "nikto"
+      },
+      "mcp": null
+    },
+    {
+      "id": "nosqlmap",
+      "name": "NoSQLMap",
+      "binary": "nosqlmap",
+      "category": "web",
+      "description": "NoSQL injection and database takeover.",
+      "usage": "nosqlmap -u {target}",
+      "tags": [
+        "nosqli"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "nosqlmap"
+      },
+      "mcp": null
+    },
+    {
+      "id": "nuclei",
+      "name": "Nuclei",
+      "binary": "nuclei",
+      "category": "web",
+      "description": "Template-based vulnerability scanner.",
+      "usage": "nuclei -u {target} -severity critical,high,medium -silent -nc",
+      "tags": [
+        "scanner"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/projectdiscovery/nuclei/v3/cmd/nuclei"
+      },
+      "mcp": null
+    },
+    {
+      "id": "nuclei_templates",
+      "name": "Nuclei Templates",
+      "binary": "nuclei",
+      "category": "web",
+      "description": "Community vulnerability templates for Nuclei.",
+      "usage": "nuclei -u {target} -tl",
+      "tags": [
+        "scanner"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/projectdiscovery/nuclei/v3/cmd/nuclei"
+      },
+      "mcp": null
+    },
+    {
+      "id": "openredirex",
+      "name": "OpenRedireX",
+      "binary": "openredirex",
+      "category": "web",
+      "description": "Open redirect scanner.",
+      "usage": "cat urls.txt | openredirex",
+      "tags": [
+        "redirect"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {},
+      "mcp": null
+    },
+    {
+      "id": "oralyzer",
+      "name": "Oralyzer",
+      "binary": "oralyzer",
+      "category": "web",
+      "description": "Open redirect scanner.",
+      "usage": "oralyzer -u {target}",
+      "tags": [
+        "redirect"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "oralyzer"
+      },
+      "mcp": null
+    },
+    {
+      "id": "paramspider",
+      "name": "ParamSpider",
+      "binary": "paramspider",
+      "category": "web",
+      "description": "Mine parameterized URLs from passive sources.",
+      "usage": "paramspider -d {host}",
+      "tags": [
+        "params"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "paramspider"
+      },
+      "mcp": null
+    },
+    {
+      "id": "smuggler",
+      "name": "Smuggler",
+      "binary": "smuggler",
+      "category": "web",
+      "description": "HTTP request smuggling scanner.",
+      "usage": "smuggler -u {target}",
+      "tags": [
+        "smuggling"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "smuggler"
+      },
+      "mcp": null
+    },
+    {
+      "id": "sourcemapper",
+      "name": "SourceMapper",
+      "binary": "sourcemapper",
+      "category": "web",
+      "description": "Recover source from exposed sourcemaps.",
+      "usage": "sourcemapper -url {target}/main.js.map -output out",
+      "tags": [
+        "js"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/denandz/sourcemapper"
+      },
+      "mcp": null
+    },
+    {
+      "id": "sqlmap",
+      "name": "sqlmap",
+      "binary": "sqlmap",
+      "category": "web",
+      "description": "Automatic SQL injection detection and exploitation.",
+      "usage": "sqlmap -u {target} --batch --level 2 --risk 1",
+      "tags": [
+        "sqli",
+        "exploit"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "sqlmap"
+      },
+      "mcp": null
+    },
+    {
+      "id": "ssrfmap",
+      "name": "SSRFmap",
+      "binary": "ssrfmap",
+      "category": "web",
+      "description": "SSRF detection and exploitation.",
+      "usage": "ssrfmap -r request.txt",
+      "tags": [
+        "ssrf"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "ssrfmap"
+      },
+      "mcp": null
+    },
+    {
+      "id": "sstimap",
+      "name": "SSTImap",
+      "binary": "sstimap",
+      "category": "web",
+      "description": "SSTI scanner and exploiter.",
+      "usage": "sstimap -u {target}",
+      "tags": [
+        "ssti"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "sstimap"
+      },
+      "mcp": null
+    },
+    {
+      "id": "subjs",
+      "name": "subjs",
+      "binary": "subjs",
+      "category": "web",
+      "description": "Fetch JavaScript files from URLs.",
+      "usage": "cat urls.txt | subjs",
+      "tags": [
+        "js"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "go": "github.com/lc/subjs"
+      },
+      "mcp": null
+    },
+    {
+      "id": "tplmap",
+      "name": "tplmap",
+      "binary": "tplmap",
+      "category": "web",
+      "description": "Server-side template injection detection/exploitation.",
+      "usage": "tplmap -u {target}",
+      "tags": [
+        "ssti"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "tplmap"
+      },
+      "mcp": null
+    },
+    {
+      "id": "trufflehog",
+      "name": "TruffleHog",
+      "binary": "trufflehog",
+      "category": "web",
+      "description": "Find and verify leaked credentials.",
+      "usage": "trufflehog filesystem {target}",
+      "tags": [
+        "secrets"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "trufflehog"
+      },
+      "mcp": null
+    },
+    {
+      "id": "vuls",
+      "name": "Vuls",
+      "binary": "vuls",
+      "category": "web",
+      "description": "Agentless vulnerability scanner for servers.",
+      "usage": "vuls scan",
+      "tags": [
+        "scanner"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {},
+      "mcp": null
+    },
+    {
+      "id": "wafw00f",
+      "name": "wafw00f",
+      "binary": "wafw00f",
+      "category": "web",
+      "description": "Detect and fingerprint Web Application Firewalls.",
+      "usage": "wafw00f {target}",
+      "tags": [
+        "waf",
+        "fingerprint"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "pipx": "wafw00f"
+      },
+      "mcp": null
+    },
+    {
+      "id": "websocat",
+      "name": "websocat",
+      "binary": "websocat",
+      "category": "web",
+      "description": "WebSocket client/server swiss-army knife.",
+      "usage": "websocat {target}",
+      "tags": [
+        "websocket"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "cargo": "websocat"
+      },
+      "mcp": null
+    },
+    {
+      "id": "wfuzz",
+      "name": "Wfuzz",
+      "binary": "wfuzz",
+      "category": "web",
+      "description": "Web fuzzer for parameters, paths and auth.",
+      "usage": "wfuzz -c -z file,wordlist.txt {target}/FUZZ",
+      "tags": [
+        "fuzz"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "wfuzz"
+      },
+      "mcp": null
+    },
+    {
+      "id": "wget",
+      "name": "wget",
+      "binary": "wget",
+      "category": "web",
+      "description": "HTTP/FTP downloader.",
+      "usage": "wget -qO- {target}",
+      "tags": [
+        "http"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {},
+      "mcp": null
+    },
+    {
+      "id": "whatweb",
+      "name": "WhatWeb",
+      "binary": "whatweb",
+      "category": "web",
+      "description": "Web technology fingerprinting.",
+      "usage": "whatweb -a 3 {target}",
+      "tags": [
+        "fingerprint"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "apt": "whatweb"
+      },
+      "mcp": null
+    },
+    {
+      "id": "wpscan",
+      "name": "WPScan",
+      "binary": "wpscan",
+      "category": "web",
+      "description": "WordPress vulnerability scanner.",
+      "usage": "wpscan --url {target} --enumerate vp,vt,u",
+      "tags": [
+        "wordpress",
+        "cms"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "wpscan"
+      },
+      "mcp": null
+    },
+    {
+      "id": "x8",
+      "name": "x8",
+      "binary": "x8",
+      "category": "web",
+      "description": "Hidden parameter discovery.",
+      "usage": "x8 -u {target} -w wordlist.txt",
+      "tags": [
+        "params"
+      ],
+      "intrusive": false,
+      "requires_root": false,
+      "install": {
+        "cargo": "x8"
+      },
+      "mcp": null
+    },
+    {
+      "id": "xsser",
+      "name": "XSSer",
+      "binary": "xsser",
+      "category": "web",
+      "description": "XSS fuzzing and exploitation framework.",
+      "usage": "xsser --url {target}",
+      "tags": [
+        "xss"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "apt": "xsser"
+      },
+      "mcp": null
+    },
+    {
+      "id": "xsstrike",
+      "name": "XSStrike",
+      "binary": "xsstrike",
+      "category": "web",
+      "description": "Advanced XSS detection and exploitation.",
+      "usage": "xsstrike -u {target}",
+      "tags": [
+        "xss"
+      ],
+      "intrusive": true,
+      "requires_root": false,
+      "install": {
+        "pipx": "xsstrike"
+      },
+      "mcp": null
+    }
+  ]
+}

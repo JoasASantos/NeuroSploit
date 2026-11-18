@@ -949,6 +949,7 @@ dependencies = [
  "futures",
  "neurosploit-harness",
  "ratatui",
+ "reqwest",
  "rustyline",
  "serde",
  "serde_json",

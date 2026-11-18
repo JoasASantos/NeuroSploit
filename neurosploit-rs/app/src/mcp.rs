@@ -31,6 +31,15 @@
 //!   - neurosploit_agents        list the agent library
 //!   - neurosploit_models        list providers and models
 //!   - neurosploit_import_collection  validate/preview a collection (file or dir)
+//!   - neurosploit_c2_status      C2 policy + listeners/sessions/webshells
+//!   - neurosploit_c2_control     enable/disable/update C2 policy (opt-in)
+//!   - neurosploit_c2_listener    listener create/start/stop/delete/list
+//!   - neurosploit_c2_session     session list/get/sleep/note/kill
+//!   - neurosploit_c2_task        task enqueue/wait/get/list/cancel
+//!   - neurosploit_c2_payload     generate webshell / beacon / oneliner
+//!   - neurosploit_webshell       save/exec/file/test a WebShell connection
+//!   - neurosploit_tool_*         list/info/check/run the 200+ tool catalog
+//!   - neurosploit_tool_mcp       manage curated MCP tool servers
 //!
 //! Kept dependency-free: JSON-RPC framing is hand-rolled over stdin/stdout with
 //! serde_json, and tools run via std::process::Command.
@@ -94,7 +103,7 @@ fn err(id: Option<Value>, code: i64, msg: &str) -> Value {
 // ---------------------------------------------------------------------------
 
 fn tool_list() -> Value {
-    json!([
+    let mut tools = json!([
         {
             "name": "neurosploit_run",
             "description": "Launch a NeuroSploit black-box engagement against an authorized target. Returns the run id, finding summary, and report path. Only test targets you are authorized to test.",
@@ -256,6 +265,130 @@ fn tool_list() -> Value {
                 }
             }
         },
+    ]);
+    extend_tools(&mut tools, json!([
+        {
+            "name": "neurosploit_c2_status",
+            "description": "Show the local C2 policy, listeners, sessions, tasks, webshell connections and recent events. C2 is opt-in; this tool fails closed when it is disabled.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "neurosploit_c2_control",
+            "description": "Enable or disable the local C2 module, or update its guardrails. Enabling REQUIRES an authorization reference (SOW/ticket/bug-bounty URL). Persistence and lateral movement are separate explicit opt-ins.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action":         { "type": "string", "enum": ["enable","disable","policy"], "description": "Operation" },
+                    "authorization":  { "type": "string", "description": "Authorization reference (required for enable)" },
+                    "persistence":    { "type": "boolean", "description": "Allow persistence tasks" },
+                    "lateral":        { "type": "boolean", "description": "Allow lateral-movement/upload tasks" },
+                    "allow_public":   { "type": "boolean", "description": "Allow non-private targets (explicit opt-in)" },
+                    "hosts":          { "type": "array", "items": { "type": "string" }, "description": "Extra authorized hosts/domains" }
+                },
+                "required": ["action"]
+            }
+        },
+        {
+            "name": "neurosploit_c2_listener",
+            "description": "Manage HTTP beacon listeners (localhost by default). Create is not start; call start explicitly.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action":      { "type": "string", "enum": ["list","create","start","stop","delete"] },
+                    "id":          { "type": "string", "description": "Listener id (start/stop/delete)" },
+                    "name":        { "type": "string", "description": "Listener name (create)" },
+                    "bind_host":   { "type": "string", "description": "Bind address, default 127.0.0.1" },
+                    "bind_port":   { "type": "integer", "description": "Bind port, e.g. 8443" },
+                    "callback_host": { "type": "string", "description": "Host implants call back to" },
+                    "sleep_seconds": { "type": "integer", "description": "Default beacon sleep" },
+                    "jitter_percent": { "type": "integer", "description": "Default beacon jitter 0-100" }
+                },
+                "required": ["action"]
+            }
+        },
+        {
+            "name": "neurosploit_c2_session",
+            "description": "Inspect and manage C2 sessions. Use the returned session_id with neurosploit_c2_task for persistence, command execution and lateral movement.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action":     { "type": "string", "enum": ["list","get","sleep","note","kill"] },
+                    "session_id": { "type": "string", "description": "Session id (s_...)" },
+                    "seconds":    { "type": "integer", "description": "New beacon sleep (sleep)" },
+                    "jitter":     { "type": "integer", "description": "New jitter 0-100 (sleep)" },
+                    "note":       { "type": "string", "description": "Operator note (note)" }
+                },
+                "required": ["action"]
+            }
+        },
+        {
+            "name": "neurosploit_c2_task",
+            "description": "Queue and retrieve tasks on a C2 session: exec/shell commands, pwd, ls, cd, ps, download, upload, sleep, exit, persist (requires persistence policy) and lateral (requires lateral policy). Returns task ids and output.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action":      { "type": "string", "enum": ["enqueue","wait","get","list","cancel"] },
+                    "session_id":  { "type": "string", "description": "Session id (s_...)" },
+                    "task_id":     { "type": "string", "description": "Task id (t_...)" },
+                    "task_type":   { "type": "string", "description": "exec|shell|lateral|persist|pwd|ls|cd|ps|download|upload|sleep|exit" },
+                    "command":     { "type": "string", "description": "Command for exec/lateral" },
+                    "path":        { "type": "string", "description": "Path for ls/cd/download/upload" },
+                    "content":     { "type": "string", "description": "File content for upload" },
+                    "method":      { "type": "string", "description": "Persistence method: auto|cron|bashrc|systemd|schtasks|registry" },
+                    "status":      { "type": "string", "description": "Filter for list" },
+                    "timeout_seconds": { "type": "integer", "description": "Wait timeout (default 60)" }
+                },
+                "required": ["action"]
+            }
+        },
+        {
+            "name": "neurosploit_c2_payload",
+            "description": "Generate an authorized payload: a WebShell (php/aspx/asp/jsp) or an HTTP beacon (bash/python/powershell/php) for a listener, or a one-shot check-in oneliner.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action":      { "type": "string", "enum": ["webshell","beacon","oneliner","list"] },
+                    "shell_type":  { "type": "string", "description": "php|aspx|asp|jsp" },
+                    "password":    { "type": "string", "description": "WebShell password" },
+                    "pass_param":  { "type": "string", "description": "Password parameter name (default pass)" },
+                    "cmd_param":   { "type": "string", "description": "Command parameter name (default cmd)" },
+                    "listener_id": { "type": "string", "description": "Listener id for beacon/oneliner" },
+                    "kind":        { "type": "string", "description": "bash|python|powershell|php" },
+                    "host":        { "type": "string", "description": "Override callback host" },
+                    "filename":    { "type": "string", "description": "Output filename" }
+                },
+                "required": ["action"]
+            }
+        },
+        {
+            "name": "neurosploit_webshell",
+            "description": "Manage saved WebShell connections: add/list, test, execute commands and perform file operations (list/read/write/delete/mkdir/rename). Targets must be authorized (private by default).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action":      { "type": "string", "enum": ["list","add","update","delete","test","exec","file"] },
+                    "id":          { "type": "string", "description": "Connection id (ws_...)" },
+                    "url":         { "type": "string", "description": "WebShell URL" },
+                    "name":        { "type": "string" },
+                    "password":    { "type": "string" },
+                    "shell_type":  { "type": "string", "description": "php|asp|aspx|jsp|custom" },
+                    "method":      { "type": "string", "description": "GET or POST" },
+                    "cmd_param":   { "type": "string", "description": "Command parameter name" },
+                    "pass_param":  { "type": "string", "description": "Password parameter name" },
+                    "os":          { "type": "string", "description": "auto|linux|windows" },
+                    "encoding":    { "type": "string", "description": "auto|utf-8" },
+                    "note":        { "type": "string" },
+                    "command":     { "type": "string", "description": "Command for exec" },
+                    "file_action": { "type": "string", "description": "list|read|write|upload|delete|mkdir|rename" },
+                    "path":        { "type": "string" },
+                    "content":     { "type": "string" },
+                    "target_path": { "type": "string" }
+                },
+                "required": ["action"]
+            }
+        },
+    ]));
+    extend_tools(&mut tools, json!([
         { "name": "neurosploit_list_runs", "description": "List finished NeuroSploit runs (ids and targets).", "inputSchema": { "type": "object", "properties": {} } },
         { "name": "neurosploit_findings", "description": "Read a finished run's findings as JSON.", "inputSchema": { "type": "object", "properties": { "run": { "type": "string", "description": "Run id or path" } }, "required": ["run"] } },
         { "name": "neurosploit_report", "description": "Read a finished run's Markdown report.", "inputSchema": { "type": "object", "properties": { "run": { "type": "string" } }, "required": ["run"] } },
@@ -332,7 +465,76 @@ fn tool_list() -> Value {
                 "required": ["path"]
             }
         }
-    ])
+    ]));
+    extend_tools(&mut tools, json!([
+        {
+            "name": "neurosploit_tool_list",
+            "description": "List or search the 200+ security-tool catalog (web, network, Active Directory, cloud, container, mobile, binary, forensics, AI).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query":    { "type": "string", "description": "Search id/name/tag/description" },
+                    "category": { "type": "string", "description": "Filter by category, e.g. web, network, ad, cloud, binary" }
+                }
+            }
+        },
+        {
+            "name": "neurosploit_tool_info",
+            "description": "Show one tool's binary, usage template, tags, safety flags and install hints.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "tool": { "type": "string", "description": "Tool id, e.g. nmap or rustscan" } },
+                "required": ["tool"]
+            }
+        },
+        {
+            "name": "neurosploit_tool_check",
+            "description": "Check whether a tool is installed (and its version) without running it. Optional sandbox check.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tool":    { "type": "string", "description": "Tool id" },
+                    "sandbox": { "type": "boolean", "description": "Check inside the Kali container" }
+                },
+                "required": ["tool"]
+            }
+        },
+        {
+            "name": "neurosploit_tool_run",
+            "description": "Run a cataloged security tool against an authorized target. Scope/constraints are enforced by the same runner as the CLI. Examples: nmap, rustscan, httpx, nuclei, ffuf, netexec, bloodhound_python.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tool":            { "type": "string", "description": "Catalog id, e.g. nmap" },
+                    "target":          { "type": "string", "description": "Host or URL" },
+                    "args":            { "type": "string", "description": "Arguments/flags; target is appended when absent" },
+                    "sandbox":         { "type": "boolean", "description": "Run inside the Kali container" },
+                    "provision":       { "type": "boolean", "description": "Explicitly allow installing the tool if missing" },
+                    "timeout_seconds": { "type": "integer", "description": "Execution timeout (default 300)" }
+                },
+                "required": ["tool"]
+            }
+        },
+        {
+            "name": "neurosploit_tool_mcp",
+            "description": "Manage curated MCP tool servers (nmap, kali, playwright, burp, rea, neurosploit) in ./mcp.servers.json, or print/test their config.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["list","add","remove","json","test"], "description": "Operation" },
+                    "server": { "type": "string", "description": "Server name" }
+                },
+                "required": ["action"]
+            }
+        }
+    ]));
+    tools
+}
+
+fn extend_tools(dst: &mut Value, more: Value) {
+    if let (Some(a), Some(b)) = (dst.as_array_mut(), more.as_array()) {
+        a.extend(b.iter().cloned());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -451,6 +653,242 @@ fn handle_call(id: Option<Value>, req: &Value, exe: &std::path::Path) -> Value {
             if let Some(g) = s("graph") { argv.push("--graph".into()); argv.push(g); }
             if let Some(sc) = s("scaffold") { argv.push("--scaffold".into()); argv.push(sc); }
             if let Some(fr) = s("from") { argv.push("--from".into()); argv.push(fr); }
+        }
+
+        // ---- C2 / WebShell --------------------------------------------------
+        "neurosploit_c2_status" => {
+            argv.push("c2".into()); argv.push("status".into()); argv.push("--json".into());
+        }
+        "neurosploit_c2_control" => {
+            let Some(action) = s("action") else { return tool_err(id, "action is required") };
+            argv.push("c2".into());
+            match action.as_str() {
+                "enable" => {
+                    let Some(auth) = s("authorization") else { return tool_err(id, "authorization is required to enable C2") };
+                    argv.push("enable".into()); argv.push("--authorization".into()); argv.push(auth);
+                    if b("persistence") { argv.push("--persistence".into()); }
+                    if b("lateral") { argv.push("--lateral".into()); }
+                    if b("allow_public") { argv.push("--allow-public".into()); }
+                    if let Some(hosts) = a.get("hosts").and_then(|v| v.as_array()) {
+                        for h in hosts.iter().filter_map(|v| v.as_str()) { argv.push("--host".into()); argv.push(h.to_string()); }
+                    }
+                }
+                "disable" => argv.push("disable".into()),
+                "policy" => {
+                    argv.push("policy".into());
+                    if let Some(v) = s("authorization") { argv.push("--authorized-by".into()); argv.push(v); }
+                    if a.get("persistence").is_some() { argv.push("--persistence".into()); argv.push(b("persistence").to_string()); }
+                    if a.get("lateral").is_some() { argv.push("--lateral".into()); argv.push(b("lateral").to_string()); }
+                    if a.get("allow_public").is_some() { argv.push("--allow-public".into()); argv.push(b("allow_public").to_string()); }
+                }
+                other => return tool_err(id, &format!("unknown control action: {other}")),
+            }
+            argv.push("--json".into());
+        }
+        "neurosploit_c2_listener" => {
+            let Some(action) = s("action") else { return tool_err(id, "action is required") };
+            argv.push("c2".into()); argv.push("listener".into()); argv.push(action.clone());
+            match action.as_str() {
+                "create" => {
+                    let Some(name) = s("name") else { return tool_err(id, "name is required") };
+                    argv.push("--name".into()); argv.push(name);
+                    if let Some(v) = s("bind_host") { argv.push("--bind-host".into()); argv.push(v); }
+                    if let Some(v) = i("bind_port") { argv.push("--bind-port".into()); argv.push(v.to_string()); }
+                    if let Some(v) = s("callback_host") { argv.push("--callback-host".into()); argv.push(v); }
+                    if let Some(v) = i("sleep_seconds") { argv.push("--sleep".into()); argv.push(v.to_string()); }
+                    if let Some(v) = i("jitter_percent") { argv.push("--jitter".into()); argv.push(v.to_string()); }
+                }
+                "start" | "stop" | "delete" => {
+                    let Some(v) = s("id") else { return tool_err(id, "id is required") };
+                    argv.push(v);
+                }
+                "list" => {}
+                other => return tool_err(id, &format!("unknown listener action: {other}")),
+            }
+            argv.push("--json".into());
+        }
+        "neurosploit_c2_session" => {
+            let Some(action) = s("action") else { return tool_err(id, "action is required") };
+            argv.push("c2".into()); argv.push("session".into()); argv.push(action.clone());
+            match action.as_str() {
+                "list" => {}
+                "get" | "kill" => {
+                    let Some(v) = s("session_id") else { return tool_err(id, "session_id is required") };
+                    argv.push(v);
+                }
+                "sleep" => {
+                    let Some(v) = s("session_id") else { return tool_err(id, "session_id is required") };
+                    argv.push(v);
+                    if let Some(n) = i("seconds") { argv.push("--seconds".into()); argv.push(n.to_string()); }
+                    if let Some(n) = i("jitter") { argv.push("--jitter".into()); argv.push(n.to_string()); }
+                }
+                "note" => {
+                    let Some(v) = s("session_id") else { return tool_err(id, "session_id is required") };
+                    let Some(n) = s("note") else { return tool_err(id, "note is required") };
+                    argv.push(v); argv.push("--note".into()); argv.push(n);
+                }
+                other => return tool_err(id, &format!("unknown session action: {other}")),
+            }
+            argv.push("--json".into());
+        }
+        "neurosploit_c2_task" => {
+            let Some(action) = s("action") else { return tool_err(id, "action is required") };
+            argv.push("c2".into()); argv.push("task".into());
+            match action.as_str() {
+                "enqueue" | "wait" | "get" | "cancel" | "list" => { argv.push(action.clone()); }
+                _ => argv.push("enqueue".into()),
+            }
+            if action == "list" {
+                if let Some(v) = s("session_id") { argv.push("--session".into()); argv.push(v); }
+                if let Some(v) = s("status") { argv.push("--status".into()); argv.push(v); }
+                argv.push("--json".into());
+            } else if action == "wait" || action == "get" || action == "cancel" {
+                let Some(v) = s("task_id") else { return tool_err(id, "task_id is required") };
+                argv.push(v);
+                if action == "wait" { if let Some(n) = i("timeout_seconds") { argv.push("--timeout".into()); argv.push(n.to_string()); } }
+                argv.push("--json".into());
+            } else if action == "enqueue" {
+                let Some(sess) = s("session_id") else { return tool_err(id, "session_id is required") };
+                let ttype = s("task_type").unwrap_or_else(|| "exec".into());
+                argv.push("--session".into()); argv.push(sess);
+                argv.push("--type".into()); argv.push(ttype.clone());
+                let payload = if ttype == "persist" {
+                    json!({ "method": s("method").unwrap_or_else(|| "auto".into()) })
+                } else if ttype == "upload" {
+                    json!({ "path": s("path").unwrap_or_default(), "content": s("content").unwrap_or_default() })
+                } else if ttype == "ls" || ttype == "cd" {
+                    json!({ "path": s("path").unwrap_or_default() })
+                } else {
+                    json!({ "command": s("command").unwrap_or_default() })
+                };
+                argv.push("--payload".into()); argv.push(payload.to_string());
+                argv.push("--wait".into());
+                if let Some(n) = i("timeout_seconds") { argv.push("--timeout".into()); argv.push(n.to_string()); }
+                argv.push("--json".into());
+            }
+        }
+        "neurosploit_c2_payload" => {
+            let Some(action) = s("action") else { return tool_err(id, "action is required") };
+            argv.push("c2".into()); argv.push("payload".into()); argv.push(action.clone());
+            match action.as_str() {
+                "webshell" => {
+                    if let Some(v) = s("shell_type") { argv.push("--shell-type".into()); argv.push(v); }
+                    if let Some(v) = s("password") { argv.push("--password".into()); argv.push(v); }
+                    if let Some(v) = s("pass_param") { argv.push("--pass-param".into()); argv.push(v); }
+                    if let Some(v) = s("cmd_param") { argv.push("--cmd-param".into()); argv.push(v); }
+                }
+                "beacon" => {
+                    let Some(l) = s("listener_id") else { return tool_err(id, "listener_id is required") };
+                    argv.push("--listener".into()); argv.push(l);
+                    if let Some(v) = s("kind") { argv.push("--kind".into()); argv.push(v); }
+                    if let Some(v) = s("host") { argv.push("--host".into()); argv.push(v); }
+                }
+                "oneliner" => {
+                    let Some(l) = s("listener_id") else { return tool_err(id, "listener_id is required") };
+                    argv.push("--listener".into()); argv.push(l);
+                }
+                "list" => {}
+                other => return tool_err(id, &format!("unknown payload action: {other}")),
+            }
+            if let Some(v) = s("filename") { argv.push("--filename".into()); argv.push(v); }
+            argv.push("--json".into());
+        }
+        "neurosploit_webshell" => {
+            let Some(action) = s("action") else { return tool_err(id, "action is required") };
+            argv.push("webshell".into());
+            match action.as_str() {
+                "list" => { argv.push("list".into()); }
+                "add" => {
+                    argv.push("add".into());
+                    let Some(url) = s("url") else { return tool_err(id, "url is required") };
+                    argv.push("--url".into()); argv.push(url);
+                    if let Some(v) = s("name") { argv.push("--name".into()); argv.push(v); }
+                    if let Some(v) = s("password") { argv.push("--password".into()); argv.push(v); }
+                    if let Some(v) = s("shell_type") { argv.push("--shell-type".into()); argv.push(v); }
+                    if let Some(v) = s("method") { argv.push("--method".into()); argv.push(v); }
+                    if let Some(v) = s("cmd_param") { argv.push("--cmd-param".into()); argv.push(v); }
+                    if let Some(v) = s("pass_param") { argv.push("--pass-param".into()); argv.push(v); }
+                    if let Some(v) = s("os") { argv.push("--os".into()); argv.push(v); }
+                    if let Some(v) = s("encoding") { argv.push("--encoding".into()); argv.push(v); }
+                    if let Some(v) = s("note") { argv.push("--note".into()); argv.push(v); }
+                }
+                "update" => {
+                    argv.push("update".into());
+                    let Some(v) = s("id") else { return tool_err(id, "id is required") };
+                    argv.push(v);
+                    if let Some(v) = s("url") { argv.push("--url".into()); argv.push(v); }
+                    if let Some(v) = s("name") { argv.push("--name".into()); argv.push(v); }
+                    if let Some(v) = s("password") { argv.push("--password".into()); argv.push(v); }
+                    if let Some(v) = s("shell_type") { argv.push("--shell-type".into()); argv.push(v); }
+                    if let Some(v) = s("method") { argv.push("--method".into()); argv.push(v); }
+                    if let Some(v) = s("cmd_param") { argv.push("--cmd-param".into()); argv.push(v); }
+                    if let Some(v) = s("pass_param") { argv.push("--pass-param".into()); argv.push(v); }
+                    if let Some(v) = s("os") { argv.push("--os".into()); argv.push(v); }
+                    if let Some(v) = s("note") { argv.push("--note".into()); argv.push(v); }
+                }
+                "delete" | "test" => {
+                    argv.push(action.clone());
+                    let Some(v) = s("id") else { return tool_err(id, "id is required") };
+                    argv.push(v);
+                }
+                "exec" => {
+                    argv.push("exec".into());
+                    let Some(v) = s("id") else { return tool_err(id, "id is required") };
+                    let Some(c) = s("command") else { return tool_err(id, "command is required") };
+                    argv.push("--id".into()); argv.push(v);
+                    argv.push("--command".into()); argv.push(c);
+                }
+                "file" => {
+                    argv.push("file".into());
+                    let Some(v) = s("id") else { return tool_err(id, "id is required") };
+                    argv.push("--id".into()); argv.push(v);
+                    argv.push("--action".into()); argv.push(s("file_action").unwrap_or_else(|| "list".into()));
+                    if let Some(p) = s("path") { argv.push("--path".into()); argv.push(p); }
+                    if let Some(c) = s("content") { argv.push("--content".into()); argv.push(c); }
+                    if let Some(t) = s("target_path") { argv.push("--target-path".into()); argv.push(t); }
+                }
+                other => return tool_err(id, &format!("unknown webshell action: {other}")),
+            }
+            argv.push("--json".into());
+        }
+
+        // ---- toolbox --------------------------------------------------------
+        "neurosploit_tool_list" => {
+            if let Some(q) = s("query") {
+                argv.push("tools".into()); argv.push("search".into()); argv.push(q);
+            } else {
+                argv.push("tools".into()); argv.push("list".into());
+                if let Some(c) = s("category") { argv.push("--category".into()); argv.push(c); }
+            }
+            argv.push("--json".into());
+        }
+        "neurosploit_tool_info" => {
+            let Some(t) = s("tool") else { return tool_err(id, "tool is required") };
+            argv.push("tools".into()); argv.push("info".into()); argv.push(t); argv.push("--json".into());
+        }
+        "neurosploit_tool_check" => {
+            let Some(t) = s("tool") else { return tool_err(id, "tool is required") };
+            argv.push("tools".into()); argv.push("check".into()); argv.push(t); argv.push("--json".into());
+            if b("sandbox") { argv.push("--sandbox".into()); }
+        }
+        "neurosploit_tool_run" => {
+            let Some(t) = s("tool") else { return tool_err(id, "tool is required") };
+            argv.push("tools".into()); argv.push("run".into()); argv.push(t);
+            if let Some(target) = s("target") { argv.push("--target".into()); argv.push(target); }
+            if let Some(args) = s("args") { argv.push("--args".into()); argv.push(args); }
+            if b("sandbox") { argv.push("--sandbox".into()); }
+            if b("provision") { argv.push("--provision".into()); }
+            if let Some(n) = i("timeout_seconds") { argv.push("--timeout".into()); argv.push(n.to_string()); }
+            argv.push("--json".into());
+        }
+        "neurosploit_tool_mcp" => {
+            let action = s("action").unwrap_or_else(|| "list".into());
+            argv.push("tools".into()); argv.push("mcp".into()); argv.push(action.clone());
+            if action != "list" {
+                let Some(server) = s("server") else { return tool_err(id, "server is required") };
+                argv.push(server);
+            }
+            if action == "list" || action == "test" { argv.push("--json".into()); }
         }
 
         // ---- post-run tools -------------------------------------------------

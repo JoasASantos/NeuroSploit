@@ -20,6 +20,12 @@ pub enum Profile {
     MobileIos,
     BinaryAnalysis,
     BurpSuite,
+    Infra,
+    Ad,
+    Cloud,
+    Kali,
+    Nmap,
+    Full,
     Custom(String),
 }
 
@@ -104,6 +110,60 @@ pub fn profile(p: &Profile) -> McpProfile {
                 "env": {}
             }),
         },
+        Profile::Infra => McpProfile {
+            name: "Infra".into(),
+            description: "Network/infra testing with an Nmap MCP server".into(),
+            server_name: "nmap".into(),
+            tools: tool_allowlist(p),
+            config: json!({
+                "command": "npx",
+                "args": ["-y", "gc-nmap-mcp"],
+                "env": { "NMAP_PATH": "nmap" }
+            }),
+        },
+        Profile::Ad => McpProfile {
+            name: "Active Directory".into(),
+            description: "AD assessment with a Kali MCP tool server".into(),
+            server_name: "kali".into(),
+            tools: tool_allowlist(p),
+            config: json!({ "command": "kali-mcp", "args": [], "env": {} }),
+        },
+        Profile::Cloud => McpProfile {
+            name: "Cloud".into(),
+            description: "Cloud/container assessment (Kali MCP for cloud CLIs)".into(),
+            server_name: "kali".into(),
+            tools: tool_allowlist(p),
+            config: json!({ "command": "kali-mcp", "args": [], "env": {} }),
+        },
+        Profile::Kali => McpProfile {
+            name: "Kali".into(),
+            description: "Full Kali Linux MCP tool server (80+ tools)".into(),
+            server_name: "kali".into(),
+            tools: tool_allowlist(p),
+            config: json!({ "command": "kali-mcp", "args": [], "env": {} }),
+        },
+        Profile::Nmap => McpProfile {
+            name: "Nmap".into(),
+            description: "Nmap MCP server for port/service discovery".into(),
+            server_name: "nmap".into(),
+            tools: tool_allowlist(p),
+            config: json!({
+                "command": "npx",
+                "args": ["-y", "gc-nmap-mcp"],
+                "env": { "NMAP_PATH": "nmap" }
+            }),
+        },
+        Profile::Full => McpProfile {
+            name: "Full".into(),
+            description: "Playwright browser plus external tool servers via --mcp-server".into(),
+            server_name: "playwright".into(),
+            tools: tool_allowlist(p),
+            config: json!({
+                "command": "npx",
+                "args": ["-y", "@playwright/mcp@latest", "--headless", "--isolated"],
+                "env": {}
+            }),
+        },
         Profile::Custom(ref name) => McpProfile {
             name: format!("Custom: {name}"),
             description: format!("User-defined custom profile '{name}'"),
@@ -138,6 +198,12 @@ pub fn all_profiles() -> Vec<(Profile, &'static str)> {
             Profile::BurpSuite,
             "Burp Suite REST API integration (placeholder)",
         ),
+        (Profile::Infra, "Network/infra testing with Nmap MCP"),
+        (Profile::Ad, "Active Directory testing with Kali MCP"),
+        (Profile::Cloud, "Cloud/container tooling via Kali MCP"),
+        (Profile::Kali, "Full Kali Linux MCP tool server"),
+        (Profile::Nmap, "Nmap MCP server"),
+        (Profile::Full, "Playwright + external tool servers"),
     ]
 }
 
@@ -203,6 +269,22 @@ pub fn tool_allowlist(p: &Profile) -> Vec<String> {
             "proxy_history",
             "send_to_repeater",
         ],
+        Profile::Infra | Profile::Nmap => &[
+            "do-nmap", "nmap_scan", "nmap_service_scan", "nmap_vuln_scan",
+            "nmap_os_detect", "nmap_ping_sweep",
+        ],
+        Profile::Ad => &[
+            "netexec", "enum4linux_ng", "ldapsearch", "smbclient", "rpcclient",
+            "impacket", "kerbrute", "certipy", "bloodhound",
+        ],
+        Profile::Cloud => &[
+            "trivy", "prowler", "scoutsuite", "checkov", "kube_bench", "kube_hunter",
+            "cloud_enum", "s3scanner",
+        ],
+        Profile::Kali | Profile::Full => &[
+            "nmap", "sqlmap", "nikto", "gobuster", "ffuf", "nuclei", "whatweb",
+            "httpx_probe", "hydra", "john", "searchsploit", "enum4linux", "smbclient",
+        ],
         Profile::Custom(_) => &[],
     };
     names.iter().map(|s| (*s).to_string()).collect()
@@ -252,6 +334,31 @@ pub fn prompt_context(p: &Profile) -> String {
              Available tools: {tool_list}. \
              Note: this profile is a placeholder; ensure the Burp REST API \
              is running before invoking tools."
+        ),
+        Profile::Infra => format!(
+            "You are operating in INFRA/NETWORK testing mode. Use the Nmap MCP server for \
+             host discovery, port/service identification and NSE checks. Available tools: {tool_list}. \
+             Keep scans targeted and within the authorized scope; prefer -sV over full-range scans."
+        ),
+        Profile::Ad => format!(
+            "You are operating in ACTIVE DIRECTORY testing mode. Use the Kali MCP server for \
+             SMB/LDAP/Kerberos enumeration, credential validation and authenticated checks. \
+             Available tools: {tool_list}. Reuse credentials already proven in the engagement; \
+             never brute-force or run destructive actions."
+        ),
+        Profile::Cloud => format!(
+            "You are operating in CLOUD/CONTAINER testing mode. Use the Kali MCP server for \
+             cloud CLIs and container scanners. Available tools: {tool_list}. Read-only discovery \
+             first; never delete/modify cloud resources."
+        ),
+        Profile::Kali | Profile::Full => format!(
+            "You are operating in TOOLBOX mode with a Kali Linux MCP server. Real pentest tools are \
+             available as MCP tools: {tool_list}. Prefer the right tool over hand-rolled scripts; \
+             stay in scope and avoid destructive/DoS actions."
+        ),
+        Profile::Nmap => format!(
+            "You are operating in NMAP mode. Use the Nmap MCP server for port/service discovery. \
+             Available tools: {tool_list}. Keep scans targeted and authorized."
         ),
         Profile::Custom(ref name) => format!(
             "You are operating with the custom profile '{name}'. \
@@ -308,6 +415,12 @@ mod tests {
             Profile::MobileIos,
             Profile::BinaryAnalysis,
             Profile::BurpSuite,
+            Profile::Infra,
+            Profile::Ad,
+            Profile::Cloud,
+            Profile::Kali,
+            Profile::Nmap,
+            Profile::Full,
         ];
 
         for variant in &expected {
