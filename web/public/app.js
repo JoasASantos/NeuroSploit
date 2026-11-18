@@ -4932,7 +4932,90 @@ async function loadSettings() {
     body.innerHTML = `<div class="config-grid">
       <div class="config-card">
         <div class="config-card-title">General</div>
-        <div class="form-group"><label>Default model</label><input type="text" id="settingModel" value="${esc(cfg.defaultModel || '')}" placeholder="anthropic:claude-opus-4-8" /></div>
+        <div class="form-group"><label>Default model</label><select id="settingModel">
+          <option value="">Select model...</option>
+          <optgroup label="Anthropic">
+            <option value="anthropic:claude-opus-5-5"${cfg.defaultModel==='anthropic:claude-opus-5-5'?' selected':''}>claude-opus-5-5</option>
+            <option value="anthropic:claude-mythos-5-1"${cfg.defaultModel==='anthropic:claude-mythos-5-1'?' selected':''}>claude-mythos-5-1</option>
+            <option value="anthropic:claude-opus-5"${cfg.defaultModel==='anthropic:claude-opus-5'?' selected':''}>claude-opus-5</option>
+            <option value="anthropic:claude-sonnet-5"${cfg.defaultModel==='anthropic:claude-sonnet-5'?' selected':''}>claude-sonnet-5</option>
+            <option value="anthropic:claude-fable-5-1"${cfg.defaultModel==='anthropic:claude-fable-5-1'?' selected':''}>claude-fable-5-1</option>
+            <option value="anthropic:claude-opus-4-8"${cfg.defaultModel==='anthropic:claude-opus-4-8'?' selected':''}>claude-opus-4-8</option>
+            <option value="anthropic:claude-opus-4-6"${cfg.defaultModel==='anthropic:claude-opus-4-6'?' selected':''}>claude-opus-4-6</option>
+            <option value="anthropic:claude-sonnet-4-6"${cfg.defaultModel==='anthropic:claude-sonnet-4-6'?' selected':''}>claude-sonnet-4-6</option>
+            <option value="anthropic:claude-haiku-4-5"${cfg.defaultModel==='anthropic:claude-haiku-4-5'?' selected':''}>claude-haiku-4-5</option>
+          </optgroup>
+          <optgroup label="OpenAI">
+            <option value="openai:gpt-6-astra"${cfg.defaultModel==='openai:gpt-6-astra'?' selected':''}>gpt-6-astra</option>
+            <option value="openai:gpt-6-sol"${cfg.defaultModel==='openai:gpt-6-sol'?' selected':''}>gpt-6-sol</option>
+            <option value="openai:gpt-6-luna"${cfg.defaultModel==='openai:gpt-6-luna'?' selected':''}>gpt-6-luna</option>
+            <option value="openai:gpt-5.6-sol"${cfg.defaultModel==='openai:gpt-5.6-sol'?' selected':''}>gpt-5.6-sol</option>
+            <option value="openai:gpt-5.6-terra"${cfg.defaultModel==='openai:gpt-5.6-terra'?' selected':''}>gpt-5.6-terra</option>
+            <option value="openai:gpt-5.6-luna"${cfg.defaultModel==='openai:gpt-5.6-luna'?' selected':''}>gpt-5.6-luna</option>
+            <option value="openai:gpt-5.5"${cfg.defaultModel==='openai:gpt-5.5'?' selected':''}>gpt-5.5</option>
+            <option value="openai:gpt-5.4"${cfg.defaultModel==='openai:gpt-5.4'?' selected':''}>gpt-5.4</option>
+            <option value="openai:gpt-5.4-mini"${cfg.defaultModel==='openai:gpt-5.4-mini'?' selected':''}>gpt-5.4-mini</option>
+            <option value="openai:gpt-5.3-codex"${cfg.defaultModel==='openai:gpt-5.3-codex'?' selected':''}>gpt-5.3-codex</option>
+            <option value="openai:gpt-5.2"${cfg.defaultModel==='openai:gpt-5.2'?' selected':''}>gpt-5.2</option>
+            <option value="openai:gpt-5.1"${cfg.defaultModel==='openai:gpt-5.1'?' selected':''}>gpt-5.1</option>
+            <option value="openai:gpt-5.1-codex"${cfg.defaultModel==='openai:gpt-5.1-codex'?' selected':''}>gpt-5.1-codex</option>
+            <option value="openai:o4"${cfg.defaultModel==='openai:o4'?' selected':''}>o4</option>
+          </optgroup>
+          <optgroup label="xAI">
+            <option value="xai:grok-4.7"${cfg.defaultModel==='xai:grok-4.7'?' selected':''}>grok-4.7</option>
+            <option value="xai:grok-4.5"${cfg.defaultModel==='xai:grok-4.5'?' selected':''}>grok-4.5</option>
+            <option value="xai:grok-4"${cfg.defaultModel==='xai:grok-4'?' selected':''}>grok-4</option>
+            <option value="xai:grok-4-fast"${cfg.defaultModel==='xai:grok-4-fast'?' selected':''}>grok-4-fast</option>
+          </optgroup>
+          <optgroup label="Google">
+            <option value="google:gemini-3-pro"${cfg.defaultModel==='google:gemini-3-pro'?' selected':''}>gemini-3-pro</option>
+            <option value="google:gemini-3.8-flash"${cfg.defaultModel==='google:gemini-3.8-flash'?' selected':''}>gemini-3.8-flash</option>
+            <option value="google:gemini-2.5-pro"${cfg.defaultModel==='google:gemini-2.5-pro'?' selected':''}>gemini-2.5-pro</option>
+            <option value="google:gemini-2.5-flash"${cfg.defaultModel==='google:gemini-2.5-flash'?' selected':''}>gemini-2.5-flash</option>
+          </optgroup>
+          <optgroup label="DeepSeek">
+            <option value="deepseek:deepseek-r2"${cfg.defaultModel==='deepseek:deepseek-r2'?' selected':''}>deepseek-r2</option>
+            <option value="deepseek:deepseek-v4.1"${cfg.defaultModel==='deepseek:deepseek-v4.1'?' selected':''}>deepseek-v4.1</option>
+            <option value="deepseek:deepseek-v4-pro"${cfg.defaultModel==='deepseek:deepseek-v4-pro'?' selected':''}>deepseek-v4-pro</option>
+            <option value="deepseek:deepseek-v4"${cfg.defaultModel==='deepseek:deepseek-v4'?' selected':''}>deepseek-v4</option>
+            <option value="deepseek:deepseek-reasoner"${cfg.defaultModel==='deepseek:deepseek-reasoner'?' selected':''}>deepseek-reasoner</option>
+            <option value="deepseek:deepseek-chat"${cfg.defaultModel==='deepseek:deepseek-chat'?' selected':''}>deepseek-chat</option>
+          </optgroup>
+          <optgroup label="Mistral">
+            <option value="mistral:mistral-large-latest"${cfg.defaultModel==='mistral:mistral-large-latest'?' selected':''}>mistral-large-latest</option>
+            <option value="mistral:codestral-latest"${cfg.defaultModel==='mistral:codestral-latest'?' selected':''}>codestral-latest</option>
+          </optgroup>
+          <optgroup label="Qwen">
+            <option value="qwen:qwen3.8-max"${cfg.defaultModel==='qwen:qwen3.8-max'?' selected':''}>qwen3.8-max</option>
+            <option value="qwen:qwen3.8-omni-flash"${cfg.defaultModel==='qwen:qwen3.8-omni-flash'?' selected':''}>qwen3.8-omni-flash</option>
+            <option value="qwen:qwen-max"${cfg.defaultModel==='qwen:qwen-max'?' selected':''}>qwen-max</option>
+            <option value="qwen:qwen2.5-coder-32b-instruct"${cfg.defaultModel==='qwen:qwen2.5-coder-32b-instruct'?' selected':''}>qwen2.5-coder-32b-instruct</option>
+            <option value="qwen:qwq-plus"${cfg.defaultModel==='qwen:qwq-plus'?' selected':''}>qwq-plus</option>
+          </optgroup>
+          <optgroup label="Z.ai">
+            <option value="zai:glm-5.3"${cfg.defaultModel==='zai:glm-5.3'?' selected':''}>glm-5.3</option>
+            <option value="zai:glm-5.2"${cfg.defaultModel==='zai:glm-5.2'?' selected':''}>glm-5.2</option>
+            <option value="zai:glm-5.1"${cfg.defaultModel==='zai:glm-5.1'?' selected':''}>glm-5.1</option>
+            <option value="zai:glm-5.3-flashx"${cfg.defaultModel==='zai:glm-5.3-flashx'?' selected':''}>glm-5.3-flashx</option>
+            <option value="zai:glm-4.6"${cfg.defaultModel==='zai:glm-4.6'?' selected':''}>glm-4.6</option>
+          </optgroup>
+          <optgroup label="Moonshot">
+            <option value="moonshot:kimi-k3"${cfg.defaultModel==='moonshot:kimi-k3'?' selected':''}>kimi-k3</option>
+            <option value="moonshot:kimi-k2"${cfg.defaultModel==='moonshot:kimi-k2'?' selected':''}>kimi-k2</option>
+            <option value="moonshot:moonshot-v1-128k"${cfg.defaultModel==='moonshot:moonshot-v1-128k'?' selected':''}>moonshot-v1-128k</option>
+            <option value="moonshot:moonshot-v1-32k"${cfg.defaultModel==='moonshot:moonshot-v1-32k'?' selected':''}>moonshot-v1-32k</option>
+          </optgroup>
+          <optgroup label="Groq">
+            <option value="groq:llama-3.3-70b-versatile"${cfg.defaultModel==='groq:llama-3.3-70b-versatile'?' selected':''}>llama-3.3-70b-versatile</option>
+            <option value="groq:qwen-2.5-coder-32b"${cfg.defaultModel==='groq:qwen-2.5-coder-32b'?' selected':''}>qwen-2.5-coder-32b</option>
+          </optgroup>
+          <optgroup label="Ollama">
+            <option value="ollama:qwen2.5-coder:32b"${cfg.defaultModel==='ollama:qwen2.5-coder:32b'?' selected':''}>qwen2.5-coder:32b</option>
+            <option value="ollama:qwq:32b"${cfg.defaultModel==='ollama:qwq:32b'?' selected':''}>qwq:32b</option>
+            <option value="ollama:deepseek-r1:32b"${cfg.defaultModel==='ollama:deepseek-r1:32b'?' selected':''}>deepseek-r1:32b</option>
+            <option value="ollama:llama3.3:70b"${cfg.defaultModel==='ollama:llama3.3:70b'?' selected':''}>llama3.3:70b</option>
+          </optgroup>
+        </select></div>
         <div class="form-group"><label>Default environment</label><select id="settingEnv">
           <option value="lab" ${cfg.environment === 'lab' ? 'selected' : ''}>Lab</option>
           <option value="development" ${cfg.environment === 'development' ? 'selected' : ''}>Development</option>

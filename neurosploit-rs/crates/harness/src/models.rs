@@ -33,7 +33,7 @@ pub fn providers() -> Vec<Provider> {
         Provider { key: "nvidia_nim", label: "NVIDIA NIM", base_url: "https://integrate.api.nvidia.com/v1", env_key: "NVIDIA_NIM_API_KEY", kind: "api",
             models: vec!["nvidia/llama-3.3-nemotron-super-49b-v1", "deepseek-ai/deepseek-r1", "qwen/qwen2.5-coder-32b-instruct"] },
         Provider { key: "deepseek", label: "DeepSeek", base_url: "https://api.deepseek.com/v1", env_key: "DEEPSEEK_API_KEY", kind: "api",
-            models: vec!["deepseek-reasoner", "deepseek-chat"] },
+            models: vec!["deepseek-r2", "deepseek-v4.1", "deepseek-v4-pro", "deepseek-v4", "deepseek-reasoner", "deepseek-chat"] },
         Provider { key: "mistral", label: "Mistral", base_url: "https://api.mistral.ai/v1", env_key: "MISTRAL_API_KEY", kind: "api",
             models: vec!["mistral-large-latest", "codestral-latest"] },
         Provider { key: "qwen", label: "Qwen (DashScope)", base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", env_key: "DASHSCOPE_API_KEY", kind: "api",
