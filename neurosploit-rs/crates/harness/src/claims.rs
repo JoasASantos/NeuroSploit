@@ -400,12 +400,15 @@ pub fn rewrite(f: &mut Finding, set: &ClaimSet, decision: &Decision) {
         Decision::DowngradeScopeLimitation(_) => "Low",
         _ => if still_security_relevant(set) { "Low" } else { "Info" },
     };
-    // A cap lowers, never raises: a downgrade decision must not be able to make
-    // a finding more serious than its author claimed. The comparison was
-    // inverted at first, which silently left a High finding at High — the
-    // failure the cap exists to prevent.
     if sev_rank(&f.severity) > sev_rank(cap) {
         f.severity = cap.to_string();
+    }
+    // Known-dangerous CWE classes get a severity floor: even when impact is
+    // unproven, the mechanic alone warrants at least Medium because the
+    // attack surface is real and well-understood.
+    let floor = cwe_severity_floor(&f.cwe);
+    if sev_rank(&f.severity) < sev_rank(floor) {
+        f.severity = floor.to_string();
     }
     f.validated = false;
     f.review_status = "needs-review".into();
@@ -420,6 +423,34 @@ fn sev_rank(s: &str) -> u8 {
         x if x.starts_with("med") => 2,
         x if x.starts_with("low") => 1,
         _ => 0,
+    }
+}
+
+fn cwe_severity_floor(cwe: &str) -> &'static str {
+    let n: u32 = cwe.chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .unwrap_or(0);
+    match n {
+        // High floor: RCE, SQLi, deserialization, SSTI, code injection
+        77 | 78 | 94 | 95 | 502 | 917 | 1336 => "High",
+        89 | 564 | 943 => "High",
+        // Medium floor: SSRF, brute force, auth bypass, path traversal,
+        // outdated components, XXE, IDOR, privilege escalation
+        918 => "Medium",                    // SSRF
+        307 | 799 => "Medium",              // brute force / rate limiting
+        287 | 288 | 289 | 306 => "Medium",  // auth bypass
+        22 | 23 | 35 | 73 | 98 => "Medium", // path traversal
+        1104 | 1395 => "Medium",            // outdated dependencies / components
+        611 | 776 | 827 => "Medium",        // XXE
+        639 | 862 | 863 | 284 => "Medium",  // IDOR / access control
+        269 | 266 => "Medium",              // privilege escalation
+        352 => "Medium",                    // CSRF
+        601 => "Medium",                    // open redirect
+        79 | 80 | 83 | 87 => "Medium",     // XSS (reflected/stored)
+        _ => "Info",
     }
 }
 
