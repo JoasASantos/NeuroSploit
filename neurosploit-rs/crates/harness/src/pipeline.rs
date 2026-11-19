@@ -1697,6 +1697,18 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
                     Ok((m, text)) => {
                         let f = extract_findings(&text, &ag.name);
                         let _ = txc.send(format!("exploit {} via {} → {} candidate(s)", ag.name, m.label(), f.len())).await;
+                        // Detect output truncation: if text length in chars is
+                        // near the max_tokens limit (tokens ≈ 3-4 chars), the
+                        // JSON findings block was likely cut off mid-stream.
+                        let max_tok = crate::models::max_tokens_for(&m.model) as usize;
+                        let char_floor = max_tok * 3; // conservative: 3 chars/token
+                        if text.len() >= char_floor && f.is_empty() {
+                            let _ = txc.send(format!(
+                                "⚠ agent {} output length ({} chars) hit token ceiling (~{} tokens). \
+                                 JSON findings likely truncated. Consider raising NEUROSPLOIT_MAX_TOKENS.",
+                                ag.name, text.len(), max_tok
+                            )).await;
+                        }
                         // "no findings" is a RESULT, not a parse failure. Models
                         // wrap the empty array in a ```json fence, so comparing the
                         // raw text to "[]" reported every honest negative as

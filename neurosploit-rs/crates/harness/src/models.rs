@@ -277,11 +277,8 @@ impl ChatClient {
             return Err(anyhow!("{} returned no choices: {}", p.key, truncate(err, 200)));
         }
         let content = extract_message_text(&choice["message"]);
+        let finish = choice["finish_reason"].as_str().unwrap_or("unknown");
         if content.trim().is_empty() {
-            // 2xx but no usable text. The usual cause is a reasoning model that
-            // spent the whole token budget on its reasoning stream and was cut
-            // off (finish_reason="length") before emitting the answer.
-            let finish = choice["finish_reason"].as_str().unwrap_or("unknown");
             let hint = if finish == "length" {
                 " — raised max_tokens may help, or the model is reasoning-heavy for this prompt size"
             } else {
@@ -291,6 +288,15 @@ impl ChatClient {
                 "{} returned empty content (finish_reason={finish}, model='{}'){hint}",
                 p.key, m.model
             ));
+        }
+        // Output hit token limit with partial content — the JSON findings
+        // block is likely truncated. Warn so the operator knows findings may
+        // be lost, and the truncation-repair parser can attempt recovery.
+        if finish == "length" {
+            eprintln!(
+                "[models] ⚠ agent {}: output truncated (finish_reason=length, {} chars, max_tokens={}). JSON repair will attempt recovery.",
+                label, content.len(), max_tokens_for(&m.model)
+            );
         }
         Ok(content)
     }
@@ -1023,7 +1029,7 @@ fn temperature_for() -> f32 {
 /// `finish_reason: "length"` with an empty `content`, surfacing as the
 /// "empty content" error. Give those families more headroom; leave the rest at
 /// the cheaper default. Override for all models with `NEUROSPLOIT_MAX_TOKENS`.
-fn max_tokens_for(model: &str) -> u32 {
+pub(crate) fn max_tokens_for(model: &str) -> u32 {
     if let Some(v) = std::env::var("NEUROSPLOIT_MAX_TOKENS")
         .ok()
         .and_then(|v| v.trim().parse::<u32>().ok())
