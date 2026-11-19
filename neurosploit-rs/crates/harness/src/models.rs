@@ -277,11 +277,8 @@ impl ChatClient {
             return Err(anyhow!("{} returned no choices: {}", p.key, truncate(err, 200)));
         }
         let content = extract_message_text(&choice["message"]);
+        let finish = choice["finish_reason"].as_str().unwrap_or("unknown");
         if content.trim().is_empty() {
-            // 2xx but no usable text. The usual cause is a reasoning model that
-            // spent the whole token budget on its reasoning stream and was cut
-            // off (finish_reason="length") before emitting the answer.
-            let finish = choice["finish_reason"].as_str().unwrap_or("unknown");
             let hint = if finish == "length" {
                 " — raised max_tokens may help, or the model is reasoning-heavy for this prompt size"
             } else {
@@ -291,6 +288,15 @@ impl ChatClient {
                 "{} returned empty content (finish_reason={finish}, model='{}'){hint}",
                 p.key, m.model
             ));
+        }
+        // Output hit token limit with partial content — the JSON findings
+        // block is likely truncated. Warn so the operator knows findings may
+        // be lost, and the truncation-repair parser can attempt recovery.
+        if finish == "length" {
+            eprintln!(
+                "[models] ⚠ agent {}: output truncated (finish_reason=length, {} chars, max_tokens={}). JSON repair will attempt recovery.",
+                label, content.len(), max_tokens_for(&m.model)
+            );
         }
         Ok(content)
     }
@@ -1023,7 +1029,7 @@ fn temperature_for() -> f32 {
 /// `finish_reason: "length"` with an empty `content`, surfacing as the
 /// "empty content" error. Give those families more headroom; leave the rest at
 /// the cheaper default. Override for all models with `NEUROSPLOIT_MAX_TOKENS`.
-fn max_tokens_for(model: &str) -> u32 {
+pub(crate) fn max_tokens_for(model: &str) -> u32 {
     if let Some(v) = std::env::var("NEUROSPLOIT_MAX_TOKENS")
         .ok()
         .and_then(|v| v.trim().parse::<u32>().ok())
@@ -1046,8 +1052,13 @@ fn max_tokens_for(model: &str) -> u32 {
         // OpenAI o-series (o1/o3/o4…) and "sol" reasoning variants.
         || fam.starts_with('o') && fam.chars().nth(1).is_some_and(|c| c.is_ascii_digit())
         || fam.contains("-sol");
+    // Anthropic Claude models produce ReAct chains + full JSON findings;
+    // 4096 truncates mid-JSON and loses every finding from the agent.
+    let claude_large = fam.starts_with("claude-");
     if reasoning {
         32768
+    } else if claude_large {
+        16384
     } else {
         4096
     }
@@ -1171,8 +1182,15 @@ mod response_tests {
 
     #[test]
     fn plain_models_keep_default() {
-        for m in ["gpt-5.5", "claude-opus-5-5", "anthropic/claude-opus-4-8", "gemini-3-pro", "grok-4.7", "meta-llama/llama-3.3-70b-instruct"] {
+        for m in ["gpt-5.5", "gemini-3-pro", "grok-4.7", "meta-llama/llama-3.3-70b-instruct"] {
             assert_eq!(max_tokens_for(m), 4096, "{m} should keep the default cap");
+        }
+    }
+
+    #[test]
+    fn claude_models_get_extended_output() {
+        for m in ["claude-opus-5-5", "anthropic/claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"] {
+            assert_eq!(max_tokens_for(m), 16384, "{m} should get 16k for ReAct+JSON output");
         }
     }
 

@@ -838,47 +838,47 @@
         <div class="run-tab-panel" data-tabpanel="adaptive" hidden>
           <div class="adaptive-dashboard">
             <div class="adaptive-section">
-              <h3 class="adaptive-title">Target Stack</h3>
-              <div class="adaptive-stack" id="adaptiveStack">No stack data yet.</div>
+              <h3 class="adaptive-title"><span class="a-icon">&#x25A6;</span> Target Stack</h3>
+              <div class="adaptive-stack" id="adaptiveStack">Waiting for recon data&hellip;</div>
             </div>
             <div class="adaptive-section">
-              <h3 class="adaptive-title">WAF Intelligence</h3>
+              <h3 class="adaptive-title"><span class="a-icon">&#x26E8;</span> WAF Intelligence</h3>
               <div class="adaptive-waf" id="adaptiveWaf">No WAF detected yet.</div>
             </div>
             <div class="adaptive-section">
-              <h3 class="adaptive-title">Payload Evolution</h3>
+              <h3 class="adaptive-title"><span class="a-icon">&#x2726;</span> Payload Evolution</h3>
               <div class="adaptive-stats-grid" id="adaptivePayloadStats">
-                <div class="astat"><span class="astat-n" id="adaptPayloads">0</span><span class="astat-l">Payloads</span></div>
-                <div class="astat"><span class="astat-n" id="adaptTriggered">0</span><span class="astat-l">Triggered</span></div>
-                <div class="astat"><span class="astat-n" id="adaptBlocked">0</span><span class="astat-l">Blocked</span></div>
+                <div class="astat"><span class="astat-n zero" id="adaptPayloads">0</span><span class="astat-l">Payloads</span></div>
+                <div class="astat"><span class="astat-n zero" id="adaptTriggered">0</span><span class="astat-l">Triggered</span></div>
+                <div class="astat"><span class="astat-n zero" id="adaptBlocked">0</span><span class="astat-l">Blocked</span></div>
               </div>
             </div>
-            <div class="adaptive-section">
-              <h3 class="adaptive-title">Exploration Graph</h3>
+            <div class="adaptive-section wide">
+              <h3 class="adaptive-title"><span class="a-icon">&#x2B22;</span> Exploration Graph</h3>
               <div class="adaptive-stats-grid" id="adaptiveGraphStats">
-                <div class="astat"><span class="astat-n" id="graphAssets">0</span><span class="astat-l">Assets</span></div>
-                <div class="astat"><span class="astat-n" id="graphExplored">0</span><span class="astat-l">Explored</span></div>
-                <div class="astat"><span class="astat-n" id="graphFindings">0</span><span class="astat-l">Findings</span></div>
-                <div class="astat"><span class="astat-n" id="graphCoverage">0%</span><span class="astat-l">Coverage</span></div>
-                <div class="astat"><span class="astat-n" id="graphHints">0</span><span class="astat-l">Hints</span></div>
+                <div class="astat"><span class="astat-n zero" id="graphAssets">0</span><span class="astat-l">Assets</span></div>
+                <div class="astat"><span class="astat-n zero" id="graphExplored">0</span><span class="astat-l">Explored</span></div>
+                <div class="astat"><span class="astat-n zero" id="graphFindings">0</span><span class="astat-l">Findings</span></div>
+                <div class="astat"><span class="astat-n zero" id="graphCoverage">0%</span><span class="astat-l">Coverage</span></div>
+                <div class="astat"><span class="astat-n zero" id="graphHints">0</span><span class="astat-l">Hints</span></div>
               </div>
             </div>
             <div class="adaptive-section">
-              <h3 class="adaptive-title">Planner</h3>
+              <h3 class="adaptive-title"><span class="a-icon">&#x2630;</span> Planner</h3>
               <div class="adaptive-stats-grid" id="adaptivePlannerStats">
-                <div class="astat"><span class="astat-n" id="planQueued">0</span><span class="astat-l">Queued</span></div>
-                <div class="astat"><span class="astat-n" id="planRunning">0</span><span class="astat-l">Running</span></div>
-                <div class="astat"><span class="astat-n" id="planDone">0</span><span class="astat-l">Done</span></div>
-                <div class="astat"><span class="astat-n" id="planFailed">0</span><span class="astat-l">Failed</span></div>
+                <div class="astat"><span class="astat-n zero" id="planQueued">0</span><span class="astat-l">Queued</span></div>
+                <div class="astat"><span class="astat-n zero" id="planRunning">0</span><span class="astat-l">Running</span></div>
+                <div class="astat stat-good"><span class="astat-n zero" id="planDone">0</span><span class="astat-l">Done</span></div>
+                <div class="astat stat-bad"><span class="astat-n zero" id="planFailed">0</span><span class="astat-l">Failed</span></div>
               </div>
             </div>
             <div class="adaptive-section">
-              <h3 class="adaptive-title">Noise Governor</h3>
+              <h3 class="adaptive-title"><span class="a-icon">&#x2638;</span> Noise Governor</h3>
               <div class="adaptive-stats-grid" id="adaptiveNoiseStats">
-                <div class="astat"><span class="astat-n" id="noiseRequests">0</span><span class="astat-l">Requests</span></div>
-                <div class="astat"><span class="astat-n" id="noiseCached">0</span><span class="astat-l">Cached</span></div>
-                <div class="astat"><span class="astat-n" id="noiseThrottled">0</span><span class="astat-l">Throttled</span></div>
-                <div class="astat"><span class="astat-n" id="noiseBlocked">0</span><span class="astat-l">Blocked</span></div>
+                <div class="astat"><span class="astat-n zero" id="noiseRequests">0</span><span class="astat-l">Requests</span></div>
+                <div class="astat stat-good"><span class="astat-n zero" id="noiseCached">0</span><span class="astat-l">Cached</span></div>
+                <div class="astat stat-warn"><span class="astat-n zero" id="noiseThrottled">0</span><span class="astat-l">Throttled</span></div>
+                <div class="astat stat-bad"><span class="astat-n zero" id="noiseBlocked">0</span><span class="astat-l">Blocked</span></div>
               </div>
             </div>
           </div>
