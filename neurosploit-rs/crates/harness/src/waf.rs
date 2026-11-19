@@ -314,6 +314,100 @@ impl Coverage {
     }
 }
 
+/// Realistic browser headers that bypass basic Cloudflare bot detection.
+///
+/// Many Cloudflare challenges trigger only on bare-bones HTTP clients (curl
+/// default, reqwest without headers). Adding a credible browser fingerprint
+/// passes challenges that would otherwise require JS execution.
+pub fn bypass_headers() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
+        ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"),
+        ("Accept-Language", "en-US,en;q=0.9"),
+        ("Accept-Encoding", "gzip, deflate, br"),
+        ("Sec-Fetch-Dest", "document"),
+        ("Sec-Fetch-Mode", "navigate"),
+        ("Sec-Fetch-Site", "none"),
+        ("Sec-Fetch-User", "?1"),
+        ("Sec-Ch-Ua", "\"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\""),
+        ("Sec-Ch-Ua-Mobile", "?0"),
+        ("Sec-Ch-Ua-Platform", "\"Windows\""),
+        ("Upgrade-Insecure-Requests", "1"),
+        ("Cache-Control", "max-age=0"),
+        ("Connection", "keep-alive"),
+    ]
+}
+
+/// Suggested bypasses based on WAF classification and detected vendor.
+pub fn suggest_bypasses(verdict: &Verdict) -> Vec<String> {
+    let mut tips = Vec::new();
+    let vendor = verdict.vendor.as_ref().map(|v| v.name.as_str()).unwrap_or("");
+
+    match verdict.origin {
+        Origin::EdgeBlocked => {
+            tips.push("The edge blocked this request — the application never saw it.".into());
+            match vendor {
+                "Cloudflare" => {
+                    tips.push("Add realistic browser headers (Sec-Fetch-*, Sec-Ch-Ua, full User-Agent) — many Cloudflare rules key on these.".into());
+                    tips.push("Try alternative paths: direct IP (check DNS history, mail.*, direct.*, origin.* subdomains).".into());
+                    tips.push("Encode payloads differently: double-URL-encode, Unicode normalization, case variation.".into());
+                    tips.push("Split the payload across multiple parameters or HTTP chunks.".into());
+                    tips.push("Use HTTP/2 when available — some rules only inspect HTTP/1.1.".into());
+                }
+                "AWS WAF" => {
+                    tips.push("AWS WAF rules are often regex-based — try Unicode homoglyphs, null bytes, or chunk encoding.".into());
+                    tips.push("Check if the ALB/CloudFront origin is accessible directly.".into());
+                }
+                "Akamai" => {
+                    tips.push("Akamai's bot manager keys on TLS fingerprint — try with --ciphers flag or different TLS versions.".into());
+                    tips.push("Pragma and Via header manipulation may bypass certain rule sets.".into());
+                }
+                _ => {
+                    tips.push("Try encoding payloads: double-URL-encode, mixed case, Unicode substitution.".into());
+                    tips.push("Look for direct origin IP via DNS history, certificate transparency logs.".into());
+                }
+            }
+        }
+        Origin::EdgeThrottled => {
+            tips.push("Rate-limited or challenged — slow down and retry with jitter.".into());
+            if vendor == "Cloudflare" {
+                tips.push("Cloudflare challenge: add browser headers, rotate source IPs if available, increase delay between requests.".into());
+                tips.push("If the challenge persists, the target may need browser-based recon (--mcp with Playwright).".into());
+            }
+        }
+        Origin::Application => {}
+    }
+    tips
+}
+
+/// Agent instructions for WAF-aware exploitation.
+///
+/// Injected into every agent's system prompt when a WAF is detected during
+/// recon, so agents know why some probes fail and how to adapt.
+pub const WAF_OPS: &str = "\
+## WAF detected — read this first
+
+A web application firewall sits between you and the target. Some of your \
+probes will be blocked at the edge and NEVER reach the application. \
+A blocked response (403 with Cloudflare/AWS WAF/Akamai signature) means \
+the WAF stopped it — it says NOTHING about whether the application is \
+vulnerable.
+
+### What to do
+1. **Don't report WAF blocks as 'not vulnerable.'** A block is not a test.
+2. **Encode payloads** — double-URL-encode, Unicode, case variation, chunk \
+   transfer encoding. The WAF checks the wire format; the app checks the \
+   decoded form.
+3. **Use realistic headers** — Sec-Fetch-Dest: document, Sec-Ch-Ua, full \
+   User-Agent. Missing these triggers bot detection before rules even run.
+4. **Pace requests** — 429 or challenge pages mean slow down, not give up.
+5. **Look for unprotected paths** — /api/, /graphql, /internal/, websocket \
+   upgrades, and non-standard ports sometimes bypass the edge.
+6. **Report coverage gaps** — if most of your probes died at the edge, say \
+   so explicitly: 'WAF blocked N of M probes; the application's exposure \
+   behind the WAF is untested.'
+";
+
 #[cfg(test)]
 mod tests {
     use super::*;

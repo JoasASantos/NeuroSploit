@@ -115,23 +115,47 @@ fn resolve_key(p: &Provider) -> String {
 pub struct ModelRef {
     pub provider: String,
     pub model: String,
+    /// Per-model backend override: `Some(true)` = force subscription CLI,
+    /// `Some(false)` = force API, `None` = follow the pool's global flag.
+    /// Set via a `:sub`/`:cli` or `:api` suffix on the model string.
+    pub force_backend: Option<bool>,
 }
 
 impl ModelRef {
     pub fn parse(s: &str) -> ModelRef {
-        match s.split_once(':') {
-            Some((p, m)) if !m.is_empty() => ModelRef { provider: p.to_string(), model: m.to_string() },
+        // Check for :sub/:cli/:api suffix (after the second colon).
+        // Format: provider:model[:sub|:cli|:api]
+        let (base, force_backend) = if s.ends_with(":sub") || s.ends_with(":cli") {
+            (&s[..s.len() - 4], Some(true))
+        } else if s.ends_with(":api") {
+            (&s[..s.len() - 4], Some(false))
+        } else {
+            (s, None)
+        };
+        match base.split_once(':') {
+            Some((p, m)) if !m.is_empty() => ModelRef { provider: p.to_string(), model: m.to_string(), force_backend },
             Some((p, _)) => {
                 let model = provider_for(p)
                     .and_then(|prov| prov.models.first().map(|s| s.to_string()))
                     .unwrap_or_default();
-                ModelRef { provider: p.to_string(), model }
+                ModelRef { provider: p.to_string(), model, force_backend }
             }
-            None => ModelRef { provider: "anthropic".into(), model: s.to_string() },
+            None => ModelRef { provider: "anthropic".into(), model: base.to_string(), force_backend },
         }
     }
     pub fn label(&self) -> String {
-        format!("{}:{}", self.provider, self.model)
+        let suffix = match self.force_backend {
+            Some(true) => ":sub",
+            Some(false) => ":api",
+            None => "",
+        };
+        format!("{}:{}{}", self.provider, self.model, suffix)
+    }
+    /// Whether this model should use the subscription CLI backend, given the
+    /// pool-level `subscription` flag.
+    pub fn use_cli(&self, pool_subscription: bool) -> bool {
+        let want_cli = self.force_backend.unwrap_or(pool_subscription);
+        want_cli && cli_binary_for(&self.provider).is_some()
     }
 }
 
@@ -1055,10 +1079,8 @@ pub(crate) fn max_tokens_for(model: &str) -> u32 {
     // Anthropic Claude models produce ReAct chains + full JSON findings;
     // 4096 truncates mid-JSON and loses every finding from the agent.
     let claude_large = fam.starts_with("claude-");
-    if reasoning {
+    if reasoning || claude_large {
         32768
-    } else if claude_large {
-        16384
     } else {
         4096
     }
@@ -1190,7 +1212,7 @@ mod response_tests {
     #[test]
     fn claude_models_get_extended_output() {
         for m in ["claude-opus-5-5", "anthropic/claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"] {
-            assert_eq!(max_tokens_for(m), 16384, "{m} should get 16k for ReAct+JSON output");
+            assert_eq!(max_tokens_for(m), 32768, "{m} should get 32k for ReAct+JSON output");
         }
     }
 
@@ -1257,5 +1279,63 @@ mod response_tests {
     fn empty_everywhere_yields_empty() {
         let msg = json!({"content": "   "});
         assert!(extract_message_text(&msg).trim().is_empty());
+    }
+
+    #[test]
+    fn model_ref_parse_sub_suffix() {
+        let m = ModelRef::parse("anthropic:claude-sonnet-4-6:sub");
+        assert_eq!(m.provider, "anthropic");
+        assert_eq!(m.model, "claude-sonnet-4-6");
+        assert_eq!(m.force_backend, Some(true));
+    }
+
+    #[test]
+    fn model_ref_parse_cli_suffix() {
+        let m = ModelRef::parse("anthropic:claude-opus-4-8:cli");
+        assert_eq!(m.provider, "anthropic");
+        assert_eq!(m.model, "claude-opus-4-8");
+        assert_eq!(m.force_backend, Some(true));
+    }
+
+    #[test]
+    fn model_ref_parse_api_suffix() {
+        let m = ModelRef::parse("deepseek:deepseek-v4-pro:api");
+        assert_eq!(m.provider, "deepseek");
+        assert_eq!(m.model, "deepseek-v4-pro");
+        assert_eq!(m.force_backend, Some(false));
+    }
+
+    #[test]
+    fn model_ref_parse_no_suffix() {
+        let m = ModelRef::parse("deepseek:deepseek-v4-pro");
+        assert_eq!(m.provider, "deepseek");
+        assert_eq!(m.model, "deepseek-v4-pro");
+        assert_eq!(m.force_backend, None);
+    }
+
+    #[test]
+    fn model_ref_label_includes_suffix() {
+        let sub = ModelRef::parse("anthropic:claude-sonnet-4-6:sub");
+        assert_eq!(sub.label(), "anthropic:claude-sonnet-4-6:sub");
+        let api = ModelRef::parse("deepseek:deepseek-v4-pro:api");
+        assert_eq!(api.label(), "deepseek:deepseek-v4-pro:api");
+        let plain = ModelRef::parse("deepseek:deepseek-v4-pro");
+        assert_eq!(plain.label(), "deepseek:deepseek-v4-pro");
+    }
+
+    #[test]
+    fn use_cli_respects_per_model_override() {
+        // force_backend=Some(true) overrides pool subscription=false
+        let m = ModelRef::parse("anthropic:claude-sonnet-4-6:sub");
+        // use_cli depends on cli_binary_for returning Some; anthropic has "claude"
+        // so this should be true when CLI is installed. We test the logic only:
+        // force_backend=Some(true) means want_cli=true regardless of pool flag.
+        assert_eq!(m.force_backend, Some(true));
+
+        // force_backend=Some(false) overrides pool subscription=true
+        let m2 = ModelRef::parse("anthropic:claude-opus-4-8:api");
+        assert_eq!(m2.force_backend, Some(false));
+        // Even with pool subscription=true, force_backend=false means want_cli=false
+        assert!(!m2.use_cli(true));
     }
 }
