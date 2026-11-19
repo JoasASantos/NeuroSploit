@@ -302,6 +302,9 @@ function envOverrides() {
     const p = PROVIDERS.find((x) => x.key === key);
     if (p && secret) env[p.envKey] = secret;
   }
+  // TypeSafe agent pruning is too aggressive — disable by default.
+  // Re-enable per-run via the UI's typesafe toggle.
+  if (!env.NEUROSPLOIT_TYPESAFE) env.NEUROSPLOIT_TYPESAFE = 'off';
   return env;
 }
 

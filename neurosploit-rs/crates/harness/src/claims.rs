@@ -426,7 +426,7 @@ fn sev_rank(s: &str) -> u8 {
     }
 }
 
-fn cwe_severity_floor(cwe: &str) -> &'static str {
+pub fn cwe_severity_floor(cwe: &str) -> &'static str {
     let n: u32 = cwe.chars()
         .skip_while(|c| !c.is_ascii_digit())
         .take_while(|c| c.is_ascii_digit())

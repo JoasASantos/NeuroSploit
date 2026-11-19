@@ -1504,15 +1504,112 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
 .term-host .xterm { padding: var(--sp-3) var(--sp-4) var(--sp-2); height: 100%; }
 
 /* ── Adaptive Intelligence tab ── */
-.adaptive-dashboard { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--sp-4); padding: var(--sp-4); }
-.adaptive-section { background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--sp-4); }
-.adaptive-title { font-size: var(--fs-sm); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-2); margin: 0 0 var(--sp-3); }
-.adaptive-stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: var(--sp-3); }
-.astat { text-align: center; }
-.astat-n { display: block; font-size: var(--fs-xl, 1.5rem); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--fg-1); }
-.astat-l { font-size: var(--fs-xs); color: var(--fg-3); text-transform: uppercase; letter-spacing: 0.03em; }
-.adaptive-stack, .adaptive-waf { font-size: var(--fs-sm); color: var(--fg-2); line-height: 1.5; }
-.adaptive-stack code, .adaptive-waf code { background: var(--bg-1); padding: 1px 4px; border-radius: var(--r-sm); font-size: var(--fs-xs); }
+.adaptive-dashboard {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--sp-4);
+  padding: var(--sp-4);
+}
+.adaptive-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--sp-4) var(--sp-4) var(--sp-3);
+  position: relative;
+  overflow: hidden;
+  transition: border-color var(--t-fast);
+}
+.adaptive-section::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: var(--accent);
+  opacity: 0.5;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+.adaptive-section:hover { border-color: var(--border-strong); }
+.adaptive-section.has-data::before { opacity: 1; }
+.adaptive-title {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin: 0 0 var(--sp-3);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.adaptive-title .a-icon {
+  width: 20px; height: 20px;
+  border-radius: var(--radius-xs);
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  flex: none;
+}
+.adaptive-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  gap: var(--sp-2);
+}
+.astat {
+  text-align: center;
+  padding: var(--sp-2) var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  transition: background var(--t-fast);
+}
+.astat:hover { background: var(--surface-3); }
+.astat-n {
+  display: block;
+  font-size: var(--fs-xl, 1.5rem);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  line-height: 1.2;
+}
+.astat-n.zero { color: var(--text-faint); }
+.astat-l {
+  display: block;
+  font-size: 10px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 2px;
+}
+.adaptive-stack, .adaptive-waf {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  line-height: 1.6;
+  padding: var(--sp-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  min-height: 40px;
+}
+.adaptive-stack code, .adaptive-waf code {
+  background: var(--surface-3);
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  font-size: var(--fs-xs);
+  font-family: var(--mono);
+}
+/* Severity-tinted stat highlights */
+.astat.stat-warn .astat-n { color: var(--sev-medium-fg); }
+.astat.stat-good .astat-n { color: var(--sev-low-fg); }
+.astat.stat-bad .astat-n { color: var(--sev-critical-fg); }
+/* Two-column layout for wide screens */
+@media (min-width: 1200px) {
+  .adaptive-dashboard { grid-template-columns: repeat(3, 1fr); }
+}
+@media (min-width: 1600px) {
+  .adaptive-dashboard { grid-template-columns: repeat(3, 1fr); }
+  .adaptive-section.wide { grid-column: span 2; }
+}
 
 /* ============================================================ Reactive / MCP modals */
 .badge-experimental { display: inline-block; font-size: var(--fs-xs); font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--warn-bg, #fff3cd); color: var(--warn-fg, #856404); vertical-align: middle; margin-left: 6px; }

@@ -1247,9 +1247,11 @@ function applySnapshot(snap) {
     updatePinnedLine();
   }
   if (state.currentJob) state.currentJob.phase = snap.phase;
-  $('#progressLabel').textContent = `${snap.agentsDone} / ${snap.agents || '?'} agents`;
-  $('#progressBar').classList.toggle('indeterminate', !snap.agents);
-  if (snap.agents) $('#progressFill').style.width = `${Math.min(100, (snap.agentsDone / snap.agents) * 100)}%`;
+  const done = snap.agentsDone ?? 0;
+  const total = snap.agents;
+  $('#progressLabel').textContent = total != null && total > 0 ? `${done} / ${total} agents` : `${done} agents done`;
+  $('#progressBar').classList.toggle('indeterminate', !total);
+  if (total > 0) $('#progressFill').style.width = `${Math.min(100, (done / total) * 100)}%`;
   if (snap.reportUrl && snap.runId) {
     $('#btnOpenReport').href = `/api/runs/${snap.runId}/asset/report.html`;
     show($('#btnOpenReport'), true);
@@ -5463,44 +5465,59 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ── Adaptive Intelligence tab handlers ──
+function setStat(id, val) {
+  const el = $('#' + id);
+  if (!el) return;
+  el.textContent = val;
+  el.classList.toggle('zero', val === 0 || val === '0' || val === '0%');
+  const section = el.closest('.adaptive-section');
+  if (section) section.classList.add('has-data');
+}
+
 function updateAdaptiveTab(data) {
   const dot = $('#adaptiveTabDot');
   if (dot) dot.style.background = 'var(--accent)';
   show($('#adaptiveEmpty'), false);
   if (data.stack) {
     const el = $('#adaptiveStack');
-    if (el) el.innerHTML = `<code>${esc(data.stack.server || '?')}</code> / <code>${esc(data.stack.framework || '?')}</code> / <code>${esc(data.stack.language || '?')}</code> / DB: <code>${esc(data.stack.database || '?')}</code>`;
+    if (el) {
+      el.innerHTML = `<code>${esc(data.stack.server || '?')}</code> / <code>${esc(data.stack.framework || '?')}</code> / <code>${esc(data.stack.language || '?')}</code> / DB: <code>${esc(data.stack.database || '?')}</code>`;
+      el.closest('.adaptive-section')?.classList.add('has-data');
+    }
   }
   if (data.waf) {
     const el = $('#adaptiveWaf');
-    if (el) el.innerHTML = `Vendor: <code>${esc(data.waf.vendor || 'unknown')}</code> | Block status: <code>${data.waf.block_status || '?'}</code>${data.waf.blocked_keywords?.length ? ` | Blocked: ${data.waf.blocked_keywords.map(k => `<code>${esc(k)}</code>`).join(', ')}` : ''}${data.waf.allowed_encodings?.length ? ` | Bypass: ${data.waf.allowed_encodings.map(e => `<code>${esc(e)}</code>`).join(', ')}` : ''}`;
+    if (el) {
+      el.innerHTML = `Vendor: <code>${esc(data.waf.vendor || 'unknown')}</code> | Block status: <code>${data.waf.block_status || '?'}</code>${data.waf.blocked_keywords?.length ? ` | Blocked: ${data.waf.blocked_keywords.map(k => `<code>${esc(k)}</code>`).join(', ')}` : ''}${data.waf.allowed_encodings?.length ? ` | Bypass: ${data.waf.allowed_encodings.map(e => `<code>${esc(e)}</code>`).join(', ')}` : ''}`;
+      el.closest('.adaptive-section')?.classList.add('has-data');
+    }
   }
-  if (data.payloads !== undefined) { const el = $('#adaptPayloads'); if (el) el.textContent = data.payloads; }
-  if (data.triggered !== undefined) { const el = $('#adaptTriggered'); if (el) el.textContent = data.triggered; }
-  if (data.blocked !== undefined) { const el = $('#adaptBlocked'); if (el) el.textContent = data.blocked; }
+  if (data.payloads !== undefined) setStat('adaptPayloads', data.payloads);
+  if (data.triggered !== undefined) setStat('adaptTriggered', data.triggered);
+  if (data.blocked !== undefined) setStat('adaptBlocked', data.blocked);
 }
 
 function updateGraphTab(data) {
   show($('#adaptiveEmpty'), false);
-  if (data.assets !== undefined) { const el = $('#graphAssets'); if (el) el.textContent = data.assets; }
-  if (data.explored !== undefined) { const el = $('#graphExplored'); if (el) el.textContent = data.explored; }
-  if (data.findings !== undefined) { const el = $('#graphFindings'); if (el) el.textContent = data.findings; }
-  if (data.coverage !== undefined) { const el = $('#graphCoverage'); if (el) el.textContent = `${Math.round(data.coverage * 100)}%`; }
-  if (data.hints !== undefined) { const el = $('#graphHints'); if (el) el.textContent = data.hints; }
+  if (data.assets !== undefined) setStat('graphAssets', data.assets);
+  if (data.explored !== undefined) setStat('graphExplored', data.explored);
+  if (data.findings !== undefined) setStat('graphFindings', data.findings);
+  if (data.coverage !== undefined) setStat('graphCoverage', `${Math.round(data.coverage * 100)}%`);
+  if (data.hints !== undefined) setStat('graphHints', data.hints);
 }
 
 function updatePlannerTab(data) {
   show($('#adaptiveEmpty'), false);
-  if (data.queued !== undefined) { const el = $('#planQueued'); if (el) el.textContent = data.queued; }
-  if (data.running !== undefined) { const el = $('#planRunning'); if (el) el.textContent = data.running; }
-  if (data.done !== undefined) { const el = $('#planDone'); if (el) el.textContent = data.done; }
-  if (data.failed !== undefined) { const el = $('#planFailed'); if (el) el.textContent = data.failed; }
+  if (data.queued !== undefined) setStat('planQueued', data.queued);
+  if (data.running !== undefined) setStat('planRunning', data.running);
+  if (data.done !== undefined) setStat('planDone', data.done);
+  if (data.failed !== undefined) setStat('planFailed', data.failed);
 }
 
 function updateNoiseTab(data) {
   show($('#adaptiveEmpty'), false);
-  if (data.requests !== undefined) { const el = $('#noiseRequests'); if (el) el.textContent = data.requests; }
-  if (data.cached !== undefined) { const el = $('#noiseCached'); if (el) el.textContent = data.cached; }
-  if (data.throttled !== undefined) { const el = $('#noiseThrottled'); if (el) el.textContent = data.throttled; }
-  if (data.blocked !== undefined) { const el = $('#noiseBlocked'); if (el) el.textContent = data.blocked; }
+  if (data.requests !== undefined) setStat('noiseRequests', data.requests);
+  if (data.cached !== undefined) setStat('noiseCached', data.cached);
+  if (data.throttled !== undefined) setStat('noiseThrottled', data.throttled);
+  if (data.blocked !== undefined) setStat('noiseBlocked', data.blocked);
 }

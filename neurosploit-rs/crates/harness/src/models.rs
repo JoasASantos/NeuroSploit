@@ -1046,8 +1046,13 @@ fn max_tokens_for(model: &str) -> u32 {
         // OpenAI o-series (o1/o3/o4…) and "sol" reasoning variants.
         || fam.starts_with('o') && fam.chars().nth(1).is_some_and(|c| c.is_ascii_digit())
         || fam.contains("-sol");
+    // Anthropic Claude models produce ReAct chains + full JSON findings;
+    // 4096 truncates mid-JSON and loses every finding from the agent.
+    let claude_large = fam.starts_with("claude-");
     if reasoning {
         32768
+    } else if claude_large {
+        16384
     } else {
         4096
     }
@@ -1171,8 +1176,15 @@ mod response_tests {
 
     #[test]
     fn plain_models_keep_default() {
-        for m in ["gpt-5.5", "claude-opus-5-5", "anthropic/claude-opus-4-8", "gemini-3-pro", "grok-4.7", "meta-llama/llama-3.3-70b-instruct"] {
+        for m in ["gpt-5.5", "gemini-3-pro", "grok-4.7", "meta-llama/llama-3.3-70b-instruct"] {
             assert_eq!(max_tokens_for(m), 4096, "{m} should keep the default cap");
+        }
+    }
+
+    #[test]
+    fn claude_models_get_extended_output() {
+        for m in ["claude-opus-5-5", "anthropic/claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"] {
+            assert_eq!(max_tokens_for(m), 16384, "{m} should get 16k for ReAct+JSON output");
         }
     }
 

@@ -1344,6 +1344,33 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
         ))
         .await;
 
+    // ---- 0. Preflight model check --------------------------------------
+    // Send a minimal prompt to verify the model responds before launching
+    // recon + 80 agents. Catches wrong model IDs, dead API keys, and auth
+    // issues upfront instead of burning the entire run silently.
+    if !cfg.offline {
+        let _ = tx.send("🔍 preflight: testing model connectivity...".into()).await;
+        match pool.complete("You are a connectivity test.", "Reply with the single word OK.").await {
+            Ok((model_ref, _text)) => {
+                let _ = tx.send(format!("✓ model preflight OK — {}", model_ref.label())).await;
+            }
+            Err(e) => {
+                let _ = tx.send(format!("⛔ MODEL PREFLIGHT FAILED — {e}. Check your API key and model ID.")).await;
+                let artifacts = persist(&cfg, "{}", "", &[]);
+                return RunOutput {
+                    target: cfg.target.clone(),
+                    workdir: cfg.workdir.clone().unwrap_or_default(),
+                    findings: vec![],
+                    agents_ran: vec![],
+                    candidates: 0,
+                    recon: String::new(),
+                    artifacts,
+                    denied: None,
+                };
+            }
+        }
+    }
+
     // ---- 1. Recon ------------------------------------------------------
     // 1a. Deterministic HTTP probe (real request/response facts) — grounds the
     // model recon and every downstream decision. Best-effort, skipped offline.
@@ -1375,6 +1402,12 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
     let live_hosts: Vec<String> = subdomains.lines()
         .filter_map(|l| l.trim().strip_prefix("- https://").map(|r| r.split_whitespace().next().unwrap_or("").to_string()))
         .filter(|h| !h.is_empty()).collect();
+
+    // Recon reuse: load previous recon for this host (if any).
+    let prev_recon_cache = load_recon_cache(&cfg.target);
+    if let Some((_, _, ts)) = &prev_recon_cache {
+        let _ = tx.send(format!("📂 previous recon found ({}) — will diff after new recon", format_elapsed(*ts))).await;
+    }
 
     // KALI TOOL-RECON: run the real recon pipeline (gau/katana URL harvest +
     // targeted nuclei) inside the sandbox (or on host tools), then let the LLM
@@ -1409,6 +1442,33 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
         // Intense, multi-round active recon (installs tools, expands the surface).
         deep_recon(&cfg, pool, &probe_facts, &tx).await
     };
+
+    // Save recon to cache for future runs against same host.
+    if !cfg.offline {
+        save_recon_cache(&cfg.target, &recon, &tool_recon);
+    }
+    // Recon delta: compare with previous run's recon.
+    if let Some((_, prev_tool_recon, ts)) = &prev_recon_cache {
+        let new_lines: std::collections::HashSet<&str> = tool_recon.lines().collect();
+        let old_lines: std::collections::HashSet<&str> = prev_tool_recon.lines().collect();
+        let added: Vec<&str> = new_lines.difference(&old_lines).copied().collect();
+        let removed: Vec<&str> = old_lines.difference(&new_lines).copied().collect();
+        if added.is_empty() && removed.is_empty() {
+            let _ = tx.send(format!("📂 recon delta: no changes since previous run ({})", format_elapsed(*ts))).await;
+        } else {
+            let _ = tx.send(format!("📂 recon delta ({}): +{} new lines, -{} removed", format_elapsed(*ts), added.len(), removed.len())).await;
+            for line in added.iter().take(20) {
+                if !line.trim().is_empty() {
+                    let _ = tx.send(format!("  + {}", line)).await;
+                }
+            }
+            for line in removed.iter().take(10) {
+                if !line.trim().is_empty() {
+                    let _ = tx.send(format!("  - {}", line)).await;
+                }
+            }
+        }
+    }
 
     // ---- 1b. Graph checkpoint: seed the attack graph from recon ---------
     let agent_names: Vec<String> = lib.vulns.iter().map(|a| a.name.clone()).collect();
@@ -1521,8 +1581,9 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
         std::fs::canonicalize(&p).unwrap_or(p).display().to_string()
     }).unwrap_or_default();
     let shots = if evidence_dir.is_empty() { String::new() } else { screenshot_doctrine(&evidence_dir) };
-    // Token economy: each agent gets a capped recon context, not the full blob.
-    let recon_ctx: String = recon.chars().take(3500).collect();
+    // Each agent gets a capped recon context. 8000 chars gives enough room for
+    // discovered endpoints, forms, and parameters from the deep crawl.
+    let recon_ctx: String = recon.chars().take(8000).collect();
 
     // Resume support: skip agents that already ran in a previous invocation.
     let snapshot = cfg.workdir.as_deref().and_then(crate::resilience::RunSnapshot::load);
@@ -1551,6 +1612,10 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
         doctrine = tool_doctrine(mcp_on), shots = shots,
     );
     let prefix_on = prompt_prefix_enabled();
+    // Circuit breaker: track agent failures in-flight to abort early on systemic errors.
+    let cb_errors = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let cb_done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let total_agents = selected.len();
     let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(selected.iter().cloned())
         .map(|ag| {
             let shared_block = shared_block.clone();
@@ -1561,7 +1626,18 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
             let shots = shots.clone();
             let txc = tx.clone();
             let wd = cfg.workdir.clone();
+            let cb_errors = cb_errors.clone();
+            let cb_done = cb_done.clone();
             async move {
+                // Circuit breaker gate: if >1/3 of agents failed and we have enough data, skip.
+                {
+                    let errs = cb_errors.load(std::sync::atomic::Ordering::Relaxed);
+                    let done = cb_done.load(std::sync::atomic::Ordering::Relaxed);
+                    if done >= 5 && errs > total_agents / 3 {
+                        let _ = txc.send(format!("🚨 circuit breaker tripped — too many agents failing ({errs}/{done}), skipping {}", ag.name)).await;
+                        return (ag.name.clone(), String::new(), vec![]);
+                    }
+                }
                 // Resume: skip agents already completed in a prior run.
                 if let Some(snap) = snap_ref {
                     if snap.already_ran(&ag.name) {
@@ -1646,9 +1722,12 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
                             if let Ok(j) = serde_json::to_string(c) { let _ = txc.send(format!("finding_json: {j}")).await; }
                         }
                         crate::traces::record(wd.as_deref(), &ag.name, &text);
+                        cb_done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         (ag.name.clone(), text, f)
                     }
                     Err(e) => {
+                        cb_errors.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        cb_done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let is_auth = crate::pool::is_auth_failure(&e);
                         if is_auth {
                             let _ = txc.send(format!("⚠ exploit {} auth failed — findings so far are SAFE, run is pausing: {e}", ag.name)).await;
@@ -1677,6 +1756,38 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
         .buffer_unordered(cfg.concurrency)
         .collect()
         .await;
+
+    // Post-mortem circuit breaker analysis: detect systemic failures.
+    {
+        let errors: Vec<&str> = raw.iter()
+            .filter_map(|(_, text, _)| text.strip_prefix("ERROR: "))
+            .collect();
+        if !errors.is_empty() {
+            let total = raw.len();
+            let error_count = errors.len();
+            // Group by first 80 chars of error message.
+            let mut pattern_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+            for e in &errors {
+                let key: String = e.chars().take(80).collect();
+                *pattern_counts.entry(key).or_insert(0) += 1;
+            }
+            let (dominant_pattern, dominant_count) = pattern_counts.iter()
+                .max_by_key(|(_, c)| *c)
+                .map(|(k, c)| (k.clone(), *c))
+                .unwrap_or_default();
+            let error_ratio = error_count as f64 / total as f64;
+            let dominant_ratio = if error_count > 0 { dominant_count as f64 / error_count as f64 } else { 0.0 };
+            if error_ratio > 0.5 && dominant_ratio > 0.6 {
+                let _ = tx.send(format!(
+                    "🚨 CIRCUIT BREAKER: {error_count}/{total} agents failed — dominant error ({dominant_count}x): {dominant_pattern}. Likely systemic issue (wrong model, auth, rate limit)."
+                )).await;
+            } else if error_count > 3 {
+                let _ = tx.send(format!(
+                    "⚠ {error_count}/{total} agents failed. Top error ({dominant_count}x): {dominant_pattern}"
+                )).await;
+            }
+        }
+    }
 
     // Update snapshot with completed agents.
     for (name, _, findings) in &raw {
@@ -2351,15 +2462,18 @@ fn extract_chain(text: &str, agent: &str) -> (Vec<Finding>, Vec<String>) {
 
 // --------------------------------------------------------------------------- shared
 
-const SELECT_SYS: &str = "You are a penetration-test orchestrator. Given recon of a target and a catalog of specialist agents, choose ONLY the agents whose preconditions match the target's OBSERVED attack surface. Be selective and surgical — quality over quantity.
+const SELECT_SYS: &str = "You are a penetration-test orchestrator. Given recon of a target and a catalog of specialist agents, choose agents to comprehensively test the target. THOROUGH coverage is more important than minimal selection — a missed vuln class is worse than testing one that turns out clean.
 
 SELECTION RULES:
-1. MATCH TO SURFACE: Only pick agents for technologies, protocols, and patterns ACTUALLY FOUND in the recon. If recon shows no GraphQL endpoint, do NOT pick graphql agents. If no JWT/token is seen, skip jwt agents. If no file upload exists, skip upload agents.
-2. ELIMINATE BY STACK: If the target is behind a WAF/CDN (Akamai, Cloudflare, AWS WAF), PRIORITIZE WAF-bypass, cache-poisoning, and header-manipulation agents. De-prioritize blind command injection and basic SQLi (WAFs block trivial payloads).
-3. DIVERSITY: Pick a diverse set spanning the classes the recon supports — not 4 variants of the same bug family. One SQLi variant is enough unless recon shows multiple injection surfaces.
-4. AUTH SURFACE: When recon shows login/signup/session/OAuth/OIDC/SAML/JWT, ALWAYS include auth agents. This surface holds the high-impact bugs.
-5. BUSINESS LOGIC: Include IDOR/BOLA/BFLA/access-control agents when authenticated or multi-step flows exist.
-6. HARD EXCLUSIONS: NEVER pick agents for databases (postgres, mysql, redis, mongo) unless recon PROVES the database is directly reachable. NEVER pick cloud-infra agents (aws/gcp/azure/k8s) unless recon shows cloud metadata or cloud-specific endpoints. NEVER pick agents for frameworks not detected (e.g., no Django = no Django agents).
+1. MANDATORY BASELINE (ALWAYS include unless physically impossible for the target type): XSS, SQL injection, CSRF, path traversal/LFI, information disclosure, security headers, security misconfigurations, broken authentication, and access control/IDOR agents. These are OWASP Top 10 staples — every web application must be tested for them regardless of what recon shows. A WAF or lack of visible parameters does NOT exempt a target from injection testing (WAF bypass is part of the test).
+2. MATCH TO SURFACE: ADDITIONALLY pick agents for technologies, protocols, and patterns found in recon. GraphQL endpoints get graphql agents. JWT tokens get jwt agents. File uploads get upload agents. CMS platforms get CMS-specific agents.
+3. ELIMINATE BY STACK: If the target is behind a WAF/CDN, ALSO include WAF-bypass, cache-poisoning, and header-manipulation agents — in ADDITION to the baseline, not instead of it.
+4. DIVERSITY: Pick a diverse set spanning many classes — not 4 variants of the same bug family. One SQLi variant is enough unless recon shows multiple injection surfaces.
+5. AUTH SURFACE: When recon shows login/signup/session/OAuth/OIDC/SAML/JWT, ALWAYS include auth agents.
+6. BUSINESS LOGIC: Include IDOR/BOLA/BFLA/access-control agents when authenticated or multi-step flows exist.
+7. HARD EXCLUSIONS: NEVER pick agents for databases (postgres, mysql, redis, mongo) unless recon PROVES the database is directly reachable. NEVER pick cloud-infra agents (aws/gcp/azure/k8s) unless recon shows cloud metadata or cloud-specific endpoints.
+8. ENDPOINT COVERAGE: If recon discovered endpoints, forms, or parameters, pick agents that will test EACH discovered input vector — not just the homepage.
+9. BE GENEROUS: When in doubt, INCLUDE the agent. A clean test result is valuable evidence; a skipped test is a gap in coverage. Aim for 40-80 agents for a thorough engagement.
 
 Reply with a JSON array of agent names (strings) drawn exactly from the catalog. No prose.";
 
@@ -2371,8 +2485,8 @@ async fn select_agents(pool: &ModelPool, recon: &str, focus: &str, catalog: &[Ag
         .map(|a| format!("{} — {} [{}]", a.name, a.title.replace(" Agent", ""), a.cwe))
         .collect::<Vec<_>>()
         .join("\n");
-    // Feed more recon context so the selector sees the full technology stack.
-    let recon_trim: String = recon.chars().take(6000).collect();
+    // Feed more recon context so the selector sees endpoints, forms, tech stack.
+    let recon_trim: String = recon.chars().take(10000).collect();
     let focus_line = if focus.trim().is_empty() {
         String::new()
     } else {
@@ -2775,6 +2889,7 @@ async fn validate_with_persist(candidates: Vec<Finding>, pool: &ModelPool, sys: 
     // and flag for human review instead of wasting a validator call that will
     // always reject ("default to rejected when uncertain" + empty evidence).
     let (have_evidence, no_evidence): (Vec<_>, Vec<_>) = candidates.into_iter().partition(|f| {
+        if f.evidence_data.is_some() { return true; }
         let e = f.evidence.trim();
         !e.is_empty() && e != "N/A" && e != "n/a" && e != "none" && e != "-"
     });
@@ -2833,9 +2948,11 @@ async fn validate_with_persist(candidates: Vec<Finding>, pool: &ModelPool, sys: 
                     // cookie has no Secure flag" is a FACT, not a story. We cap
                     // the severity to what the receipt alone proves and flag it
                     // for human review, never delete it.
-                    let cap = "Low";
+                    let cwe_floor = crate::claims::cwe_severity_floor(&f.cwe);
+                    let cap = if sev_rank(cwe_floor) > sev_rank("Low") { cwe_floor } else { "Low" };
                     let was = f.severity.clone();
-                    if sev_rank(&f.severity) < sev_rank(cap) { f.severity = cap.to_string(); }
+                    if sev_rank(&f.severity) > sev_rank(cap) { f.severity = cap.to_string(); }
+                    if sev_rank(&f.severity) < sev_rank(cwe_floor) { f.severity = cwe_floor.to_string(); }
                     f.review_status = "needs-review".into();
                     f.review_reason = if was == f.severity {
                         format!("kept — reproducible receipt present; impact not independently demonstrated. Validator: {}", f.review_reason.trim())
@@ -3385,7 +3502,9 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
         for mut f in std::mem::take(&mut findings) {
             let Some(set) = f.claims.clone() else { kept.push(f); continue };
             let decision = crate::claims::decide(&set);
-            if decision.discards() && !crate::claims::still_security_relevant(&set) {
+            if decision.discards() && !crate::claims::still_security_relevant(&set)
+                && crate::claims::cwe_severity_floor(&f.cwe) == "Info"
+            {
                 dropped.push(format!("{} ({})", f.title, decision.code()));
                 continue;
             }
@@ -5019,7 +5138,11 @@ fn recon_intensity_directive(level: usize) -> String {
         3 => ("DEEP", "multi-angle active enumeration",
             "Go WIDE and DEEP — do NOT stop after the homepage. This should take real effort."),
         _ => ("EXHAUSTIVE", "leave no stone unturned",
-            "Be EXHAUSTIVE — enumerate everything, brute wordlists, chase every referenced host/asset."),
+            "Be EXHAUSTIVE — this is a FULL spider/crawl engagement. Enumerate EVERY endpoint, form, parameter, \
+             and input field. Follow EVERY link recursively. Parse ALL JavaScript files for hidden API endpoints. \
+             Brute-force directories with wordlists. Discover ALL parameters with arjun/paramspider. \
+             Map the ENTIRE attack surface before stopping. The goal is a COMPLETE inventory of testable inputs — \
+             every URL, every parameter, every form action, every API endpoint, every hidden path."),
     };
     format!(
         "RECON INTENSITY: {label} — {rounds}. {extra}\n\
@@ -5045,9 +5168,68 @@ fn recon_intensity_directive(level: usize) -> String {
 }
 
 /// Max wall-clock seconds for the ENTIRE recon phase (all rounds combined).
-/// This prevents recon from eating the whole run — exploitation must start.
+/// Scales with intensity: quick scans get less recon, exhaustive gets more.
 /// Per-round cap = total / (rounds + 1) so later rounds get equal time.
-const RECON_TOTAL_BUDGET_SECS: u64 = 300; // 5 minutes total
+const RECON_TOTAL_BUDGET_SECS: u64 = 300; // base 5 minutes (level 1-3)
+
+fn recon_budget_secs(intensity: usize) -> u64 {
+    match intensity {
+        0 | 1 => 120,
+        2 => 240,
+        3 => RECON_TOTAL_BUDGET_SECS,
+        _ => 600, // exhaustive: 10 minutes
+    }
+}
+
+fn recon_cache_path(target: &str) -> std::path::PathBuf {
+    let host = target
+        .split("://").nth(1).unwrap_or(target)
+        .split('/').next().unwrap_or(target)
+        .split(':').next().unwrap_or(target)
+        .to_string();
+    let safe = if host.is_empty() { target.replace(['/', ':', '.'], "_") } else { host };
+    let dir = std::path::Path::new(".neurosploit").join("recon_cache");
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join(format!("{safe}.json"))
+}
+
+fn save_recon_cache(target: &str, recon: &str, tool_recon: &str) {
+    let path = recon_cache_path(target);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let data = serde_json::json!({
+        "target": target,
+        "timestamp": ts,
+        "recon": recon,
+        "tool_recon": tool_recon,
+    });
+    let _ = std::fs::write(&path, serde_json::to_string_pretty(&data).unwrap_or_default());
+}
+
+fn load_recon_cache(target: &str) -> Option<(String, String, u64)> {
+    let path = recon_cache_path(target);
+    let content = std::fs::read_to_string(&path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&content).ok()?;
+    Some((
+        v["recon"].as_str().unwrap_or("").to_string(),
+        v["tool_recon"].as_str().unwrap_or("").to_string(),
+        v["timestamp"].as_u64().unwrap_or(0),
+    ))
+}
+
+fn format_elapsed(epoch_secs: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let diff = now.saturating_sub(epoch_secs);
+    if diff < 60 { format!("{diff}s ago") }
+    else if diff < 3600 { format!("{}m ago", diff / 60) }
+    else if diff < 86400 { format!("{}h ago", diff / 3600) }
+    else { format!("{}d ago", diff / 86400) }
+}
 
 /// Intense, multi-round recon: an initial deep pass, then follow-up rounds that
 /// EXPAND the surface (chase discovered subdomains/endpoints/params, install
@@ -5138,40 +5320,133 @@ async fn kali_provision_recon_tools(sb: &crate::sandbox::Sandbox, tx: &Sender<St
 /// candidate URLs) to feed the LLM refine phase. This is the "recon by tools,
 /// then the LLM works on top of the output" the operator asked for.
 async fn kali_tool_recon(cfg: &RunConfig, hosts: &[String], tx: &Sender<String>) -> String {
-    // Need either a sandbox or host tools; the recon_tool() helper handles both.
     let seed = crate::scope::host_of(&cfg.target);
     let mut targets: Vec<String> = Vec::new();
     if !seed.is_empty() { targets.push(seed); }
     for h in hosts { if !targets.contains(h) { targets.push(h.clone()); } }
-    targets.truncate(12); // bound the deterministic pass; the LLM covers the rest
+    targets.truncate(12);
     if targets.is_empty() { return String::new(); }
 
-    let _ = tx.send(format!("🛠 tool-recon over {} host(s) (gau/katana + targeted nuclei)…", targets.len())).await;
+    let intensity = cfg.recon_intensity.max(1);
+    let (crawl_depth, url_cap, gf_cap) = match intensity {
+        0 | 1 => (2, 400, 15),
+        2     => (3, 800, 25),
+        3     => (4, 1500, 40),
+        _     => (5, 3000, 60), // exhaustive
+    };
+
+    let _ = tx.send(format!("🛠 tool-recon over {} host(s) (depth {crawl_depth}, cap {url_cap} URLs)…", targets.len())).await;
     let mut urls: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut nuclei_hits: Vec<String> = Vec::new();
+    let mut forms: Vec<String> = Vec::new();
+    let mut endpoints: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
     for host in &targets {
-        // URL harvest (historical + crawl).
-        let harvest = format!("( echo {host} | gau --threads 20 2>/dev/null; echo {host} | waybackurls 2>/dev/null; katana -u https://{host} -d 2 -jc -silent 2>/dev/null ) | sort -u | head -400");
+        // 1. Deep crawl + historical URL harvest.
+        let harvest = format!(
+            "( echo {host} | gau --threads 20 2>/dev/null; \
+               echo {host} | waybackurls 2>/dev/null; \
+               katana -u https://{host} -d {crawl_depth} -jc -kf all -ef css,png,jpg,gif,svg,woff,woff2,ttf,ico -silent 2>/dev/null \
+             ) | sort -u | head -{url_cap}");
         if let Some(out) = recon_tool(cfg, "gau", &harvest).await {
             for l in out.lines() { let u = l.trim(); if u.starts_with("http") { urls.insert(u.to_string()); } }
         }
-        // Targeted nuclei quick-wins (exposures/misconfig/takeover), high signal only.
+
+        // 2. Common endpoint discovery: robots.txt, sitemap.xml, well-known paths.
+        let common_paths = format!(
+            "for p in /robots.txt /sitemap.xml /sitemap_index.xml /.well-known/security.txt \
+             /wp-json/ /wp-json/wp/v2/posts /wp-json/wp/v2/users /xmlrpc.php \
+             /api /api/v1 /api/v2 /swagger.json /openapi.json /api-docs \
+             /graphql /.env /server-info /server-status /actuator /actuator/health \
+             /wp-login.php /wp-admin/ /administrator/ /admin/ /login /register /signup \
+             /feed /feed/atom /rss; do \
+               code=$(curl -s -o /dev/null -w '%{{http_code}}' -m 5 \"https://{host}$p\" 2>/dev/null); \
+               if [ \"$code\" != \"000\" ] && [ \"$code\" != \"404\" ]; then \
+                 echo \"$code $p\"; \
+               fi; \
+             done");
+        if let Some(out) = recon_tool(cfg, "curl", &common_paths).await {
+            for l in out.lines() {
+                let t = l.trim();
+                if !t.is_empty() { endpoints.insert(t.to_string()); }
+            }
+        }
+
+        // 3. Sitemap URL extraction (follow sitemap.xml for all listed URLs).
+        let sitemap = format!(
+            "curl -s -m 10 'https://{host}/sitemap.xml' 2>/dev/null | \
+             grep -oP '<loc>\\K[^<]+' | head -200");
+        if let Some(out) = recon_tool(cfg, "curl", &sitemap).await {
+            for l in out.lines() { let u = l.trim(); if u.starts_with("http") { urls.insert(u.to_string()); } }
+        }
+
+        // 4. JS endpoint extraction (linkfinder-style from inline and external JS).
+        let js_extract = format!(
+            "katana -u https://{host} -d 1 -jc -silent 2>/dev/null | grep -iE '\\.js(\\?|$)' | head -30 | \
+             while read js; do \
+               curl -s -m 8 \"$js\" 2>/dev/null | \
+               grep -oP '(?<=[\"\\x27])(/[a-zA-Z0-9_/\\-]+(?:\\?[a-zA-Z0-9_=&]+)?)(?=[\"\\x27])' | \
+               sed \"s|^|https://{host}|\" ; \
+             done | sort -u | head -100");
+        if let Some(out) = recon_tool(cfg, "katana", &js_extract).await {
+            for l in out.lines() { let u = l.trim(); if u.starts_with("http") { urls.insert(u.to_string()); } }
+        }
+
+        // 5. Form extraction (find all <form> actions + input names).
+        let form_extract = format!(
+            "curl -s -m 10 'https://{host}' 2>/dev/null | \
+             grep -ioP '<form[^>]*action=[\"\\x27]?([^\"\\x27\\s>]+)' | head -20; \
+             curl -s -m 10 'https://{host}' 2>/dev/null | \
+             grep -ioP '<input[^>]*name=[\"\\x27]([^\"\\x27]+)' | head -30");
+        if let Some(out) = recon_tool(cfg, "curl", &form_extract).await {
+            for l in out.lines() { let t = l.trim(); if !t.is_empty() { forms.push(t.to_string()); } }
+        }
+
+        // 6. Content discovery with ffuf/feroxbuster (high intensity only).
+        if intensity >= 3 {
+            let fuzz = format!(
+                "ffuf -u 'https://{host}/FUZZ' -w /usr/share/wordlists/dirb/common.txt \
+                 -mc 200,201,301,302,307,401,403,405 -t 20 -s 2>/dev/null | head -100 || \
+                 feroxbuster -u 'https://{host}' -w /usr/share/wordlists/dirb/common.txt \
+                 --no-recursion -t 20 -s 200,301,302,401,403 -q 2>/dev/null | head -100");
+            if let Some(out) = recon_tool(cfg, "ffuf", &fuzz).await {
+                for l in out.lines() {
+                    let u = l.trim();
+                    if !u.is_empty() && !u.starts_with('#') {
+                        let full = if u.starts_with("http") { u.to_string() } else { format!("https://{host}/{}", u.trim_start_matches('/')) };
+                        endpoints.insert(full);
+                    }
+                }
+            }
+        }
+
+        // 7. Parameter discovery with arjun (high intensity only).
+        if intensity >= 4 {
+            let param_disc = format!(
+                "arjun -u 'https://{host}' --stable -t 10 -q 2>/dev/null | head -30");
+            if let Some(out) = recon_tool(cfg, "arjun", &param_disc).await {
+                for l in out.lines() { let t = l.trim(); if !t.is_empty() { endpoints.insert(t.to_string()); } }
+            }
+        }
+
+        // 8. Targeted nuclei quick-wins (exposures/misconfig/takeover).
         let nuc = format!("nuclei -u https://{host} -t exposures/,misconfiguration/,takeovers/ -severity critical,high,medium -silent -nc 2>/dev/null | head -40");
         if let Some(out) = recon_tool(cfg, "nuclei", &nuc).await {
             for l in out.lines() { let t = l.trim(); if !t.is_empty() { nuclei_hits.push(t.to_string()); } }
         }
     }
-    if urls.is_empty() && nuclei_hits.is_empty() {
+
+    if urls.is_empty() && nuclei_hits.is_empty() && endpoints.is_empty() {
         let _ = tx.send("🛠 tool-recon: no tools available or no output (LLM recon continues)".into()).await;
         return String::new();
     }
+
     // gf-flag candidate URLs by class for the exploitation phase.
     let url_list = urls.iter().cloned().collect::<Vec<_>>().join("\n");
     let mut gf_block = String::new();
     if !url_list.is_empty() {
-        for pat in ["sqli", "xss", "ssrf", "redirect", "lfi", "idor"] {
-            let cmd = format!("printf '%s' {:?} | gf {pat} 2>/dev/null | head -15", url_list.chars().take(8000).collect::<String>());
+        for pat in ["sqli", "xss", "ssrf", "redirect", "lfi", "idor", "rce", "ssti"] {
+            let cmd = format!("printf '%s' {:?} | gf {pat} 2>/dev/null | head -{gf_cap}", url_list.chars().take(12000).collect::<String>());
             if let Some(out) = recon_tool(cfg, "gf", &cmd).await {
                 let hits: Vec<&str> = out.lines().map(|l| l.trim()).filter(|l| l.starts_with("http")).collect();
                 if !hits.is_empty() { gf_block.push_str(&format!("  {pat}: {}\n", hits.join("  "))); }
@@ -5179,10 +5454,26 @@ async fn kali_tool_recon(cfg: &RunConfig, hosts: &[String], tx: &Sender<String>)
         }
     }
 
-    let _ = tx.send(format!("🛠 tool-recon: {} URL(s) harvested, {} nuclei hit(s){}", urls.len(), nuclei_hits.len(),
-        if gf_block.is_empty() { String::new() } else { " · gf-flagged candidates added".into() })).await;
+    let _ = tx.send(format!(
+        "🛠 tool-recon: {} URL(s), {} endpoint(s), {} form(s), {} nuclei hit(s){}",
+        urls.len(), endpoints.len(), forms.len(), nuclei_hits.len(),
+        if gf_block.is_empty() { String::new() } else { " · gf-flagged candidates added".into() }
+    )).await;
 
     let mut block = String::from("\n\nTOOL-RECON OUTPUT (deterministic — work on top of this, verify each before reporting):\n");
+
+    // Discovered endpoints (common paths, content discovery).
+    if !endpoints.is_empty() {
+        block.push_str(&format!("Discovered endpoints ({}):\n", endpoints.len()));
+        for e in endpoints.iter().take(150) { block.push_str(&format!("- {e}\n")); }
+    }
+
+    // Forms and input fields.
+    if !forms.is_empty() {
+        block.push_str(&format!("Forms and inputs ({}):\n", forms.len()));
+        for f in forms.iter().take(50) { block.push_str(&format!("- {f}\n")); }
+    }
+
     if !nuclei_hits.is_empty() {
         block.push_str("Nuclei quick-wins (CONFIRM each with your own request — do not report a template name as a finding):\n");
         for h in nuclei_hits.iter().take(40) { block.push_str(&format!("- {h}\n")); }
@@ -5193,7 +5484,7 @@ async fn kali_tool_recon(cfg: &RunConfig, hosts: &[String], tx: &Sender<String>)
     }
     if !urls.is_empty() {
         block.push_str(&format!("Harvested URLs (sample of {}):\n", urls.len()));
-        for u in urls.iter().take(80) { block.push_str(&format!("- {u}\n")); }
+        for u in urls.iter().take(150) { block.push_str(&format!("- {u}\n")); }
     }
     block
 }
@@ -5471,6 +5762,7 @@ async fn deep_recon(cfg: &RunConfig, pool: &ModelPool, probe_facts: &str, tx: &S
     let _ = &fenced;
     let recon_start = std::time::Instant::now();
     let total_rounds = 1 + extra_rounds;
+    let budget = recon_budget_secs(intensity);
 
     // Time-budget directive: subscription CLIs run commands autonomously, so they
     // need an explicit cap to avoid running 150+ commands in a single round.
@@ -5480,12 +5772,12 @@ async fn deep_recon(cfg: &RunConfig, pool: &ModelPool, probe_facts: &str, tx: &S
          exhaustive crawling. AIM for 30-50 commands max per round — enough to map the surface, \
          not so many that exploitation never starts. STOP EARLY if you have enough intel to \
          select agents. When done, EMIT YOUR RESULTS IMMEDIATELY — do not start another pass.\n\n",
-        budget_secs = RECON_TOTAL_BUDGET_SECS / total_rounds as u64,
+        budget_secs = budget / total_rounds as u64,
     );
 
     // Initial deep pass.
     let user = format!("{dir}{budget_dir}{intensity_dir}{doctrine}OBSERVED HTTP PROBE (build on these, verify, go deeper):\n{probe_facts}\n\nTarget: {}", cfg.target);
-    let _ = tx.send(format!("recon: intensity {} — actively enumerating (budget {}s total, {} round(s))…", intensity, RECON_TOTAL_BUDGET_SECS, total_rounds)).await;
+    let _ = tx.send(format!("recon: intensity {} — actively enumerating (budget {}s total, {} round(s))…", intensity, budget, total_rounds)).await;
     match pool.complete_routed(Task::Recon, "recon", RECON_SYS, &user).await {
         Ok((m, t)) => { let _ = tx.send(format!("recon round 1 complete via {}", m.label())).await; accum.push_str(&format!("\n\nMODEL RECON (round 1):\n{t}")); }
         Err(e) => {
@@ -5506,8 +5798,8 @@ async fn deep_recon(cfg: &RunConfig, pool: &ModelPool, probe_facts: &str, tx: &S
         // Time budget check: if recon has already consumed the total budget, stop
         // and proceed to exploitation with whatever intelligence we gathered.
         let elapsed = recon_start.elapsed().as_secs();
-        if elapsed >= RECON_TOTAL_BUDGET_SECS {
-            let _ = tx.send(format!("recon: time budget exhausted ({elapsed}s/{RECON_TOTAL_BUDGET_SECS}s) — proceeding to exploitation with current intel")).await;
+        if elapsed >= budget {
+            let _ = tx.send(format!("recon: time budget exhausted ({elapsed}s/{budget}s) — proceeding to exploitation with current intel")).await;
             break;
         }
         let remaining = RECON_TOTAL_BUDGET_SECS - elapsed;
