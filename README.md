@@ -186,8 +186,45 @@ Every run is a self-contained folder, `runs/ns-<ts>-<target>/`:
 | `findings.json` / `findings.md` | validated findings (raw, for tools & re-testing) |
 | `report.sarif` | SARIF 2.1.0 for CI code-scanning |
 | `graph/` | attack chains, dependency todolist, Cypher + JSON export |
+| `attack-paths.json` · `attack-paths.mmd` | cross-domain attack paths (graph + Mermaid timeline) |
+| `loot.json` | credentials, tokens, hosts and endpoints the chaining rounds carried forward |
 | `recon.json` · `exploitation.md` · `traces/` | surface, transcript, per-agent traces |
 | `pocs/` · `evidence/` | runnable PoCs and proof screenshots |
+
+## Attack paths
+
+A single weakness is one step. The engagement is the sequence, and the sequence
+is what produces the impact: a traversal on a hypervisor yields root, root
+yields a machine-account keytab, the keytab authenticates to the directory, a
+share holds a database password, the database runs commands, the service
+account becomes SYSTEM, SYSTEM reads a domain admin hash out of memory, that
+hash reaches a workstation, and the workstation's process memory holds a cloud
+token that ends in a tenant administrator.
+
+NeuroSploit derives that sequence after every agent has reported, across every
+kind of test it runs — web, API, mobile, binaries, firmware, hosts, internal
+network, Active Directory, cloud, SaaS identity, containers, CI/CD and supply
+chain, AI/LLM agents, wireless, OT. Chaining is on what each step **produces**
+and the next one **consumes** (a hash, a ticket, a token, a shell, an implant,
+a file, reach into a network), and a link is drawn only where that material
+could actually travel:
+
+- **host-local** access (a shell, a writable service, a database role) stays on
+  the host it was obtained on;
+- **realm-wide** material (domain identities, Kerberos tickets, cloud roles)
+  moves inside its directory or tenant, with realm names matched across their
+  spellings (`CORP\\user`, `corp.local`, `CORP.LOCAL`);
+- **portable** material (passwords, hashes, API keys, bearer tokens) moves
+  anywhere, because that is what an attacker does with it.
+
+```bash
+neurosploit paths <run>              # ranked paths, on the run's own timeline
+neurosploit paths <run> --mermaid    # the graph
+neurosploit paths <run> --json       # nodes + edges for your own tooling
+```
+
+The same view is written into `report.md`, `report.html` and the PDF, and each
+finding's `chains_from` is filled with the causes that were derived for it.
 
 ## Integrations
 

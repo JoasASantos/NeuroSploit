@@ -3088,6 +3088,18 @@ async fn attack_chain(pool: &ModelPool, cfg: &RunConfig, recon: &str,
     if !all_new.is_empty() {
         let _ = tx.send(format!("⛓ attack-chaining added {} finding(s) across pivots", all_new.len())).await;
     }
+    // Persist the loot. Until now it existed only inside the round prompts and
+    // died with them, so the credentials an operator actually carried forward
+    // never reached the report. The attack-path builder folds this back in as
+    // material nodes.
+    if !loot.is_empty() {
+        if let Some(dir) = cfg.workdir.as_deref() {
+            let _ = std::fs::write(
+                Path::new(dir).join("loot.json"),
+                serde_json::to_string_pretty(&loot).unwrap_or_default(),
+            );
+        }
+    }
     all_new
 }
 
@@ -3575,6 +3587,22 @@ async fn validate(candidates: Vec<Finding>, pool: &ModelPool, sys: &str, vote_n:
 }
 
 async fn validate_with_persist(candidates: Vec<Finding>, pool: &ModelPool, sys: &str, vote_n: usize, tx: &Sender<String>, workdir: Option<&str>) -> Vec<Finding> {
+    // Stamp the clock. A path is a sequence in time as much as in dependency:
+    // the attack-path builder refuses to let a later step enable an earlier
+    // one, and it can only do that if each step records when it was proven.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let candidates: Vec<Finding> = candidates
+        .into_iter()
+        .map(|mut f| {
+            if f.observed_at == 0 {
+                f.observed_at = now;
+            }
+            f
+        })
+        .collect();
     // Fast-track: findings with no evidence are unverifiable — skip the vote
     // and flag for human review instead of wasting a validator call that will
     // always reject ("default to rejected when uncertain" + empty evidence).
@@ -4128,6 +4156,30 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
     let chained = crate::chain::apply_links(&mut findings);
     if chained > 0 {
         let _ = tx.send(format!("attack paths: {chained} finding(s) linked to what enables them")).await;
+    }
+    // Then chain them ACROSS domains. The rules above are web-local by design
+    // and stop at the host boundary; an engagement's real path does not — it
+    // carries a hash off a hypervisor into a directory, a share password into
+    // a database, a token out of process memory into a cloud tenant. This pass
+    // links on what each step produces and the next one consumes, for every
+    // plane the agent library covers, and only where the material could
+    // actually have travelled that far.
+    {
+        let loot: Vec<String> = cfg
+            .workdir
+            .as_deref()
+            .and_then(|d| std::fs::read_to_string(Path::new(d).join("loot.json")).ok())
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        let crossed = crate::attack_path::apply(&mut findings);
+        let graph = crate::attack_path::build(&cfg.target, &findings, &loot);
+        let best = graph.paths(1);
+        if crossed > 0 || best.first().map(|p| p.steps >= 2).unwrap_or(false) {
+            let _ = tx.send(format!("⛓ attack path: {}", crate::attack_path::summary(&graph))).await;
+        }
+        if let Some(p) = best.first().filter(|p| p.steps >= 2) {
+            let _ = tx.send(format!("⛓ best path: {}", p.narrative)).await;
+        }
     }
     // Collect proof screenshots into evidence/<finding-id>-N.png so the report
     // can embed each image beside its vulnerability.

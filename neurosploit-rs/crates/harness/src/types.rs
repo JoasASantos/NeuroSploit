@@ -92,6 +92,13 @@ pub struct Finding {
     /// the outcome in code instead of a judge reading prose.
     #[serde(default)]
     pub claims: Option<crate::claims::ClaimSet>,
+    /// When this step was proven, as epoch seconds. An attack path is a
+    /// sequence in time as much as in dependency: two findings that chain are
+    /// ordered by when each was demonstrated, and a report that draws the
+    /// path without the clock cannot say which step opened the next one.
+    /// Zero means unknown, and the path falls back to dependency order.
+    #[serde(default)]
+    pub observed_at: u64,
     /// Structured artifacts for the deterministic validation engine: the
     /// baseline/attack pair, repeats, markers, identity pair. Agents that
     /// follow the evidence contract emit this alongside the finding, and
@@ -133,6 +140,7 @@ impl Default for Finding {
             repro_steps: Vec::new(),
             claims: None,
             evidence_data: None,
+            observed_at: 0,
         }
     }
 }

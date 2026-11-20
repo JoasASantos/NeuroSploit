@@ -116,6 +116,28 @@
 
 #let sorted = findings.sorted(key: f => sevrank(f.severity))
 
+// ---- Attack paths ----
+// The chained view: what one weakness handed the next, across every plane the
+// engagement touched. Rendered before the per-finding detail because that is
+// the order the question is asked in.
+#let paths = if type(attack_paths) == array { attack_paths } else { () }
+#if paths.len() > 0 [
+  #v(8pt)
+  == Attack Paths
+  #v(2pt)
+  #text(9pt, fill: gray)[Each path is a proven sequence: a weakness yields material — a credential, a token, a session, a foothold — and the next step consumes it. A link is drawn only where that material could travel: host-local access stays on its host, directory and tenant material moves inside its realm, credentials move anywhere.]
+  #for (i, p) in paths.enumerate() [
+    #v(6pt)
+    #block(width: 100%, inset: 8pt, radius: 6pt, fill: rgb("#faf3f2"), stroke: 0.5pt + rgb("#c0392b"))[
+      #text(10pt, weight: "bold")[Path #str(i + 1) — #p.title]
+      #v(-2pt)
+      #text(8pt, fill: gray)[#p.meta]
+      #v(2pt)
+      #enum(..p.steps.map(s => [#text(9pt)[#s]]))
+    ]
+  ]
+]
+
 // ---- Vulnerability summary table ----
 #if sorted.len() > 0 [
   #v(8pt)
