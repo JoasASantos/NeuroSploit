@@ -128,6 +128,11 @@ pub fn html_with_pocs(target: &str, findings: &[Finding], meta: &EngagementMeta,
         )
     };
 
+    // Attack paths: the chained view, ahead of the per-finding detail because
+    // that is the order the question is asked in — what was the route, then
+    // what were the individual holes.
+    let paths_section = attack_paths_html(target, findings);
+
     let rows: String = sorted
         .iter()
         .enumerate()
@@ -240,10 +245,12 @@ pub fn html_with_pocs(target: &str, findings: &[Finding], meta: &EngagementMeta,
            {techrow}{serverrow}\
          </table>\
          <h2>Executive Summary</h2><div class=summary-grid>{summary_grid}</div>\
+         {paths_section}\
          {vuln_summary}\
          <h2>Findings ({n})</h2>{body}\
          <p class=footer>Authorized testing only. Confirmed findings passed multi-model voting, receipt grounding and adversarial refute; \"needs-review\" are flagged for a human.<br>NeuroSploit v{VER} · by <b>Joas A Santos</b> &amp; <b>Red Team Leaders</b><br><span style=\"font-family:ui-monospace,monospace\">{provenance}</span></p></body></html>",
         t = esc(target), n = sorted.len(), body = body, summary_grid = summary_grid, vuln_summary = vuln_summary,
+        paths_section = paths_section,
         VER = env!("CARGO_PKG_VERSION"),
         // Which build produced this document. A report that circulates without
         // it is a report nobody can trace back to the run that made it.
@@ -271,6 +278,54 @@ pub fn html_with_pocs(target: &str, findings: &[Finding], meta: &EngagementMeta,
 // ---------------------------------------------------------------------------
 
 /// Where the problem is, in one line, as precisely as the finding allows.
+/// The ranked attack paths as an HTML section. Empty when nothing chained.
+fn attack_paths_html(target: &str, findings: &[Finding]) -> String {
+    let g = crate::attack_path::build(target, findings, &[]);
+    let paths = g.paths(5);
+    let real: Vec<&crate::attack_path::Path> = paths.iter().filter(|p| p.steps >= 2).collect();
+    if real.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from(
+        "<h2>Attack Paths</h2><p style=\"opacity:.8\">Each path is a proven sequence: a weakness yields \
+         material — a credential, a token, a session, a foothold — and the next step consumes it. Links are \
+         drawn only where that material could travel: host-local access stays on its host, directory and tenant \
+         material moves inside its realm, credentials move anywhere.</p>",
+    );
+    for (i, p) in real.iter().enumerate() {
+        let ends = if p.impacts.is_empty() {
+            "chained impact".to_string()
+        } else {
+            p.impacts.iter().map(|i| i.as_str()).collect::<Vec<_>>().join(" + ")
+        };
+        s.push_str(&format!(
+            "<section class=finding style=border-left-color:#c0392b><h3>Path {} — {}</h3>\
+             <p style=\"opacity:.75\">{} exploited weakness(es) · {} domain(s): {} · {} host(s)</p><ol>",
+            i + 1,
+            esc(&ends),
+            p.steps,
+            p.domains.len(),
+            esc(&p.domains.iter().map(|d| d.as_str()).collect::<Vec<_>>().join(", ")),
+            p.hosts.len().max(1)
+        ));
+        for id in &p.nodes {
+            let Some(n) = g.node(id) else { continue };
+            if n.kind == crate::attack_path::NodeKind::Entry {
+                continue;
+            }
+            let detail = if n.detail.is_empty() { String::new() } else { format!(" <span style=\"opacity:.6\">({})</span>", esc(&n.detail)) };
+            s.push_str(&format!(
+                "<li><b>{}</b> — {}{}</li>",
+                esc(n.kind.as_str()),
+                esc(&n.label),
+                detail
+            ));
+        }
+        s.push_str("</ol></section>");
+    }
+    s
+}
+
 pub fn location_line(f: &Finding) -> String {
     match (f.location.trim(), f.endpoint.trim()) {
         ("", "") => "(location not recorded)".into(),
@@ -549,6 +604,45 @@ pub fn typst_report(target: &str, findings: &[Finding], dir: &Path) -> std::io::
         accounts_arr,
         tq(&crate::provenance::Provenance::process().tag()),
     ));
+    // Attack paths for the PDF: the chained story, as data the template
+    // renders. A client deliverable that lists holes without the route between
+    // them makes the reader rebuild the engagement in their head.
+    {
+        let g = crate::attack_path::build(target, findings, &[]);
+        let paths = g.paths(5);
+        data.push_str("#let attack_paths = (\n");
+        for p in paths.iter().filter(|p| p.steps >= 2) {
+            let ends = if p.impacts.is_empty() {
+                "chained impact".to_string()
+            } else {
+                p.impacts.iter().map(|i| i.as_str()).collect::<Vec<_>>().join(" + ")
+            };
+            let meta_line = format!(
+                "{} exploited weakness(es) · {} domain(s): {} · {} host(s)",
+                p.steps,
+                p.domains.len(),
+                p.domains.iter().map(|d| d.as_str()).collect::<Vec<_>>().join(", "),
+                p.hosts.len().max(1)
+            );
+            let steps: String = p
+                .nodes
+                .iter()
+                .filter_map(|id| g.node(id))
+                .filter(|n| n.kind != crate::attack_path::NodeKind::Entry)
+                .map(|n| {
+                    let detail = if n.detail.is_empty() { String::new() } else { format!(" ({})", n.detail) };
+                    format!("{},", tq(&format!("{} — {}{}", n.kind.as_str(), n.label, detail)))
+                })
+                .collect();
+            data.push_str(&format!(
+                "  (title: {}, meta: {}, steps: ({})),\n",
+                tq(&ends),
+                tq(&meta_line),
+                steps
+            ));
+        }
+        data.push_str(")\n");
+    }
     data.push_str("#let findings = (\n");
     for f in &sorted {
         let owasp = if f.owasp.is_empty() { f.cwe.clone() } else { f.owasp.clone() };
@@ -693,6 +787,18 @@ pub fn markdown(target: &str, findings: &[Finding], meta: &EngagementMeta) -> St
     // --- Executive summary ---
     out.push_str("## Executive summary\n\n");
     out.push_str(&exec_summary(target, meta, &confirmed, &review));
+
+    // --- Attack paths ---
+    // An engagement is read as a story before it is read as a list: what did
+    // one weakness hand the attacker, and what did the next one do with it.
+    // The section is placed before the per-finding detail because that is the
+    // order the question is asked in.
+    {
+        let paths = crate::attack_path::build(target, findings, &[]);
+        if paths.paths(1).iter().any(|p| p.steps >= 2) {
+            out.push_str(&paths.markdown(5));
+        }
+    }
 
     // --- Vulnerability table ---
     out.push_str("## Vulnerability summary\n\n");
@@ -855,6 +961,18 @@ pub fn write_all(target: &str, findings: &[Finding], dir: &Path) -> std::io::Res
     if let Err(e) = crate::graph_memory::write_artifacts(target, &run_id, raw, dir) {
         eprintln!("graph: skipped ({e})");
     }
+    // Cross-domain attack paths: the chained view, as JSON for tooling and
+    // Mermaid for anything that renders a diagram. Loot carried forward by the
+    // chaining rounds is folded in when the run recorded it.
+    {
+        let loot: Vec<String> = std::fs::read_to_string(dir.join("loot.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        let g = crate::attack_path::build(target, raw, &loot);
+        let _ = std::fs::write(dir.join("attack-paths.json"), redactor.text(&g.json()));
+        let _ = std::fs::write(dir.join("attack-paths.mmd"), redactor.text(&g.mermaid()));
+    }
     let pocs: Vec<String> = std::fs::read_dir(dir.join("pocs"))
         .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect())
         .unwrap_or_default();
@@ -883,6 +1001,8 @@ pub fn rebuild(dir: &Path) -> std::io::Result<PathBuf> {
     crate::attack_graph::remap_stages(&mut findings);
     crate::chain::repair(&mut findings);
     crate::chain::apply_links(&mut findings);
+    // The cross-domain links the web-local rules cannot see.
+    crate::attack_path::apply(&mut findings);
     let _ = std::fs::write(dir.join("findings.json"), serde_json::to_string_pretty(&findings).unwrap_or_default());
     let status: serde_json::Value = std::fs::read_to_string(dir.join("status.json"))
         .ok()

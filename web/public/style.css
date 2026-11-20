@@ -478,6 +478,10 @@ textarea { resize: vertical; min-height: 72px; }
 .auth-mode-toggle button { border: none; background: var(--surface); padding: 8px 14px; font-size: var(--fs-sm); color: var(--text-dim); }
 .auth-mode-toggle button.selected { background: var(--accent); color: var(--accent-contrast); font-weight: 600; }
 .auth-mode-toggle button:disabled { opacity: .45; cursor: not-allowed; }
+.auth-mode-toggle.mini button { padding: 4px 10px; font-size: 12px; }
+.extra-model-row { align-items: center; }
+.extra-model-row select { min-width: 120px; }
+.extra-model-remove { padding: 2px 8px; line-height: 1; align-self: center; }
 
 .check-row { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); color: var(--text-dim); }
 .check-row input[type="checkbox"] {

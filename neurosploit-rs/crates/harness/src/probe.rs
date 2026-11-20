@@ -88,6 +88,11 @@ pub struct Probe {
     /// can tell a real hit from a soft-404 catch-all.
     pub baseline_404_status: u16,
     pub baseline_404_len: usize,
+    /// WAF/CDN challenge detected — the initial response is an interstitial, not
+    /// the real application. Agents must use a browser to solve the challenge.
+    pub waf_challenge: bool,
+    /// Identified WAF/CDN vendor (e.g. "Cloudflare").
+    pub waf_vendor: String,
     pub notes: Vec<String>,
 }
 
@@ -344,6 +349,59 @@ pub async fn probe(target: &str) -> Probe {
         p.notes.push("JS-rendered SPA — curl sees the shell only; use the browser (MCP/Playwright) to render, enumerate routes, and discover the API.".to_string());
     }
 
+    // WAF/challenge detection: classify the response through the WAF module to
+    // detect interstitial challenges (Cloudflare JS challenge, Turnstile, etc.)
+    // that make curl-based recon useless. When detected, the recon phase switches
+    // to browser-first mode.
+    {
+        let header_pairs: Vec<(String, String)> = h.iter()
+            .filter_map(|(k, v)| v.to_str().ok().map(|vs| (k.as_str().to_string(), vs.to_string())))
+            .collect();
+        let verdict = crate::waf::classify(p.status, &header_pairs, &body);
+        match verdict.origin {
+            crate::waf::Origin::EdgeThrottled | crate::waf::Origin::EdgeBlocked => {
+                p.waf_challenge = true;
+                if let Some(v) = &verdict.vendor {
+                    p.waf_vendor = v.name.clone();
+                }
+                p.notes.push(format!(
+                    "⚠ WAF/CDN challenge detected ({}): {} — curl-based recon will not see the real application. \
+                     Browser (Playwright) is REQUIRED to solve the challenge and reach the app.",
+                    verdict.origin.as_str(), verdict.reason
+                ));
+            }
+            crate::waf::Origin::Application => {
+                if let Some(v) = &verdict.vendor {
+                    p.waf_vendor = v.name.clone();
+                    p.notes.push(format!("WAF/CDN detected ({}) but response is from the application — curl recon is valid.", v.name));
+                }
+            }
+        }
+        // Extra heuristic: Cloudflare challenge pages that return 403 with a JS
+        // challenge body (even if waf::classify didn't catch it via the specific
+        // enforcement headers).
+        let body_low = body.to_lowercase();
+        if !p.waf_challenge && p.tech.iter().any(|t| t == "Cloudflare") {
+            let cf_challenge_signals = [
+                "checking your browser",
+                "just a moment",
+                "enable javascript",
+                "cf-chl-bypass",
+                "turnstile",
+                "challenges.cloudflare.com",
+                "_cf_chl_opt",
+                "cf_chl_prog",
+            ];
+            if cf_challenge_signals.iter().any(|s| body_low.contains(s)) {
+                p.waf_challenge = true;
+                p.waf_vendor = "Cloudflare".into();
+                p.notes.push(
+                    "⚠ Cloudflare JS challenge/Turnstile detected in response body — browser is REQUIRED.".into()
+                );
+            }
+        }
+    }
+
     // CORS reflection probe.
     if let Ok(r2) = c.get(target).header("Origin", "https://evil.neurosploit.test").send().await {
         let acao = hget(r2.headers(), "access-control-allow-origin");
@@ -382,7 +440,7 @@ pub fn probe_json(p: &Probe) -> String {
 
 /// One-line human summary for the live feed.
 pub fn probe_summary(p: &Probe) -> String {
-    format!(
+    let mut s = format!(
         "probe: HTTP {} {}{} · {}{} · sec-headers {}/6 · {} cookie(s) · {} script(s){}{}{}",
         p.status,
         if p.server.is_empty() { "".into() } else { format!("{} ", p.server) },
@@ -398,7 +456,11 @@ pub fn probe_summary(p: &Probe) -> String {
         },
         if p.cors.reflects_origin { " · CORS reflects origin!" } else { "" },
         if p.interesting_paths.is_empty() { String::new() } else { format!(" · hits: {}", p.interesting_paths.iter().map(|h| h.path.clone()).collect::<Vec<_>>().join(",")) },
-    )
+    );
+    if p.waf_challenge {
+        s.push_str(&format!(" · ⚠ {} CHALLENGE (browser required)", if p.waf_vendor.is_empty() { "WAF" } else { &p.waf_vendor }));
+    }
+    s
 }
 
 #[cfg(test)]

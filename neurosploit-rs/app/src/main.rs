@@ -300,6 +300,25 @@ enum Cmd {
     /// with local vs chain severity, next moves, a Cypher export — and, with
     /// --push (or NEO4J_URI set), MERGE into Neo4j and reason over paths
     /// accumulated across runs
+    /// Cross-domain attack paths for a finished run: the chained story, from
+    /// the first weakness to the compromise it ends in, across web, API,
+    /// mobile, binaries, hosts, Active Directory, cloud and identity.
+    Paths {
+        /// Run id (`ns-…`) or a path to the run directory.
+        run: String,
+        /// How many paths to print.
+        #[arg(long = "top", default_value_t = 3)]
+        top: usize,
+        /// Print the Mermaid graph instead of the terminal view.
+        #[arg(long = "mermaid")]
+        mermaid: bool,
+        /// Print the graph as JSON.
+        #[arg(long = "json")]
+        json: bool,
+        /// Write `attack-paths.json` and `attack-paths.mmd` into the run dir.
+        #[arg(long = "save")]
+        save: bool,
+    },
     Graph {
         /// Run id (`ns-…`) or a path to the run directory.
         run: String,
@@ -1005,6 +1024,7 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Audit { run, anchor } => handle_audit(&base, &run, anchor)?,
         Cmd::Traffic { run } => handle_traffic(&base, &run)?,
         Cmd::Sarif { run, out } => handle_sarif(&base, &run, out.as_deref())?,
+        Cmd::Paths { run, top, mermaid, json, save } => handle_paths(&base, &run, top, mermaid, json, save)?,
         Cmd::Graph { run, internal, push, top } => handle_graph(&base, &run, internal.as_deref(), push, top, cli.neo4j.as_deref()).await?,
         Cmd::Assurance { run, verify } => handle_assurance(&base, &run, verify)?,
         Cmd::Compliance { run, framework, include_leads } => handle_compliance(&base, &run, &framework, include_leads)?,
@@ -1687,6 +1707,13 @@ pub(crate) fn print_findings(out: &RunOutput) {
         println!("  severity: {}", chips.join("  "));
         println!("\n  \x1b[1mAttack path / kill chain\x1b[0m");
         print!("{}", harness::attack_graph::ascii_killchain(&out.findings));
+        // The chained view: what each step handed the next one, across every
+        // plane the run touched. Printed only when something actually chained.
+        let paths = harness::attack_path::build("", &out.findings, &[]);
+        if paths.paths(1).iter().any(|p| p.steps >= 2) {
+            println!("\n  \x1b[1mChained attack paths\x1b[0m  ({})", harness::attack_path::summary(&paths));
+            print!("{}", paths.ascii(3));
+        }
     }
     let toks = token_summary();
     if !toks.is_empty() {
@@ -2001,6 +2028,36 @@ fn handle_traffic(base: &std::path::Path, run: &str) -> anyhow::Result<()> {
     let dest = dir.join("traffic.http");
     std::fs::write(&dest, out)?;
     println!("  exported {n} exchange(s) -> {}", dest.display());
+    Ok(())
+}
+
+/// The attack-path view of a finished run.
+fn handle_paths(base: &std::path::Path, run: &str, top: usize, mermaid: bool, json: bool, save: bool) -> anyhow::Result<()> {
+    let dir = resolve_run(base, run)?;
+    let findings = load_findings(&dir)?;
+    let target = std::fs::read_to_string(dir.join("meta.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("target").and_then(|x| x.as_str()).map(String::from))
+        .unwrap_or_else(|| run.to_string());
+    let loot: Vec<String> = std::fs::read_to_string(dir.join("loot.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    let g = harness::attack_path::build(&target, &findings, &loot);
+    if json {
+        println!("{}", g.json());
+    } else if mermaid {
+        println!("{}", g.mermaid());
+    } else {
+        println!("target: {target}  ·  {}", harness::attack_path::summary(&g));
+        print!("{}", g.ascii(top));
+    }
+    if save {
+        std::fs::write(dir.join("attack-paths.json"), g.json())?;
+        std::fs::write(dir.join("attack-paths.mmd"), g.mermaid())?;
+        println!("\nwrote {} and {}", dir.join("attack-paths.json").display(), dir.join("attack-paths.mmd").display());
+    }
     Ok(())
 }
 

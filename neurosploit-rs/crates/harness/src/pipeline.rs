@@ -145,6 +145,66 @@ const RECON_SYS: &str = "You are an elite web recon specialist on an AUTHORIZED 
   Prioritise auth/reset/payment/upload/admin/export flows and the less-hardened subdomains.\n\
 Base everything on real observed responses — never assume. Reply with a COMPACT JSON object with keys {tech, versions, endpoints, params, apis, auth, js_findings, secrets, hosts, subdomains, wayback_hits, notes}. No prose.";
 
+/// Cloudflare / WAF bypass context injected into recon and exploit prompts when
+/// the probe detects a challenge page. Covers browser-first tactics, origin IP
+/// discovery, and encoding tricks that bypass edge rules.
+const CF_BYPASS_OPS: &str = "\
+⚠ CLOUDFLARE / WAF CHALLENGE DETECTED — the target is behind a CDN/WAF that serves a JS challenge \
+page to curl. Plain HTTP requests (curl/wget/httpx) will NOT reach the real application. You MUST \
+adapt your approach:\n\n\
+BROWSER-PREFETCHED HTML (check recon context first):\n\
+- The harness may have prefetched key pages through a real browser. If you see a \
+  'BROWSER-PREFETCHED PAGES' section in the recon context, USE THAT HTML as ground truth. \
+  Do NOT re-fetch those pages with curl — the WAF will block you and you will get a challenge page, \
+  NOT the real application. Analyze the prefetched HTML instead.\n\n\
+BROWSER-FIRST (MANDATORY when available):\n\
+- Use Playwright/MCP browser tools for ALL page navigation — the browser solves JS challenges and \
+  Turnstile automatically. Navigate to the target, wait for the challenge to resolve, then crawl.\n\
+- After the browser solves the challenge, extract the `cf_clearance` cookie from the browser session \
+  and reuse it in curl requests: `curl -b 'cf_clearance=<value>' <url>` — this lets curl bypass the \
+  challenge for subsequent API/endpoint probing.\n\
+- For form submission and authenticated testing, stay in the browser session that passed the challenge.\n\n\
+ORIGIN IP DISCOVERY (bypass the CDN entirely):\n\
+- DNS history: `curl -s 'https://securitytrails.com/domain/<domain>/history/a'` or check SecurityTrails/ViewDNS.\n\
+- Certificate transparency: `curl -s 'https://crt.sh/?q=%25.<domain>&output=json' | jq -r '.[].name_value'` — \
+  look for IPs in cert SANs that differ from the CDN edge.\n\
+- Shodan/Censys: `shodan search 'ssl.cert.subject.CN:<domain>'` — finds the origin server by its cert.\n\
+- Mail headers: if the app sends email (password reset), check Received headers for the origin IP.\n\
+- Subdomain bypass: non-web subdomains (mail., ftp., cpanel., direct.) often resolve to the origin IP.\n\
+- Once you find a candidate origin IP, test: `curl -sk -H 'Host: <domain>' https://<origin-ip>/` — if \
+  it returns the real app without a challenge, use `--resolve <domain>:443:<ip>` for all subsequent requests.\n\n\
+ENCODING & EVASION TRICKS (use when WAF blocks specific paths/payloads):\n\
+- Unicode fullwidth chars: `%EF%BC%8F` (fullwidth `/`), `%EF%BC%8E` (fullwidth `.`) — many WAFs don't \
+  normalize Unicode but the backend does, so `/admin` blocked but `/%EF%BC%8Fadmin` passes through.\n\
+- Double URL encoding: `%252F` for `/`, `%252E` for `.` — WAF decodes once (sees `%2F`), app decodes \
+  twice (sees `/`).\n\
+- Overlong UTF-8: `%C0%AF` (overlong `/`), `%C0%AE` (overlong `.`) — bypasses pattern-matching rules.\n\
+- Mixed case: `/Admin` vs `/admin` vs `/ADMIN` — some WAF rules are case-sensitive.\n\
+- Path traversal with Unicode: `..%EF%BC%8F`, `..%c0%af`, `..%252f`.\n\
+- Null byte: `%00` before the extension or in the path.\n\
+- HTTP method override: `X-HTTP-Method-Override: PUT`, `X-Original-URL: /admin`.\n\
+- Header tricks: `X-Forwarded-For: 127.0.0.1`, `X-Real-IP: 127.0.0.1` — some CDN configs trust these.\n\
+- HTTP/2 smuggling: use `--http2` with curl when available.\n\
+- Chunked encoding: split payloads across Transfer-Encoding: chunked body chunks.\n\n\
+FALLBACK RECON (if browser is unavailable):\n\
+- Try common paths with encoding variants: for each path in [/admin, /api, /login, /wp-admin, /graphql, \
+  /swagger, /.env, /.git], also try the Unicode/double-encoded variants above.\n\
+- Use `gau`/`waybackurls` to discover cached URLs from before the WAF was added.\n\
+- Check if HTTP (port 80) bypasses the challenge while HTTPS doesn't, or vice versa.\n\
+- Try alternative ports: 8080, 8443, 3000, 4443 — these may not be proxied through the CDN.\n";
+
+/// Shorter WAF bypass hint for exploit agents (the full block goes in recon).
+const CF_BYPASS_EXPLOIT_HINT: &str = "\
+⚠ TARGET IS BEHIND CLOUDFLARE/WAF — if 'BROWSER-PREFETCHED PAGES' are in the recon context, \
+analyze THAT HTML as ground truth (do NOT re-fetch with curl, it will be blocked). \
+For pages NOT prefetched, use the BROWSER (Playwright) for navigation. \
+If you need curl, extract `cf_clearance` from the browser session first. \
+For blocked paths/payloads, try Unicode encoding (`%EF%BC%8F` for `/`), double encoding \
+(`%252F`), overlong UTF-8 (`%C0%AF`), mixed case, and header tricks \
+(`X-Original-URL`, `X-Forwarded-For: 127.0.0.1`). \
+CRITICAL: if curl returns a Cloudflare challenge page (403 with 'Just a moment'), that is NOT \
+the real application response — do NOT report findings based on WAF challenge content.\n";
+
 /// `NEUROSPLOIT_PROMPT_PREFIX=1` moves the block shared by every exploit agent
 /// to the front of the system message so provider prompt caches can hit on it.
 fn prompt_prefix_enabled() -> bool {
@@ -568,6 +628,410 @@ pub fn realistic_user_agent() -> &'static str {
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 }
 
+/// Browser prefetch: when a WAF/JS-challenge blocks curl, use a headless
+/// browser to render key endpoints and collect the real HTML.  Returns a
+/// context block that agents receive instead of having to fetch pages
+/// themselves (which would hit the WAF and produce hallucinated evidence).
+async fn browser_prefetch(
+    target: &str,
+    recon_json: &str,
+    tx: &Sender<String>,
+) -> String {
+    let urls = extract_prefetch_urls(target, recon_json);
+    if urls.is_empty() {
+        return String::new();
+    }
+    let _ = tx.send(format!(
+        "🌐 browser prefetch: fetching {} endpoint(s) through headless Chromium to bypass WAF",
+        urls.len()
+    )).await;
+
+    let script = r#"
+const { chromium } = require('playwright');
+(async () => {
+    const urls = JSON.parse(process.argv[2]);
+    const results = {};
+    let browser;
+    try {
+        browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+    } catch (e) {
+        console.log(JSON.stringify({ error: 'browser_launch_failed: ' + e.message }));
+        return;
+    }
+    const context = await browser.newContext({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    });
+    for (const url of urls) {
+        try {
+            const page = await context.newPage();
+            const resp = await page.goto(url, { waitUntil: 'networkidle', timeout: 15000 });
+            const status = resp ? resp.status() : 0;
+            const html = await page.content();
+            // Truncate to 4000 chars per page to fit agent context
+            results[url] = { status, html: html.substring(0, 4000) };
+            await page.close();
+        } catch (e) {
+            results[url] = { status: 0, html: '', error: e.message };
+        }
+    }
+    await browser.close();
+    console.log(JSON.stringify(results));
+})();
+"#;
+
+    let script_path = "/tmp/ns_browser_prefetch.js";
+    if let Err(e) = std::fs::write(script_path, script) {
+        let _ = tx.send(format!("⚠ browser prefetch: failed to write script: {e}")).await;
+        return String::new();
+    }
+
+    let urls_json = serde_json::to_string(&urls).unwrap_or_default();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(90),
+        tokio::process::Command::new("node")
+            .arg(script_path)
+            .arg(&urls_json)
+            .output(),
+    ).await;
+
+    let output = match result {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => {
+            let _ = tx.send(format!("⚠ browser prefetch: node failed: {e}")).await;
+            return String::new();
+        }
+        Err(_) => {
+            let _ = tx.send("⚠ browser prefetch: timed out (90s)".into()).await;
+            return String::new();
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = match serde_json::from_str(stdout.trim()) {
+        Ok(v) => v,
+        Err(_) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("Cannot find module") || stderr.contains("playwright") {
+                let _ = tx.send("⚠ browser prefetch: Playwright not installed — run `npx -y playwright@latest install chromium`".into()).await;
+            } else {
+                let _ = tx.send(format!("⚠ browser prefetch: failed to parse output (stderr: {})", &stderr[..stderr.len().min(200)])).await;
+            }
+            return String::new();
+        }
+    };
+
+    if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
+        let _ = tx.send(format!("⚠ browser prefetch: {err}")).await;
+        return String::new();
+    }
+
+    let mut block = String::from(
+        "\n\n--- BROWSER-PREFETCHED PAGES (real rendered HTML, bypassed WAF) ---\n\
+         The harness fetched these pages through a real browser. Use this HTML as\n\
+         ground truth instead of running curl (which will hit the WAF). Do NOT\n\
+         fabricate HTTP responses — if a page is not listed here, you do not have\n\
+         its content and must state that.\n\n"
+    );
+    let mut fetched = 0usize;
+    if let Some(obj) = parsed.as_object() {
+        for (url, data) in obj {
+            let status = data.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
+            let html = data.get("html").and_then(|v| v.as_str()).unwrap_or("");
+            let error = data.get("error").and_then(|v| v.as_str()).unwrap_or("");
+            if !html.is_empty() && status > 0 {
+                block.push_str(&format!(
+                    "### {url} (HTTP {status})\n```html\n{html}\n```\n\n"
+                ));
+                fetched += 1;
+            } else if !error.is_empty() {
+                block.push_str(&format!("### {url} — FAILED: {error}\n\n"));
+            }
+        }
+    }
+
+    if fetched == 0 {
+        let _ = tx.send("⚠ browser prefetch: no pages rendered successfully".into()).await;
+        return String::new();
+    }
+
+    let _ = tx.send(format!(
+        "✓ browser prefetch: {fetched}/{} page(s) rendered — agents will use real HTML",
+        urls.len()
+    )).await;
+    block
+}
+
+/// Extract URLs worth prefetching from recon JSON: the target itself plus
+/// any explicitly discovered endpoints (login, register, OAuth, verify, etc.).
+fn extract_prefetch_urls(target: &str, recon_json: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    let base = target.trim_end_matches('/');
+    urls.push(base.to_string());
+
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(recon_json) {
+        // Walk "endpoints" object for url fields
+        if let Some(endpoints) = v.get("endpoints").and_then(|e| e.as_object()) {
+            for (_key, ep) in endpoints {
+                if let Some(url) = ep.get("url").and_then(|u| u.as_str()) {
+                    if url.starts_with("http") && !urls.contains(&url.to_string()) {
+                        urls.push(url.to_string());
+                    }
+                }
+            }
+        }
+        // Walk "oauth" for login URLs
+        if let Some(endpoints) = v.get("endpoints") {
+            if let Some(oauth) = endpoints.get("oauth").and_then(|o| o.as_object()) {
+                for (_key, url_val) in oauth {
+                    if let Some(url) = url_val.as_str() {
+                        if url.starts_with("http") && !urls.contains(&url.to_string()) {
+                            urls.push(url.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Cap to 10 URLs to avoid overlong prefetch
+    urls.truncate(10);
+    urls
+}
+
+// =========================================================================
+// CAG — Context-Augmented Generation
+// =========================================================================
+// Instead of letting agents fetch pages (and hallucinate responses when WAF
+// blocks them), the harness pre-collects HTTP evidence for every discovered
+// endpoint and injects it into the agent context.  Agents analyze provided
+// data only; they cannot fabricate what they never received.
+
+/// A single pre-collected HTTP response.
+#[derive(Clone, Serialize, Deserialize)]
+struct CagResponse {
+    url: String,
+    method: String,
+    status: u16,
+    headers: std::collections::HashMap<String, String>,
+    body: String,
+    via: String, // "browser" or "curl"
+}
+
+/// Full CAG evidence cache for a run.
+#[derive(Default, Clone, Serialize, Deserialize)]
+struct CagCache {
+    responses: Vec<CagResponse>,
+}
+
+impl CagCache {
+    fn is_empty(&self) -> bool { self.responses.is_empty() }
+    fn len(&self) -> usize { self.responses.len() }
+
+    fn to_context(&self, max_chars: usize) -> String {
+        if self.responses.is_empty() {
+            return String::new();
+        }
+        let mut out = String::from(
+            "\n\n=== CAG: PRE-COLLECTED HTTP EVIDENCE ===\n\
+             The harness fetched these responses BEFORE you were invoked.\n\
+             RULES:\n\
+             1. Analyze ONLY the data below — do NOT fabricate HTTP responses.\n\
+             2. If an endpoint is not listed here, you do NOT have its response.\n\
+             3. Any finding you report MUST reference evidence from this section.\n\
+             4. curl/wget commands you run against WAF-protected targets will return\n\
+                challenge pages, NOT the real application — use this data instead.\n\n"
+        );
+        let mut budget = max_chars;
+        for r in &self.responses {
+            let header_block: String = r.headers.iter()
+                .filter(|(k, _)| {
+                    let lk = k.to_lowercase();
+                    ["content-type", "set-cookie", "location", "x-powered-by",
+                     "server", "x-frame-options", "content-security-policy",
+                     "access-control-allow-origin", "www-authenticate",
+                     "x-csrf-token", "x-request-id"]
+                        .iter().any(|h| lk.contains(h))
+                })
+                .map(|(k, v)| format!("  {k}: {v}"))
+                .collect::<Vec<_>>().join("\n");
+            let body_cap = r.body.chars().take(3000).collect::<String>();
+            let entry = format!(
+                "### {} {} → HTTP {status} (via {via})\n{headers}\n```\n{body}\n```\n\n",
+                r.method, r.url,
+                status = r.status, via = r.via,
+                headers = if header_block.is_empty() { String::from("  (no security-relevant headers)") } else { header_block },
+                body = body_cap,
+            );
+            if entry.len() > budget { break; }
+            budget -= entry.len();
+            out.push_str(&entry);
+        }
+        out.push_str("=== END CAG EVIDENCE ===\n");
+        out
+    }
+}
+
+/// Collect HTTP evidence for all discovered endpoints.
+/// Uses browser when WAF is detected, curl otherwise.
+async fn cag_collect(
+    target: &str,
+    recon_json: &str,
+    waf_challenge: bool,
+    tx: &Sender<String>,
+) -> CagCache {
+    let urls = extract_prefetch_urls(target, recon_json);
+    if urls.is_empty() {
+        return CagCache::default();
+    }
+
+    let _ = tx.send(format!(
+        "🧠 CAG: collecting HTTP evidence for {} endpoint(s){}",
+        urls.len(),
+        if waf_challenge { " (browser mode — WAF detected)" } else { " (curl mode)" }
+    )).await;
+
+    let mut cache = CagCache::default();
+
+    if waf_challenge {
+        // Browser-based collection
+        let browser_html = browser_prefetch(target, recon_json, tx).await;
+        // Parse the browser_prefetch output back into structured CagResponses
+        // (browser_prefetch already did the work — reuse its data)
+        for url in &urls {
+            // Run a lightweight curl too to capture headers even if body is WAF
+            let curl_resp = cag_curl_one(url, tx).await;
+            if let Some(mut r) = curl_resp {
+                // If WAF blocked curl, check if browser got real content
+                if is_waf_body(&r.body) {
+                    r.body = extract_browser_body(&browser_html, url);
+                    if !r.body.is_empty() {
+                        r.via = "browser".into();
+                    }
+                }
+                cache.responses.push(r);
+            }
+        }
+    } else {
+        // Curl-based collection (no WAF)
+        for url in &urls {
+            if let Some(r) = cag_curl_one(url, tx).await {
+                cache.responses.push(r);
+            }
+        }
+    }
+
+    // Also collect common sensitive paths
+    let sensitive_paths = [
+        "/.env", "/.git/HEAD", "/robots.txt", "/.well-known/security.txt",
+        "/sitemap.xml", "/wp-login.php", "/xmlrpc.php", "/api/", "/graphql",
+    ];
+    let base = target.trim_end_matches('/');
+    for path in &sensitive_paths {
+        let url = format!("{base}{path}");
+        if cache.responses.iter().any(|r| r.url == url) { continue; }
+        if let Some(r) = cag_curl_one(&url, tx).await {
+            cache.responses.push(r);
+        }
+    }
+
+    let _ = tx.send(format!(
+        "✓ CAG: collected {} response(s) — agents will analyze pre-fetched evidence",
+        cache.len()
+    )).await;
+
+    // Persist to workdir for post-processing
+    cache
+}
+
+/// Fetch a single URL with curl (the harness's own HTTP client).
+async fn cag_curl_one(url: &str, _tx: &Sender<String>) -> Option<CagResponse> {
+    let client = crate::probe::http_client();
+    let resp = match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        client.get(url)
+            .header("User-Agent", realistic_user_agent())
+            .send(),
+    ).await {
+        Ok(Ok(r)) => r,
+        _ => return None,
+    };
+    let status = resp.status().as_u16();
+    let mut headers = std::collections::HashMap::new();
+    for (k, v) in resp.headers() {
+        headers.insert(k.to_string(), v.to_str().unwrap_or("").to_string());
+    }
+    let body = resp.text().await.unwrap_or_default();
+    // Truncate body to 4000 chars
+    let body: String = body.chars().take(4000).collect();
+    Some(CagResponse {
+        url: url.to_string(),
+        method: "GET".into(),
+        status,
+        headers,
+        body,
+        via: "curl".into(),
+    })
+}
+
+/// Check if response body is a WAF challenge page.
+fn is_waf_body(body: &str) -> bool {
+    let markers = [
+        "Just a moment", "Cloudflare", "cf-browser-verification",
+        "challenge-platform", "Checking your browser", "DDoS protection",
+        "_cf_chl_opt", "Attention Required",
+    ];
+    markers.iter().any(|m| body.contains(m))
+}
+
+/// Extract rendered body for a URL from the browser_prefetch block.
+fn extract_browser_body(browser_block: &str, url: &str) -> String {
+    let marker = format!("### {} (HTTP", url);
+    if let Some(start) = browser_block.find(&marker) {
+        let rest = &browser_block[start..];
+        if let Some(code_start) = rest.find("```html\n") {
+            let content = &rest[code_start + 8..];
+            if let Some(code_end) = content.find("\n```") {
+                return content[..code_end].to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+/// CAG grounding gate: demote findings that reference endpoints not in the
+/// evidence cache, or whose claimed status codes contradict the cache.
+fn cag_grounding_gate(findings: &mut Vec<Finding>, cache: &CagCache, tx_sync: Option<&Sender<String>>) -> usize {
+    if cache.is_empty() { return 0; }
+    let mut demoted = 0usize;
+    for f in findings.iter_mut() {
+        let ep = f.endpoint.trim();
+        if ep.is_empty() || !ep.starts_with("http") { continue; }
+
+        // Check if we have evidence for this endpoint
+        let cached = cache.responses.iter().find(|r| {
+            r.url == ep || ep.starts_with(&r.url) || r.url.starts_with(ep)
+        });
+
+        if let Some(cr) = cached {
+            // If cached response was a WAF page but finding claims real content
+            if is_waf_body(&cr.body) && cr.via == "curl" && f.confidence > 0.3 {
+                f.review_reason = format!(
+                    "CAG grounding: endpoint {} returned WAF challenge in pre-fetch (HTTP {}), \
+                     but agent claimed exploitable content. {}",
+                    ep, cr.status, f.review_reason
+                );
+                f.confidence = f.confidence.min(0.15);
+                f.validated = false;
+                f.review_status = "needs-review".into();
+                demoted += 1;
+            }
+        }
+        // Not demoting findings for endpoints we didn't prefetch — agents may
+        // discover new endpoints during active testing (curl works for non-WAF).
+    }
+    demoted
+}
+
 /// Identify NeuroSploit traffic at the request layer (User-Agent + a marker
 /// header). Overridable via `NEUROSPLOIT_UA`.
 fn ua_line() -> String {
@@ -869,7 +1333,30 @@ const CHAIN_DOCTRINE: &str = "CHAIN THE FOOTHOLD (pivot to deeper, provable impa
 - Reuse loot relentlessly: every credential/JWT/cookie/API key/host you obtain is input to the next step — carry it forward across modules and try it everywhere it might be accepted.\n\
 - Mine object references (this is the BOLA/IDOR engine): from EVERY response harvest each object identifier you see — numeric ids, UUIDs, order/invoice/document/ticket numbers, account/customer ids, filenames, emails, and any signed/opaque token — into a reference pool. Then systematically SUBSTITUTE another principal's identifier into every request that accepts one (path segment, query param, JSON field, header, cookie) and diff the response against your own: another user's data returned under your session IS the proof. Do this ACROSS identities — register/hold ≥2 accounts and cross them — and across endpoints, because an id leaked on one route (a list/search/export) is often the key to an object on another (a detail/update/delete route). Enumerate sequential ids sparingly (a small benign sample, never a mass scrape) to show the pattern, then stop at proof.\n\
 - Understand the BUSINESS & LOGIC: reason about what the app is FOR (payments, orders, tenancy, KYC, entitlements) and chain toward business impact — payment/price/coupon abuse, cross-tenant data access, entitlement/limit bypass, workflow/state-machine skips (skip approval/verification steps), race conditions on balance/stock. These compound: each finding updates your model of the app for the next probe.\n\
-- Stop at proof: demonstrate the impact with the SMALLEST safe step and report the CHAIN end-to-end; never destroy, overwrite, encrypt, mass-exfiltrate, or DoS to 'prove' it.\n\n";
+- Stop at proof: demonstrate the impact with the SMALLEST safe step and report the CHAIN end-to-end; never destroy, overwrite, encrypt, mass-exfiltrate, or DoS to 'prove' it.\n\
+- SOURCEMAP HARVEST: for every JS bundle, check for `.map` files (append `.map` to the URL, check `sourceMappingURL` comment at end of file). Sourcemaps contain FULL original TypeScript/JSX source — extract it, grep for secrets/endpoints/auth logic/TODO comments, and feed discovered endpoints back as new attack surface.\n\
+- SECRET EXTRACTION DEPTH: secrets chain transitively — an exposed `.env` yields DB creds, DB dump yields API keys, API keys yield cloud access, cloud access yields more secrets in Secrets Manager/SSM. Follow every link. Each secret found is a new foothold.\n\
+- BUILD ARTIFACT MINING: check `asset-manifest.json`, `_buildManifest.js`, `stats.json`, `compilation-stats.json`, `__NEXT_DATA__`, `window.__INITIAL_STATE__` — these leak routes, props, internal state, and sometimes secrets.\n\n";
+
+/// CAG (Context-Augmented Generation) doctrine: when the harness pre-collected
+/// HTTP evidence, agents must analyze that data instead of making their own
+/// requests. Prevents hallucination by grounding analysis in real responses.
+const CAG_DOCTRINE: &str = "\
+CAG MODE (Context-Augmented Generation):\n\
+The harness pre-fetched HTTP responses for key endpoints BEFORE you were invoked.\n\
+Look for the '=== CAG: PRE-COLLECTED HTTP EVIDENCE ===' section in the recon context.\n\
+RULES:\n\
+1. For ANY endpoint listed in the CAG section, use THAT response as ground truth.\n\
+   Do NOT re-fetch it with curl — your curl request may hit a WAF/CDN and get a\n\
+   different (blocked) response than what the real application returns.\n\
+2. You MAY still use curl for endpoints NOT in the CAG section (new endpoints you\n\
+   discover, specific paths with payloads, etc.).\n\
+3. NEVER fabricate or imagine HTTP response content. If you did not receive the\n\
+   response (not in CAG, and your curl got blocked), say so explicitly.\n\
+4. Every finding MUST cite observable evidence — either from the CAG section or\n\
+   from a curl response you actually received (quote status code + relevant body).\n\
+5. A Cloudflare/WAF challenge page (403 with 'Just a moment...') is NOT evidence\n\
+   of a vulnerability — it means the endpoint is blocked and you cannot test it.\n\n";
 
 /// WHITEBOX doctrine: this is a STATIC source review — keep the agent in the code,
 /// not on the wire. Prevents whitebox runs from hallucinating black-box network
@@ -1374,11 +1861,15 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
     // ---- 1. Recon ------------------------------------------------------
     // 1a. Deterministic HTTP probe (real request/response facts) — grounds the
     // model recon and every downstream decision. Best-effort, skipped offline.
+    let mut waf_challenge = false;
+    let mut _waf_vendor = String::new();
     let probe_facts = if cfg.offline {
         String::new()
     } else {
         let p = crate::probe::probe_in_scope(&cfg.target, &effective_scope(&cfg)).await;
         let _ = tx.send(crate::probe::probe_summary(&p)).await;
+        waf_challenge = p.waf_challenge;
+        _waf_vendor = p.waf_vendor.clone();
         // Liveness preflight: if the target never answered (connect failed /
         // status 0), don't waste agents on a dead host — abort with a clear note.
         if p.status == 0 {
@@ -1387,6 +1878,14 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
             let _ = tx.send(format!("✗ target unreachable — {} is DOWN ({why}). Aborting; check the URL/port or that the service is up.", cfg.target)).await;
             let artifacts = persist(&cfg, "{}", "", &[]);
             return RunOutput { target: cfg.target.clone(), workdir: cfg.workdir.clone().unwrap_or_default(), findings: vec![], agents_ran: vec![], candidates: 0, recon: String::new(), artifacts, denied: None };
+        }
+        // WAF challenge detected: warn operator but don't abort — browser-based
+        // recon can still map the surface.
+        if p.waf_challenge {
+            let _ = tx.send(format!(
+                "⚠ {} challenge detected — switching to BROWSER-FIRST recon (curl will not reach the app)",
+                if p.waf_vendor.is_empty() { "WAF/CDN".to_string() } else { p.waf_vendor.clone() }
+            )).await;
         }
         // Identify the ASSET (product + stack), not just the URL, for the report.
         let asset = identify_asset(&p);
@@ -1412,13 +1911,23 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
     // KALI TOOL-RECON: run the real recon pipeline (gau/katana URL harvest +
     // targeted nuclei) inside the sandbox (or on host tools), then let the LLM
     // refine on top of the output. Provisions the toolbox in Kali on demand.
+    // Timeout: 90s to prevent hanging on WAF-blocked targets.
     let tool_recon = if cfg.offline {
         String::new()
     } else {
         if let Some(sb) = engagement_sandbox(&cfg) {
             kali_provision_recon_tools(&sb, &tx).await;
         }
-        kali_tool_recon(&cfg, &live_hosts, &tx).await
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(90),
+            kali_tool_recon(&cfg, &live_hosts, &tx),
+        ).await {
+            Ok(result) => result,
+            Err(_) => {
+                let _ = tx.send("⚠ tool-recon timed out (90s) — continuing with probe data".into()).await;
+                String::new()
+            }
+        }
     };
 
     // OPT-IN: let the model pick a bounded set of real tools from the catalog
@@ -1435,12 +1944,45 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
 
     let probe_facts = format!("{probe_facts}{subdomains}{tool_recon}{agent_tools}");
 
+    // Inject Cloudflare/WAF bypass context when a challenge was detected.
+    let probe_facts = if waf_challenge {
+        format!("{CF_BYPASS_OPS}\n{probe_facts}")
+    } else {
+        probe_facts
+    };
+
     let recon = if cfg.offline {
         let _ = tx.send("recon: offline mode — skipping model calls".into()).await;
         "{}".to_string()
     } else {
-        // Intense, multi-round active recon (installs tools, expands the surface).
-        deep_recon(&cfg, pool, &probe_facts, &tx).await
+        // Deep recon with timeout: if it takes >120s, fall back to cached recon.
+        // This prevents hanging on WAF-blocked targets where the LLM recon agent
+        // tries curl but Cloudflare/WAF blocks all non-browser requests.
+        let recon_timeout = if waf_challenge { 60 } else { 120 };
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(recon_timeout),
+            deep_recon(&cfg, pool, &probe_facts, &tx),
+        ).await {
+            Ok(result) if !result.is_empty() && result != "{}" => result,
+            Ok(_) | Err(_) => {
+                // Recon empty or timed out — fall back to cached recon.
+                if let Some((cached_recon, _, ts)) = &prev_recon_cache {
+                    if !cached_recon.is_empty() && cached_recon != "{}" {
+                        let _ = tx.send(format!(
+                            "⚠ recon timed out or empty — using cached recon ({})",
+                            format_elapsed(*ts)
+                        )).await;
+                        cached_recon.clone()
+                    } else {
+                        let _ = tx.send("⚠ recon timed out + no cached recon — proceeding with probe data only".into()).await;
+                        "{}".to_string()
+                    }
+                } else {
+                    let _ = tx.send("⚠ recon timed out + no cached recon — proceeding with probe data only".into()).await;
+                    "{}".to_string()
+                }
+            }
+        }
     };
 
     // Save recon to cache for future runs against same host.
@@ -1466,6 +2008,25 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
                 if !line.trim().is_empty() {
                     let _ = tx.send(format!("  - {}", line)).await;
                 }
+            }
+        }
+    }
+
+    // ---- 1a-bis. CAG: pre-collect HTTP evidence for all discovered endpoints
+    //       so exploit agents analyze real data instead of fetching (and
+    //       potentially hallucinating) their own responses.
+    let cag_cache = if !cfg.offline {
+        cag_collect(&cfg.target, &recon, waf_challenge, &tx).await
+    } else {
+        CagCache::default()
+    };
+    let cag_context = cag_cache.to_context(12000);
+    // Persist CAG cache for post-processing and report correlation.
+    if !cag_cache.is_empty() {
+        if let Some(wd) = cfg.workdir.as_deref() {
+            let path = Path::new(wd).join("cag_cache.json");
+            if let Ok(json) = serde_json::to_string_pretty(&cag_cache) {
+                let _ = std::fs::write(&path, json);
             }
         }
     }
@@ -1581,9 +2142,14 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
         std::fs::canonicalize(&p).unwrap_or(p).display().to_string()
     }).unwrap_or_default();
     let shots = if evidence_dir.is_empty() { String::new() } else { screenshot_doctrine(&evidence_dir) };
-    // Each agent gets a capped recon context. 8000 chars gives enough room for
-    // discovered endpoints, forms, and parameters from the deep crawl.
-    let recon_ctx: String = recon.chars().take(8000).collect();
+    // Each agent gets a capped recon context. When CAG evidence is available,
+    // append pre-collected HTTP responses so agents analyze real data.
+    let recon_ctx: String = if cag_context.is_empty() {
+        recon.chars().take(8000).collect()
+    } else {
+        let base: String = recon.chars().take(6000).collect();
+        format!("{base}{cag_context}")
+    };
 
     // Resume support: skip agents that already ran in a previous invocation.
     let snapshot = cfg.workdir.as_deref().and_then(crate::resilience::RunSnapshot::load);
@@ -1605,10 +2171,13 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
     // token, so with NEUROSPLOIT_PROMPT_PREFIX=1 this block leads the system
     // message instead of sitting behind each agent's own system prompt. Off by
     // default: the prompt is then byte-for-byte what it was.
+    let cf_bypass = if waf_challenge { CF_BYPASS_EXPLOIT_HINT } else { "" };
+    let cag_doctrine = if !cag_cache.is_empty() { CAG_DOCTRINE } else { "" };
     let shared_block = format!(
-        "{directives}{react}{depth}{decision}{explore}{spa}{safety}{ops}{doctrine}{shots}",
+        "{directives}{react}{depth}{decision}{explore}{spa}{safety}{ops}{cf_bypass}{cag_doctrine}{doctrine}{shots}",
         directives = directives, react = REACT_DOCTRINE, depth = DEPTH_DOCTRINE, decision = DECISION_DOCTRINE,
         explore = EXPLORE_DOCTRINE, spa = spa, safety = SAFETY_DOCTRINE, ops = ops,
+        cf_bypass = cf_bypass, cag_doctrine = cag_doctrine,
         doctrine = tool_doctrine(mcp_on), shots = shots,
     );
     let prefix_on = prompt_prefix_enabled();
@@ -1826,6 +2395,92 @@ pub async fn run(mut cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender
     let mut all_findings: Vec<Finding> = raw.iter().flat_map(|(_, _, f)| f.clone()).collect();
     all_findings.append(&mut prior_salvaged);
     let candidates = dedup_findings(all_findings);
+
+    // ---- 3b. WAF anti-hallucination gate ---------------------------------
+    // When a WAF/JS-challenge is active, agents using curl/HTTP get blocked
+    // but may fabricate evidence claiming success. For each finding WITHOUT
+    // structured evidence_data, replay the endpoint and check if the WAF
+    // blocks it. If the replay gets a WAF block (403/503 challenge page),
+    // the finding is demoted to needs-review as likely hallucinated.
+    let candidates = if waf_challenge && !cfg.offline {
+        let client = crate::probe::http_client();
+        let mut kept = Vec::with_capacity(candidates.len());
+        let mut demoted_waf = 0usize;
+        for mut f in candidates {
+            // Skip findings that already have structured evidence (wire-verified separately)
+            if f.evidence_data.is_some() {
+                kept.push(f);
+                continue;
+            }
+            // Skip Info-level findings (config/disclosure, not action claims)
+            if f.severity == "Info" {
+                kept.push(f);
+                continue;
+            }
+            // Only check findings that claim an HTTP endpoint
+            let ep = f.endpoint.trim();
+            if !ep.starts_with("http://") && !ep.starts_with("https://") {
+                kept.push(f);
+                continue;
+            }
+            // Quick replay: can we actually reach the endpoint?
+            let replay_ok = match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                client.get(ep).send(),
+            ).await {
+                Ok(Ok(resp)) => {
+                    let status = resp.status().as_u16();
+                    // WAF blocks: 403 (Cloudflare), 503 (challenge page), 429 (rate limit)
+                    // If we get one of these, the agent couldn't have gotten through either
+                    if status == 403 || status == 503 {
+                        let body = resp.text().await.unwrap_or_default();
+                        let is_waf_page = body.contains("Cloudflare")
+                            || body.contains("cf-browser-verification")
+                            || body.contains("Just a moment")
+                            || body.contains("challenge-platform")
+                            || body.contains("ray ID");
+                        !is_waf_page // OK only if NOT a WAF page
+                    } else {
+                        true // non-403/503 means endpoint is reachable
+                    }
+                }
+                _ => true, // timeout/error: don't penalize, let voter decide
+            };
+            if !replay_ok {
+                f.validated = false;
+                f.review_status = "needs-review".into();
+                f.review_reason = format!(
+                    "WAF anti-hallucination: endpoint returned WAF challenge/403 on replay — agent likely fabricated evidence. {}",
+                    f.review_reason
+                );
+                f.confidence = f.confidence.min(0.15);
+                demoted_waf += 1;
+            }
+            kept.push(f);
+        }
+        if demoted_waf > 0 {
+            let _ = tx.send(format!(
+                "🛡 WAF anti-hallucination: demoted {demoted_waf} finding(s) — endpoint blocked by WAF on replay, evidence likely fabricated"
+            )).await;
+        }
+        kept
+    } else {
+        candidates
+    };
+
+    // ---- 3c. CAG grounding gate -------------------------------------------
+    // Cross-reference findings against the pre-collected evidence cache.
+    // Demote findings whose endpoints returned WAF challenges in the cache.
+    let mut candidates = candidates;
+    if !cag_cache.is_empty() {
+        let cag_demoted = cag_grounding_gate(&mut candidates, &cag_cache, Some(&tx));
+        if cag_demoted > 0 {
+            let _ = tx.send(format!(
+                "🧠 CAG grounding: demoted {cag_demoted} finding(s) — pre-fetched evidence contradicts agent claims"
+            )).await;
+        }
+    }
+
     let _ = tx.send(format!("{} candidate finding(s) (deduped) — validating by {}-model vote", candidates.len(), cfg.vote_n)).await;
     if pool.candidates.len() == 1 && effective_vote_n(&cfg) <= 1 {
         let _ = tx.send("⚠ single-model panel with vote_n=1 — validation is weaker (same model validates its own findings). Consider --vote-n 2 or adding a second model for cross-validation.".into()).await;
@@ -1958,11 +2613,13 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
         cfg.target, repo, lib.code.len())).await;
 
     // ---- 1. Recon the live target (deterministic probe + model) -------
+    let mut gb_waf_challenge = false;
     let recon = if cfg.offline {
         "{}".to_string()
     } else {
         let p = crate::probe::probe_in_scope(&cfg.target, &effective_scope(&cfg)).await;
         let _ = tx.send(crate::probe::probe_summary(&p)).await;
+        gb_waf_challenge = p.waf_challenge;
         let facts = crate::probe::probe_json(&p);
         match pool.complete_routed(Task::Recon, "recon", RECON_SYS,
             &format!("{}{}OBSERVED HTTP PROBE (real facts — build on these):\n{}\n\nTarget: {}",
@@ -1971,6 +2628,13 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
             Err(e) => { let _ = tx.send(format!("recon failed ({e}) — probe facts only")).await; facts }
         }
     };
+    // CAG: pre-collect HTTP evidence for greybox agents.
+    let gb_cag_cache = if !cfg.offline {
+        cag_collect(&cfg.target, &recon, gb_waf_challenge, &tx).await
+    } else {
+        CagCache::default()
+    };
+    let gb_cag_context = gb_cag_cache.to_context(8000);
     // Graph checkpoint: seed the attack graph from recon.
     let _ = graph_checkpoint(&cfg, &recon, &[], "recon", &[], &tx).await;
 
@@ -2053,7 +2717,12 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
     let mcp_on = pool.mcp_config.is_some();
     let directives = operator_directives(&cfg);
     let ops = engagement_ops(&cfg);
-    let recon_ctx: String = recon.chars().take(3000).collect();
+    let recon_ctx: String = if gb_cag_context.is_empty() {
+        recon.chars().take(3000).collect()
+    } else {
+        let base: String = recon.chars().take(2000).collect();
+        format!("{base}{gb_cag_context}")
+    };
     let leads_ctx = code_leads.clone();
     let gb_workdir = cfg.workdir.clone();
     let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(selected.iter().cloned())
@@ -2103,7 +2772,16 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
 
     crate::traces::record_all(cfg.workdir.as_deref(), &raw);
     let transcript = format!("{}\n{}", code_leads, transcript_of(&raw));
-    let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
+    let mut candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
+    // CAG grounding gate: cross-reference findings against pre-fetched evidence.
+    if !gb_cag_cache.is_empty() {
+        let cag_demoted = cag_grounding_gate(&mut candidates, &gb_cag_cache, Some(&tx));
+        if cag_demoted > 0 {
+            let _ = tx.send(format!(
+                "🧠 CAG grounding (greybox): demoted {cag_demoted} finding(s) — pre-fetched evidence contradicts agent claims"
+            )).await;
+        }
+    }
     let _ = tx.send(format!("{} candidate finding(s) (deduped) — validating", candidates.len())).await;
     let mut findings = validate(candidates, pool, VOTE_SYS, effective_vote_n(&cfg), &tx).await;
     let chained = attack_chain(pool, &cfg, &recon, &findings, &lib.chains, &tx).await;
@@ -2409,6 +3087,18 @@ async fn attack_chain(pool: &ModelPool, cfg: &RunConfig, recon: &str,
     }
     if !all_new.is_empty() {
         let _ = tx.send(format!("⛓ attack-chaining added {} finding(s) across pivots", all_new.len())).await;
+    }
+    // Persist the loot. Until now it existed only inside the round prompts and
+    // died with them, so the credentials an operator actually carried forward
+    // never reached the report. The attack-path builder folds this back in as
+    // material nodes.
+    if !loot.is_empty() {
+        if let Some(dir) = cfg.workdir.as_deref() {
+            let _ = std::fs::write(
+                Path::new(dir).join("loot.json"),
+                serde_json::to_string_pretty(&loot).unwrap_or_default(),
+            );
+        }
     }
     all_new
 }
@@ -2897,6 +3587,22 @@ async fn validate(candidates: Vec<Finding>, pool: &ModelPool, sys: &str, vote_n:
 }
 
 async fn validate_with_persist(candidates: Vec<Finding>, pool: &ModelPool, sys: &str, vote_n: usize, tx: &Sender<String>, workdir: Option<&str>) -> Vec<Finding> {
+    // Stamp the clock. A path is a sequence in time as much as in dependency:
+    // the attack-path builder refuses to let a later step enable an earlier
+    // one, and it can only do that if each step records when it was proven.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let candidates: Vec<Finding> = candidates
+        .into_iter()
+        .map(|mut f| {
+            if f.observed_at == 0 {
+                f.observed_at = now;
+            }
+            f
+        })
+        .collect();
     // Fast-track: findings with no evidence are unverifiable — skip the vote
     // and flag for human review instead of wasting a validator call that will
     // always reject ("default to rejected when uncertain" + empty evidence).
@@ -3450,6 +4156,30 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
     let chained = crate::chain::apply_links(&mut findings);
     if chained > 0 {
         let _ = tx.send(format!("attack paths: {chained} finding(s) linked to what enables them")).await;
+    }
+    // Then chain them ACROSS domains. The rules above are web-local by design
+    // and stop at the host boundary; an engagement's real path does not — it
+    // carries a hash off a hypervisor into a directory, a share password into
+    // a database, a token out of process memory into a cloud tenant. This pass
+    // links on what each step produces and the next one consumes, for every
+    // plane the agent library covers, and only where the material could
+    // actually have travelled that far.
+    {
+        let loot: Vec<String> = cfg
+            .workdir
+            .as_deref()
+            .and_then(|d| std::fs::read_to_string(Path::new(d).join("loot.json")).ok())
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        let crossed = crate::attack_path::apply(&mut findings);
+        let graph = crate::attack_path::build(&cfg.target, &findings, &loot);
+        let best = graph.paths(1);
+        if crossed > 0 || best.first().map(|p| p.steps >= 2).unwrap_or(false) {
+            let _ = tx.send(format!("⛓ attack path: {}", crate::attack_path::summary(&graph))).await;
+        }
+        if let Some(p) = best.first().filter(|p| p.steps >= 2) {
+            let _ = tx.send(format!("⛓ best path: {}", p.narrative)).await;
+        }
     }
     // Collect proof screenshots into evidence/<finding-id>-N.png so the report
     // can embed each image beside its vulnerability.
@@ -5024,15 +5754,30 @@ pub async fn run_host(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sende
     let _ = tx.send(format!("HOST · target: {} · {} infra agents · models: {}", cfg.target, lib.infra.len(),
         pool.candidates.iter().map(|m| m.label()).collect::<Vec<_>>().join(", "))).await;
 
+    let mut waf_challenge = false;
     let recon = if cfg.offline {
         "{}".to_string()
     } else {
+        // Lightweight HTTP probe for WAF detection on infra targets with web interfaces.
+        if cfg.target.starts_with("http://") || cfg.target.starts_with("https://") {
+            let p = crate::probe::probe_in_scope(&cfg.target, &effective_scope(&cfg)).await;
+            waf_challenge = p.waf_challenge;
+        }
         let user = format!("{}{}Target host: {}", operator_directives(&cfg), HOST_TOOLING, cfg.target);
         match pool.complete_routed(Task::Recon, "recon", HOST_RECON_SYS, &user).await {
             Ok((m, t)) => { let _ = tx.send(format!("recon complete via {}", m.label())).await; t }
             Err(e) => { let _ = tx.send(format!("recon failed ({e})")).await; "{}".to_string() }
         }
     };
+
+    // CAG: pre-collect HTTP evidence for infra targets with web interfaces.
+    let cag_cache = if !cfg.offline && (cfg.target.starts_with("http://") || cfg.target.starts_with("https://")) {
+        cag_collect(&cfg.target, &recon, waf_challenge, &tx).await
+    } else {
+        CagCache::default()
+    };
+    let cag_context = cag_cache.to_context(8000);
+
     // Graph checkpoint: seed the attack graph from recon.
     let _ = graph_checkpoint(&cfg, &recon, &[], "recon", &[], &tx).await;
 
@@ -5065,7 +5810,12 @@ pub async fn run_host(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sende
     let target = cfg.target.clone();
     let verbose = cfg.verbose;
     let directives = operator_directives(&cfg);
-    let recon_ctx: String = recon.chars().take(3000).collect();
+    let recon_ctx: String = if cag_context.is_empty() {
+        recon.chars().take(3000).collect()
+    } else {
+        let base: String = recon.chars().take(2000).collect();
+        format!("{base}{cag_context}")
+    };
     let host_workdir = cfg.workdir.clone();
     let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(selected.iter().cloned())
         .map(|ag| {
@@ -5109,7 +5859,16 @@ pub async fn run_host(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sende
 
     crate::traces::record_all(cfg.workdir.as_deref(), &raw);
     let transcript = transcript_of(&raw);
-    let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
+    let mut candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
+    // CAG grounding gate: cross-reference findings against pre-collected evidence.
+    if !cag_cache.is_empty() {
+        let cag_demoted = cag_grounding_gate(&mut candidates, &cag_cache, Some(&tx));
+        if cag_demoted > 0 {
+            let _ = tx.send(format!(
+                "🧠 CAG grounding: demoted {cag_demoted} finding(s) — pre-fetched evidence contradicts agent claims"
+            )).await;
+        }
+    }
     let _ = tx.send(format!("{} candidate finding(s) (deduped) — validating", candidates.len())).await;
     let mut findings = validate(candidates, pool, VOTE_SYS, effective_vote_n(&cfg), &tx).await;
     let chained = attack_chain(pool, &cfg, &recon, &findings, &lib.chains, &tx).await;
@@ -5857,9 +6616,11 @@ pub async fn run_ai(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<
         agents.len(), pool.candidates.iter().map(|m| m.label()).collect::<Vec<_>>().join(", "), cfg.vote_n)).await;
 
     // Recon the AI endpoint (probe + model recon).
+    let mut waf_challenge = false;
     let recon = if cfg.offline { "{}".to_string() } else {
         let p = crate::probe::probe_in_scope(&cfg.target, &effective_scope(&cfg)).await;
         let _ = tx.send(crate::probe::probe_summary(&p)).await;
+        waf_challenge = p.waf_challenge;
         let facts = crate::probe::probe_json(&p);
         match pool.complete_routed(Task::Recon, "ai-recon", AI_RECON_SYS,
             &format!("{}OBSERVED HTTP PROBE:\n{}\n\nAI target: {}", operator_directives(&cfg), facts, cfg.target)).await {
@@ -5867,6 +6628,13 @@ pub async fn run_ai(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<
             Err(e) => { let _ = tx.send(format!("ai-recon failed ({e}) — probe facts only")).await; facts }
         }
     };
+    // CAG: pre-collect HTTP evidence for AI endpoint.
+    let cag_cache = if !cfg.offline {
+        cag_collect(&cfg.target, &recon, waf_challenge, &tx).await
+    } else {
+        CagCache::default()
+    };
+    let cag_context = cag_cache.to_context(8000);
     // Graph checkpoint: seed the attack graph from recon.
     let _ = graph_checkpoint(&cfg, &recon, &[], "recon", &[], &tx).await;
     let mut rl = cfg.rl_path.as_ref().map(|p| RlState::load(Path::new(p))).unwrap_or_default();
@@ -5881,7 +6649,12 @@ pub async fn run_ai(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<
 
     let target = cfg.target.clone();
     let directives = operator_directives(&cfg);
-    let recon_ctx: String = recon.chars().take(3500).collect();
+    let recon_ctx: String = if cag_context.is_empty() {
+        recon.chars().take(3500).collect()
+    } else {
+        let base: String = recon.chars().take(2500).collect();
+        format!("{base}{cag_context}")
+    };
     let ai_workdir = cfg.workdir.clone();
     let raw: Vec<(String, String, Vec<Finding>)> = stream::iter(selected.iter().cloned())
         .map(|ag| {
@@ -5921,7 +6694,14 @@ pub async fn run_ai(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Sender<
 
     crate::traces::record_all(cfg.workdir.as_deref(), &raw);
     let transcript = transcript_of(&raw);
-    let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
+    let mut candidates: Vec<Finding> = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
+    // CAG grounding gate.
+    if !cag_cache.is_empty() {
+        let cag_demoted = cag_grounding_gate(&mut candidates, &cag_cache, Some(&tx));
+        if cag_demoted > 0 {
+            let _ = tx.send(format!("🧠 CAG grounding: demoted {cag_demoted} AI finding(s)")).await;
+        }
+    }
     let _ = tx.send(format!("{} AI candidate(s) — validating", candidates.len())).await;
     let mut findings = validate(candidates, pool, VOTE_SYS, effective_vote_n(&cfg), &tx).await;
     let chained = attack_chain(pool, &cfg, &recon, &findings, &lib.chains, &tx).await;

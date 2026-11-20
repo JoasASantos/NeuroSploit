@@ -605,6 +605,13 @@
           <div class="check-row"><input type="checkbox" id="fieldMcp" /> <label for="fieldMcp">Playwright MCP (browser tool access, subscription backends only)</label></div>
 
           <div>
+            <div class="section-title">Mix model <span class="badge badge-experimental">per-model routing</span></div>
+            <div class="section-desc">Add extra models — each can use API or subscription independently. The primary model above is the default; extras run in parallel.</div>
+          </div>
+          <div id="extraModels"></div>
+          <button class="btn btn-sm" id="btnAddModel">+ Add model</button>
+
+          <div>
             <div class="section-title">Run settings</div>
           </div>
           <div class="field-row">

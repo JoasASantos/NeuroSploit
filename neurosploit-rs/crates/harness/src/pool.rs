@@ -109,7 +109,8 @@ impl ModelPool {
     ) -> Self {
         // Subscription spawns one CLI process per call; too many in parallel
         // trips provider rate limits, so cap concurrency on that path.
-        let concurrency = if subscription { concurrency.clamp(1, 3) } else { concurrency.max(1) };
+        let any_cli = subscription || models.iter().any(|m| m.force_backend == Some(true));
+        let concurrency = if any_cli { concurrency.clamp(1, 3) } else { concurrency.max(1) };
         ModelPool {
             client: ChatClient::new(),
             sem: Arc::new(Semaphore::new(concurrency)),
@@ -308,7 +309,7 @@ impl ModelPool {
         if self.is_cancelled() {
             return Err(anyhow!("cancelled"));
         }
-        let use_cli = self.subscription && cli_binary_for(&m.provider).is_some();
+        let use_cli = m.use_cli(self.subscription);
         let progress = self.progress();
         let mut last = anyhow::anyhow!("no attempt");
         for attempt in 0..MAX_TRANSIENT_RETRIES {
@@ -482,7 +483,7 @@ impl ModelPool {
                 continue;
             }
             tried.push(format!("{}:{}", pr.key, model));
-            return Some(ModelRef { provider: pr.key.to_string(), model: (*model).to_string() });
+            return Some(ModelRef { provider: pr.key.to_string(), model: (*model).to_string(), force_backend: None });
         }
         for pr in crate::models::providers() {
             if std::env::var(pr.env_key).ok().filter(|v| !v.trim().is_empty()).is_none() {
@@ -493,7 +494,7 @@ impl ModelPool {
                 continue;
             }
             tried.push(format!("{}:{}", pr.key, model));
-            return Some(ModelRef { provider: pr.key.to_string(), model: (*model).to_string() });
+            return Some(ModelRef { provider: pr.key.to_string(), model: (*model).to_string(), force_backend: None });
         }
         None
     }
@@ -579,7 +580,7 @@ impl ModelPool {
                 continue;
             }
             if let Some(model) = pr.models.first() {
-                out.push(ModelRef { provider: pr.key.to_string(), model: (*model).to_string() });
+                out.push(ModelRef { provider: pr.key.to_string(), model: (*model).to_string(), force_backend: None });
             }
         }
         out
@@ -754,7 +755,7 @@ mod panel_tests {
     use super::*;
 
     fn m(p: &str, model: &str) -> ModelRef {
-        ModelRef { provider: p.into(), model: model.into() }
+        ModelRef { provider: p.into(), model: model.into(), force_backend: None }
     }
 
     /// The defect a real engagement exposed: every finding's votes read `1/1`

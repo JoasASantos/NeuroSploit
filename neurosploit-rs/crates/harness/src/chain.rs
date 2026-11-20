@@ -306,6 +306,19 @@ pub fn repair(findings: &mut [Finding]) -> usize {
         .filter(|f| !f.id.is_empty())
         .map(|f| (f.id.clone(), (f.cwe.clone(), f.endpoint.clone())))
         .collect();
+    // A cross-host link is wrong for an application-local condition and right
+    // for stolen material: a hash lifted off one host is what authenticates to
+    // the next one, and deleting that edge is what left real engagements
+    // reporting a dozen unconnected hosts. `attack_path` decides which of the
+    // two a given pair is, by asking whether anything the source produced could
+    // have travelled to the destination.
+    let whole: Vec<crate::types::Finding> = findings.to_vec();
+    let by_index: std::collections::HashMap<String, usize> = whole
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| !f.id.is_empty())
+        .map(|(i, f)| (f.id.clone(), i))
+        .collect();
     let mut removed = 0usize;
     for f in findings.iter_mut() {
         let before = f.chains_from.len();
@@ -319,7 +332,18 @@ pub fn repair(findings: &mut [Finding]) -> usize {
             match by_id.get(src) {
                 // An id nobody answers to is a dangling reference, not a chain.
                 None => false,
-                Some((cwe, endpoint)) => cwe_num(cwe) != me_cwe && host_of(endpoint) == me_host,
+                Some((cwe, endpoint)) => {
+                    if cwe_num(cwe) == me_cwe {
+                        return false;
+                    }
+                    if host_of(endpoint) == me_host {
+                        return true;
+                    }
+                    match (by_index.get(src), by_index.get(&me_id)) {
+                        (Some(&a), Some(&b)) => crate::attack_path::portable_link(&whole[a], &whole[b]),
+                        _ => false,
+                    }
+                }
             }
         });
         f.chains_from.sort();

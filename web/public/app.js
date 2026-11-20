@@ -630,6 +630,79 @@ $$('#authModeToggle button').forEach((b) => b.addEventListener('click', () => { 
 state.authMode = 'api';
 
 // ---------------------------------------------------------------------------
+// mix model — extra models with per-model auth mode
+// ---------------------------------------------------------------------------
+state.extraModels = [];
+
+function renderExtraModels() {
+  const container = $('#extraModels');
+  if (!container) return;
+  container.innerHTML = state.extraModels.map((em, i) => {
+    const prov = state.providers.find((p) => p.key === em.provider) || state.providers[0];
+    const supportsSub = prov?.kind === 'cli';
+    return `<div class="field-row extra-model-row" data-idx="${i}">
+      <div class="field-group">
+        <select class="extra-provider" data-idx="${i}">${state.providers.map((p) => `<option value="${esc(p.key)}"${p.key === em.provider ? ' selected' : ''}>${esc(p.label)}</option>`).join('')}</select>
+      </div>
+      <div class="field-group">
+        <select class="extra-model" data-idx="${i}">${(prov?.models || []).map((m) => `<option value="${esc(m)}"${m === em.model ? ' selected' : ''}>${esc(m)}</option>`).join('')}</select>
+      </div>
+      <div class="field-group">
+        <div class="auth-mode-toggle mini">
+          <button data-mode="api" class="${em.authMode === 'api' ? 'selected' : ''}" data-idx="${i}">API</button>
+          <button data-mode="subscription" class="${em.authMode === 'subscription' ? 'selected' : ''}"${!supportsSub ? ' disabled' : ''} data-idx="${i}">Sub</button>
+        </div>
+      </div>
+      <button class="btn btn-sm btn-danger extra-model-remove" data-idx="${i}" title="Remove">×</button>
+    </div>`;
+  }).join('');
+  container.querySelectorAll('.extra-provider').forEach((sel) => sel.addEventListener('change', (e) => {
+    const idx = Number(e.target.dataset.idx);
+    const prov = state.providers.find((p) => p.key === e.target.value) || state.providers[0];
+    state.extraModels[idx].provider = prov.key;
+    state.extraModels[idx].model = prov.models?.[0] || '';
+    if (prov.kind !== 'cli') state.extraModels[idx].authMode = 'api';
+    renderExtraModels();
+  }));
+  container.querySelectorAll('.extra-model').forEach((sel) => sel.addEventListener('change', (e) => {
+    state.extraModels[Number(e.target.dataset.idx)].model = e.target.value;
+  }));
+  container.querySelectorAll('.auth-mode-toggle.mini button').forEach((btn) => btn.addEventListener('click', () => {
+    if (btn.disabled) return;
+    const idx = Number(btn.dataset.idx);
+    state.extraModels[idx].authMode = btn.dataset.mode;
+    renderExtraModels();
+  }));
+  container.querySelectorAll('.extra-model-remove').forEach((btn) => btn.addEventListener('click', () => {
+    state.extraModels.splice(Number(btn.dataset.idx), 1);
+    renderExtraModels();
+  }));
+}
+
+$('#btnAddModel')?.addEventListener('click', () => {
+  const prov = state.providers.find((x) => x.key === $('#fieldProvider').value) || state.providers[0];
+  state.extraModels.push({ provider: prov.key, model: prov.models?.[0] || '', authMode: 'api' });
+  renderExtraModels();
+});
+
+function collectModels() {
+  const provider = $('#fieldProvider').value;
+  const model = $('#fieldModelSelect').value;
+  const models = [];
+  if (provider && model) {
+    const suffix = state.authMode === 'subscription' ? ':sub' : '';
+    models.push(`${provider}:${model}${suffix}`);
+  }
+  for (const em of state.extraModels) {
+    if (em.provider && em.model) {
+      const suffix = em.authMode === 'subscription' ? ':sub' : '';
+      models.push(`${em.provider}:${em.model}${suffix}`);
+    }
+  }
+  return models;
+}
+
+// ---------------------------------------------------------------------------
 // review (step 5)
 // ---------------------------------------------------------------------------
 
@@ -677,8 +750,7 @@ function renderReview() {
     { k: 'Mode', v: state.mode },
     { k: MODE_LABELS[state.mode].target, v: target || '(not set)', mono: true },
     ...(MODE_LABELS[state.mode].showRepo ? [{ k: 'Source repo', v: repo || '(not set)', mono: true }] : []),
-    { k: 'Model', v: `${provider}:${model}` },
-    { k: 'Auth mode', v: state.authMode === 'subscription' ? 'Subscription (local CLI)' : 'API key' },
+    { k: 'Model', v: collectModels().join(', ') || '(not set)' },
     { k: 'Leads selected', v: `${state.selected.size} of ${allAgents().length}${state.selected.size === 0 ? ' — auto (recon-driven)' : ''}` },
     { k: 'Custom leads', v: String(state.customLeads.length) },
     { k: 'Votes / chain / recon', v: `${$('#fieldVotes').value} / ${$('#fieldChain').value} / ${$('#fieldRecon').value}` },
@@ -724,7 +796,7 @@ async function startExploitation() {
     name,
     target: mode === 'whitebox' ? undefined : target,
     repo: mode === 'whitebox' ? target : (repo || undefined),
-    models: provider && model ? [`${provider}:${model}`] : [],
+    models: collectModels(),
     votes: Number($('#fieldVotes').value) || 3,
     chainDepth: Number($('#fieldChain').value),
     recon: Number($('#fieldRecon').value),
