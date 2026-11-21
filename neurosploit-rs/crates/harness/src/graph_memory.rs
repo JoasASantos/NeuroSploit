@@ -525,11 +525,30 @@ fn privileged_name(n: &str) -> bool {
 
 fn finding_status(f: &Finding) -> Option<Status> {
     match f.review_status.as_str() {
-        "rejected" => None,
+        // A vote-rejected finding that still carries a concrete receipt — a
+        // looted credential/key/secret, a command output, captured evidence —
+        // is NOT dropped from the graph. It enters as needs-review so it informs
+        // path analysis and can seed chain expansion: a useful key must never
+        // lose its value just because the opinion-vote did not confirm it.
+        "rejected" => if finding_has_receipt(f) { Some(Status::NeedsReview) } else { None },
         "confirmed" => Some(Status::Confirmed),
         _ if f.validated => Some(Status::Confirmed),
         _ => Some(Status::NeedsReview),
     }
+}
+
+/// True when the finding carries something reproducible/reusable: looted
+/// credential or secret, a captured evidence record, or a payload/command.
+fn finding_has_receipt(f: &Finding) -> bool {
+    let has = |s: &str| {
+        let t = s.trim();
+        !t.is_empty() && t != "N/A" && t != "n/a" && t != "none" && t != "-"
+    };
+    f.evidence_data.is_some()
+        || has(&f.evidence)
+        || has(&f.secret)
+        || has(&f.account)
+        || has(&f.payload)
 }
 
 fn exchanges(ev: &Evidence) -> Vec<(String, &Exchange)> {
