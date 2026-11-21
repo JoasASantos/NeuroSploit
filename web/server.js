@@ -753,7 +753,19 @@ async function listRuns() {
     const sevCount = {};
     for (const f of findings) sevCount[f.severity] = (sevCount[f.severity] || 0) + 1;
     let state = status.state || 'unknown';
-    if (state === 'running' && !liveRunIds.has(id)) state = 'interrupted';
+    if (state === 'running' && !liveRunIds.has(id)) {
+      // A CLI-launched run (not owned by a console job) is still LIVE if the run
+      // directory shows a recent heartbeat — audit.jsonl is appended throughout
+      // the run. This keeps direct `neurosploit` CLI runs in sync with the UI
+      // instead of falsely showing them as interrupted.
+      let fresh = false;
+      try {
+        fresh = (Date.now() - fs.statSync(path.join(dir, 'audit.jsonl')).mtimeMs) < 90_000;
+      } catch {
+        try { fresh = (Date.now() - fs.statSync(dir).mtimeMs) < 90_000; } catch {}
+      }
+      if (!fresh) state = 'interrupted';
+    }
     return {
       id,
       ts,
@@ -1335,6 +1347,9 @@ function buildArgs(body) {
     args.push(body.repo);
     args.push('--url', body.target);
   }
+  // host/aitest/internal are session-style engagements and reject several
+  // run-only flags; gate those so a console-launched host run doesn't crash.
+  const runOnly = !['host', 'aitest', 'internal'].includes(mode);
   for (const m of body.models || []) args.push('--model', m);
   if (body.votes) args.push('--vote-n', String(body.votes));
   if (body.chainDepth !== undefined) args.push('--chain-depth', String(body.chainDepth));
@@ -1345,20 +1360,20 @@ function buildArgs(body) {
   if (body.research && (mode === 'whitebox' || mode === 'greybox')) args.push('--research');
   if (body.offline) args.push('--offline');
   if (body.subscription) args.push('--subscription');
-  if (body.mcp) args.push('--mcp');
+  if (runOnly && body.mcp) args.push('--mcp');
   if (body.creds) args.push('--creds', body.creds);
   if (body.collectionPath) args.push('--collection', body.collectionPath);
   if (body.focus) args.push('--focus', body.focus);
-  if (body.objective) args.push('--objective', body.objective);
-  if (body.outOfScope) args.push('--out-of-scope', body.outOfScope);
+  if (runOnly && body.objective) args.push('--objective', body.objective);
+  if (runOnly && body.outOfScope) args.push('--out-of-scope', body.outOfScope);
   // Budget: omitted entirely means the full run, exactly as before budgets
   // existed — the web console never caps a run the operator didn't cap.
-  if (body.budget && body.budget !== 'unlimited') args.push('--budget', body.budget);
-  if (body.tokenLimit) args.push('--token-limit', String(body.tokenLimit));
-  if (body.deepTestLimit) args.push('--deep-test-limit', String(body.deepTestLimit));
-  if (body.order === 'depth-first') args.push('--depth-first');
-  else if (body.order === 'coverage-first') args.push('--coverage-first');
-  if (body.samplePerRoute) args.push('--sample-per-route', String(body.samplePerRoute));
+  if (runOnly && body.budget && body.budget !== 'unlimited') args.push('--budget', body.budget);
+  if (runOnly && body.tokenLimit) args.push('--token-limit', String(body.tokenLimit));
+  if (runOnly && body.deepTestLimit) args.push('--deep-test-limit', String(body.deepTestLimit));
+  if (runOnly && body.order === 'depth-first') args.push('--depth-first');
+  else if (runOnly && body.order === 'coverage-first') args.push('--coverage-first');
+  if (runOnly && body.samplePerRoute) args.push('--sample-per-route', String(body.samplePerRoute));
   if (body.transport && body.transport !== 'direct') args.push('--transport', body.transport);
   if (body.oobDomain) args.push('--oob-domain', body.oobDomain);
   if (body.oobHttp) args.push('--oob-http', body.oobHttp);
@@ -1367,20 +1382,23 @@ function buildArgs(body) {
   if (body.typesafe) args.push('--typesafe', body.typesafe);
   if (body.intercept && body.intercept !== 'off') args.push('--intercept', body.intercept);
   if (body.sandbox) args.push('--sandbox', body.sandbox === 'default' ? '' : body.sandbox);
-  if (body.revalidatePoc) args.push('--revalidate-poc');
-  for (const fw of body.compliance || []) args.push('--compliance', fw);
+  if (runOnly && body.revalidatePoc) args.push('--revalidate-poc');
+  if (runOnly) for (const fw of body.compliance || []) args.push('--compliance', fw);
   // Authorization: the signed grant caps the scope, the extra in-scope entries
   // can only narrow within it, and the environment scales every risk score.
-  for (const entry of body.inScope || []) args.push('--in-scope', entry);
-  if (body.scopePath) args.push('--scope-file', body.scopePath);
+  // host/aitest/internal expose these as --session-* (set before the first
+  // command of an interactive/one-shot session); run/cloud use the plain flags.
+  const sessionScoped = ['host', 'aitest', 'internal'].includes(mode);
+  for (const entry of body.inScope || []) args.push(sessionScoped ? '--session-in-scope' : '--in-scope', entry);
+  if (body.scopePath && !sessionScoped) args.push('--scope-file', body.scopePath);
   if (body.capability) args.push('--capability-token', body.capability);
-  if (body.environment) args.push('--environment', body.environment);
-  if (body.policyProfile) args.push('--policy', body.policyProfile);
+  if (body.environment) args.push(sessionScoped ? '--session-environment' : '--environment', body.environment);
+  if (body.policyProfile) args.push(sessionScoped ? '--session-policy' : '--policy', body.policyProfile);
   for (const a of body.agents || []) args.push('--only', a);
-  if (body.reactive) args.push('--reactive');
-  if (body.mcpProfile) args.push('--mcp-profile', body.mcpProfile);
+  if (runOnly && body.reactive) args.push('--reactive');
+  if (runOnly && body.mcpProfile) args.push('--mcp-profile', body.mcpProfile);
   args.push('--agent-tools');
-  if (body.autonomy && body.autonomy !== 'standard') args.push('--autonomy', body.autonomy);
+  if (runOnly && body.autonomy && body.autonomy !== 'standard') args.push('--autonomy', body.autonomy);
   // C2 is opt-in: without an authorization reference the CLI refuses to run it.
   if (body.c2) {
     if (body.c2Authorization) args.push('--c2-authorization', body.c2Authorization);

@@ -1198,6 +1198,17 @@ async fn main() -> anyhow::Result<()> {
                 cfg.models = models;
             }
             apply_creds(&mut cfg, creds.as_deref()).await;
+            // Wire the session authorization (scope / environment / policy) into
+            // the engagement. Without this, --session-in-scope is parsed but never
+            // applied, so the scope guard only admits the single target host and
+            // every pivot target (other subnets/forests) is treated as out-of-scope.
+            apply_authorization(
+                &mut cfg,
+                &cli.session_in_scope,
+                cli.capability_token.clone(),
+                cli.session_environment.as_deref().unwrap_or("lab"),
+                cli.session_policy.as_deref().unwrap_or("web"),
+            )?;
             let out = run_mode(&base, cfg, false, Mode::Host).await?;
             print_findings(&out);
         }

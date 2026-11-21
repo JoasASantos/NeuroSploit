@@ -4494,19 +4494,44 @@ function renderGraphMemory(x) {
     if (!cols.has(c)) cols.set(c, []);
     cols.get(c).push(n);
   }
+  // Barycenter ordering: place connected nodes at the same height across
+  // columns so edges read as clean left-to-right chains instead of a crossing
+  // grid. Seeded by stage/severity/name, then relaxed toward neighbours.
+  const adj = new Map();
+  const addAdj = (a, b) => { (adj.get(a) || adj.set(a, []).get(a)).push(b); };
+  for (const e of edges) { const f = eid(e.from), t = eid(e.to); addAdj(f, t); addAdj(t, f); }
+  const sortedCols = [...cols.keys()].sort((a, b) => a - b);
+  const order = new Map();
+  for (const c of sortedCols) {
+    order.set(c, cols.get(c).slice().sort((a, b) =>
+      stageRank(a.props?.stage) - stageRank(b.props?.stage)
+      || sevRank(a.props?.local_severity) - sevRank(b.props?.local_severity)
+      || (a.label + gmName(a)).localeCompare(b.label + gmName(b))));
+  }
+  const rowIndex = new Map();
+  const reindex = () => { for (const c of sortedCols) order.get(c).forEach((n, i) => rowIndex.set(id(n), i)); };
+  reindex();
+  for (let sweep = 0; sweep < 5; sweep++) {
+    const cseq = sweep % 2 ? [...sortedCols].reverse() : sortedCols;
+    for (const c of cseq) {
+      const bary = (n) => {
+        const nb = (adj.get(id(n)) || []).map((m) => rowIndex.get(m)).filter((v) => v !== undefined);
+        return nb.length ? nb.reduce((s, v) => s + v, 0) / nb.length : rowIndex.get(id(n));
+      };
+      order.get(c).sort((a, b) => (bary(a) - bary(b)) || (rowIndex.get(id(a)) - rowIndex.get(id(b))));
+    }
+    reindex();
+  }
   const pos = new Map();
   let maxH = 0;
   let col = 0;
-  [...cols.keys()].sort((a, b) => a - b).forEach((c) => {
-    const list = cols.get(c).sort((a, b) =>
-      stageRank(a.props?.stage) - stageRank(b.props?.stage)
-      || sevRank(a.props?.local_severity) - sevRank(b.props?.local_severity)
-      || (a.label + gmName(a)).localeCompare(b.label + gmName(b)));
+  for (const c of sortedCols) {
+    const list = order.get(c);
     const sub = Math.ceil(list.length / PER);
     list.forEach((n, i) => pos.set(id(n), { x: (col + Math.floor(i / PER)) * (NW + GX), y: (i % PER) * (NH + GY) }));
     maxH = Math.max(maxH, Math.min(list.length, PER) * (NH + GY));
     col += sub;
-  });
+  }
   const width = col * (NW + GX);
   const CX = NW / 2, CY = 28;
   const path = (a, b) => {
