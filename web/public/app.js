@@ -984,6 +984,13 @@ async function tryResumeActiveJob() {
   if (!id) return false;
   try {
     const snap = await api(`/api/exploit/${id}`);
+    // Only resume a job that is STILL RUNNING. A finished/stopped job must not
+    // hijack every page reload onto its old live screen — clear it and fall
+    // through to the normal landing view.
+    if (snap.done || snap.state === 'complete' || snap.state === 'interrupted' || snap.state === 'stopped') {
+      localStorage.removeItem(ACTIVE_JOB_KEY);
+      return false;
+    }
     attachLiveJob(id, snap.target, snap.name, snap.pinnedAgents);
     return true;
   } catch {
@@ -4459,9 +4466,12 @@ function renderGraphMemory(x) {
       const votes = finding.votes || '';
       const reviewStatus = finding.review_status || props.status || '';
       const agent = finding.agent || '';
-      const whereText = finding.where_text || finding.proof || props.description || '';
-      const whatText = finding.what_text || '';
-      const fixText = finding.fix_text || '';
+      const whereText = finding.where_text || finding.proof || finding.endpoint || props.description || '';
+      const payloadText = finding.payload || '';
+      const evidenceText = finding.evidence || '';
+      const impactText = finding.impact || '';
+      const whatText = finding.what_text || impactText || '';
+      const fixText = finding.fix_text || finding.remediation || '';
       descBox.innerHTML = `<div class="fd-header">
         <span class="sev ${sevClass(props.local_severity || 'info')}">${esc(props.local_severity || 'info')}</span>
         <span class="fd-title">${esc(finding.title || gmName(fNode))}</span>
@@ -4477,8 +4487,10 @@ function renderGraphMemory(x) {
         ${reviewStatus ? `<div class="fd-card"><div class="fd-card-label">Review Status</div><div class="fd-card-value">${esc(reviewStatus)}</div></div>` : ''}
         ${agent ? `<div class="fd-card"><div class="fd-card-label">Agent</div><div class="fd-card-value mono">${esc(agent)}</div></div>` : ''}
       </div>
-      ${whereText ? `<div class="fd-section"><div class="fd-section-title">WHERE THE PROBLEM IS</div><p>${esc(whereText)}</p></div>` : ''}
-      ${whatText ? `<div class="fd-section"><div class="fd-section-title">WHAT IT MEANS</div><p>${esc(whatText)}</p></div>` : ''}
+      ${whereText ? `<div class="fd-section"><div class="fd-section-title">WHERE</div><p>${esc(whereText)}</p></div>` : ''}
+      ${payloadText ? `<div class="fd-section"><div class="fd-section-title">PAYLOAD / COMMAND</div><pre class="fd-pre">${esc(payloadText)}</pre></div>` : ''}
+      ${evidenceText ? `<div class="fd-section"><div class="fd-section-title">EVIDENCE — WHAT WAS DONE</div><pre class="fd-pre">${esc(evidenceText)}</pre></div>` : ''}
+      ${whatText ? `<div class="fd-section"><div class="fd-section-title">IMPACT</div><p>${esc(whatText)}</p></div>` : ''}
       ${fixText ? `<div class="fd-section"><div class="fd-section-title">HOW TO FIX IT</div><p>${esc(fixText)}</p></div>` : ''}`;
       show(descBox, true);
     }

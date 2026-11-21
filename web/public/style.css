@@ -1677,3 +1677,5 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
 #c2View .badge-ok { color: var(--sev-low-fg, #1a7f37); border-color: var(--sev-low-fg, #1a7f37); background: var(--sev-low-bg, rgba(26,127,55,.08)); }
 #c2View .badge-warn { color: var(--sev-medium-fg, #9a6700); border-color: var(--sev-medium-fg, #9a6700); background: var(--sev-medium-bg, rgba(154,103,0,.08)); }
 #c2View .badge-muted { color: var(--text-faint); }
+/* Attack-graph finding detail: evidence/payload blocks */
+.fd-pre { font-family: var(--mono); font-size: var(--fs-xs); white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-2, rgba(127,127,127,.08)); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; margin: 2px 0 0; max-height: 240px; overflow: auto; }
