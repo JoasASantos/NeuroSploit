@@ -337,6 +337,21 @@ pub struct RunConfig {
     /// When set, the matching MCP server and tool allowlist are auto-configured.
     #[serde(default)]
     pub mcp_profile: Option<String>,
+    /// Stealth / OPSEC mode: slower, quieter, living-off-the-land. Lowers recon
+    /// intensity, injects an OPSEC directive into every agent, and prefers native
+    /// tooling over noisy uploads — without dropping test coverage.
+    #[serde(default)]
+    pub stealth: bool,
+    /// Skip the adversarial validation vote entirely. Every finding is kept with
+    /// the severity its agent assigned and marked `unvalidated`. Nothing useful
+    /// is discarded by the panel.
+    #[serde(default)]
+    pub no_validate: bool,
+    /// Route the planner / strategist role to a specific model (e.g. a second
+    /// provider proposing alternative approaches), while executor and validator
+    /// use the rest of the pool. Empty → the primary model plans.
+    #[serde(default)]
+    pub planner_model: Option<String>,
 }
 
 fn default_autonomy() -> String {
@@ -406,6 +421,9 @@ impl RunConfig {
             autonomy: default_autonomy(),
             reactive: false,
             mcp_profile: None,
+            stealth: false,
+            no_validate: false,
+            planner_model: None,
         }
     }
 }

@@ -121,6 +121,27 @@ RULES OF ENGAGEMENT:\n\
   proceeding — and never fabricate results you did not actually produce.\n\
 \n";
 
+const STEALTH_PREAMBLE: &str = "\
+STEALTH / OPSEC MODE — this engagement is run quiet. Minimise footprint and \
+detection WITHOUT reducing test coverage or depth — you still pursue every \
+objective, just on a lower-observable path:\n\
+• Pace yourself: avoid bursty scans and parallel floods. Prefer slow, targeted \
+  probes (e.g. nmap -T2/-T1, -sT, only the ports you need) over mass/aggressive \
+  scans (no -T4/-T5, no rustscan full-range, no noisy brute bursts).\n\
+• Live off the land: prefer tools already present on the target and native \
+  protocols (SSH, built-in PowerShell/WMI/WinRM, nltest, dsquery, reg, native \
+  SMB) over UPLOADING binaries. Uploaded tools (e.g. chisel.exe, mimikatz.exe) \
+  trip AV/EDR — reach for them only when no native path exists, and stage them \
+  in a location an admin exclusion covers, renamed/innocuous.\n\
+• Credentials: no blind password spraying that risks lockout. Test a specific \
+  known/looted credential; space attempts; respect lockout thresholds.\n\
+• Tunnelling: prefer a single clean hop and native SOCKS over deep nested \
+  forwards; keep listeners minimal and clean them up.\n\
+• Clean up artifacts you drop (temp files, uploaded tools, created accounts) and \
+  note what you left behind. Quality of proof stays the same — receipts for every \
+  finding — just obtained quietly.\n\
+\n";
+
 const RECON_SYS: &str = "You are an elite web recon specialist on an AUTHORIZED engagement. Actively fetch the target with your tools and map the REAL attack surface in DEPTH — do not ask for permission, proceed:\n\
 - Crawl pages, forms and parameters; record every input, header, cookie and redirect.\n\
 - DOWNLOAD the linked JavaScript bundles (curl each script) and ANALYZE them: extract API endpoints/routes, hidden/undocumented parameters, GraphQL operations, secrets / API keys / tokens, cloud & third-party URLs, feature flags, and `sourceMappingURL` references (fetch source maps if exposed to recover original source).\n\
@@ -267,6 +288,9 @@ fn operator_directives(cfg: &RunConfig) -> String {
     }
     if let Some(focus) = cfg.instructions.as_deref().filter(|x| !x.trim().is_empty()) {
         s.push_str(&format!("OPERATOR FOCUS — prioritise this: {focus}\n"));
+    }
+    if cfg.stealth {
+        s.push_str(STEALTH_PREAMBLE);
     }
     // Scope is enforced in code (see `crate::scope`); this block exists so the
     // agent does not burn a round trip discovering a boundary the guard would
@@ -3588,6 +3612,22 @@ async fn validate(candidates: Vec<Finding>, pool: &ModelPool, sys: &str, vote_n:
 }
 
 async fn validate_with_persist(candidates: Vec<Finding>, pool: &ModelPool, sys: &str, vote_n: usize, tx: &Sender<String>, workdir: Option<&str>) -> Vec<Finding> {
+    // --no-validate: operator opted out of the adversarial vote. Keep every
+    // finding with the severity its agent assigned, marked `unvalidated` — the
+    // panel discards nothing. (Set by the launcher when cfg.no_validate.)
+    if std::env::var("NEUROSPLOIT_NO_VALIDATE").map(|v| v == "1").unwrap_or(false) {
+        let _ = tx.send(format!("⚠ --no-validate: skipping the vote — keeping all {} finding(s) with agent-assigned severity", candidates.len())).await;
+        return candidates.into_iter().map(|mut f| {
+            f.validated = false;
+            if f.review_status.is_empty() || f.review_status == "rejected" {
+                f.review_status = "unvalidated".into();
+            }
+            if f.review_reason.is_empty() {
+                f.review_reason = "validation vote skipped (--no-validate); kept with agent severity".into();
+            }
+            f
+        }).collect();
+    }
     // Stamp the clock. A path is a sequence in time as much as in dependency:
     // the attack-path builder refuses to let a later step enable an earlier
     // one, and it can only do that if each step records when it was proven.
@@ -3656,6 +3696,20 @@ async fn validate_with_persist(candidates: Vec<Finding>, pool: &ModelPool, sys: 
                     f.review_status = "needs-review".into();
                     f.review_reason = format!("voter rejected the narrative, mechanic retained: {}", f.review_reason.trim());
                     f.confidence = f.confidence.min(0.5);
+                } else if finding_has_loot(&f) {
+                    // The finding carries a looted credential, private key or
+                    // secret. A leaked long-lived credential / key / API key that
+                    // authenticates or is reused downstream is a REAL finding —
+                    // not "just a cat of a file on an already-owned host", which
+                    // is how the opinion-vote tends to dismiss it. Keep it as
+                    // needs-review at its OWN severity (never rejected, never
+                    // auto-capped to Low): a useful key must not lose its value.
+                    f.review_status = "needs-review".into();
+                    f.review_reason = format!(
+                        "kept — looted credential/secret/key present and reusable; validator under-credited it: {}",
+                        f.review_reason.trim()
+                    );
+                    f.confidence = f.confidence.max(0.5);
                 } else if grounded_receipt(&f) || has_http_receipt(&f) {
                     // Unanimously rejected by the opinion-vote, but the finding
                     // carries a concrete, REPRODUCIBLE receipt (a captured HTTP
@@ -3943,6 +3997,18 @@ fn parse_claims(o: &serde_json::Map<String, serde_json::Value>) -> Option<crate:
 /// Does this finding carry evidence a reader could check, independent of the
 /// claim built on top of it? Structured artifacts count outright; otherwise the
 /// grounding pass's own verdict decides.
+/// True when the finding carries a looted, reusable secret — a credential,
+/// private key, token or API key (in `secret`, or an `account` captured with it).
+/// Such a finding is never dropped by the opinion-vote: a key that authenticates
+/// or is reused downstream is real impact, not noise.
+fn finding_has_loot(f: &Finding) -> bool {
+    let has = |s: &str| {
+        let t = s.trim();
+        !t.is_empty() && t != "N/A" && t != "n/a" && t != "none" && t != "-"
+    };
+    has(&f.secret) || has(&f.account)
+}
+
 fn grounded_receipt(f: &Finding) -> bool {
     if f.evidence_data.is_some() {
         return true;

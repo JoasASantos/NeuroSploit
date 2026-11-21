@@ -140,6 +140,20 @@ struct Cli {
     /// burp, rea, neurosploit). Repeatable.
     #[arg(long = "mcp-server", global = true)]
     mcp_server: Vec<String>,
+    /// Stealth / OPSEC mode: slower and quieter, living-off-the-land. Lowers
+    /// recon intensity, prefers native tooling over noisy uploads (less likely
+    /// to trip AV/EDR), paces actions — without dropping test coverage.
+    #[arg(long = "stealth", global = true)]
+    stealth: bool,
+    /// Skip the adversarial validation vote. Keep every finding with the severity
+    /// its agent assigned (status `unvalidated`); discard nothing useful.
+    #[arg(long = "no-validate", global = true)]
+    no_validate: bool,
+    /// Route the planner/strategist role to a specific model (provider:model),
+    /// e.g. a second provider proposing alternative approaches, while the rest of
+    /// the pool executes and validates.
+    #[arg(long = "planner-model", global = true)]
+    planner_model: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -1090,6 +1104,11 @@ async fn main() -> anyhow::Result<()> {
             cfg.reactive = reactive;
             cfg.mcp_profile = mcp_profile;
             cfg.autonomy = autonomy;
+            cfg.stealth = cli.stealth;
+            cfg.no_validate = cli.no_validate;
+            cfg.planner_model = cli.planner_model.clone();
+            if cfg.no_validate { std::env::set_var("NEUROSPLOIT_NO_VALIDATE", "1"); }
+            if cfg.stealth && cfg.recon_intensity > 2 { cfg.recon_intensity = 2; }
             apply_creds(&mut cfg, creds.as_deref()).await;
             let out = run_engagement(&base, cfg, mcp, false).await?;
             print_findings(&out);
@@ -1209,6 +1228,20 @@ async fn main() -> anyhow::Result<()> {
                 cli.session_environment.as_deref().unwrap_or("lab"),
                 cli.session_policy.as_deref().unwrap_or("web"),
             )?;
+            cfg.neo4j = cli.neo4j.clone();
+            cfg.stealth = cli.stealth;
+            cfg.no_validate = cli.no_validate;
+            cfg.planner_model = cli.planner_model.clone();
+            // A dedicated planner model also joins the pool so it actually runs
+            // (proposes alternative approaches alongside the primary) and takes
+            // part in cross-model voting.
+            if let Some(pm) = cfg.planner_model.clone() {
+                if !pm.trim().is_empty() && !cfg.models.iter().any(|m| m == &pm) {
+                    cfg.models.push(pm);
+                }
+            }
+            if cfg.no_validate { std::env::set_var("NEUROSPLOIT_NO_VALIDATE", "1"); }
+            if cfg.stealth && cfg.recon_intensity > 2 { cfg.recon_intensity = 2; }
             let out = run_mode(&base, cfg, false, Mode::Host).await?;
             print_findings(&out);
         }
