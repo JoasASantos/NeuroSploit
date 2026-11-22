@@ -1452,6 +1452,26 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="projectRunsModal" hidden>
+  <div class="modal modal-lg">
+    <div class="modal-head">
+      <div class="title" id="projectRunsTitle">Project Runs</div>
+      <button class="icon-btn" onclick="closeModal('#projectRunsModal')" aria-label="Close"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="projectRunsId" />
+      <div class="field-group">
+        <input id="projectRunsSearch" type="text" placeholder="Search runs..." />
+      </div>
+      <div id="projectRunsList" style="max-height:400px;overflow-y:auto"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal('#projectRunsModal')">Close</button>
+      <button class="btn btn-primary" id="btnProjectRunsSave">Save Selection</button>
+    </div>
+  </div>
+</div>
+
 <!-- ============ INTEGRATION CONFIG MODAL ============ -->
 <div class="modal-overlay" id="integrationModal" hidden>
   <div class="modal modal-sm">

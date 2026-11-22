@@ -1844,6 +1844,7 @@ pub fn cypher_statements_with_engagement(b: &GraphBatch, run: &str, engagement: 
             "from": e.from.1, "to": e.to.1, "status": e.status.as_str(), "confidence": e.confidence, "props": props,
         }));
     }
+    let eng_set_edge = engagement.map(|_| ", r.engagement = $engagement").unwrap_or("");
     for ((rel, fl, tl), rows) in groups {
         for chunk in rows.chunks(500) {
             let stmt = format!(
@@ -1852,12 +1853,16 @@ pub fn cypher_statements_with_engagement(b: &GraphBatch, run: &str, engagement: 
                  SET r += row.props, \
                      r.status = CASE WHEN r.status = 'confirmed' THEN 'confirmed' ELSE row.status END, \
                      r.confidence = CASE WHEN r.confidence IS NULL OR row.confidence > r.confidence THEN row.confidence ELSE r.confidence END, \
-                     r.updated_at = timestamp(), r.last_run = $run",
+                     r.updated_at = timestamp(), r.last_run = $run{eng_set_edge}",
                 fl.as_str(),
                 tl.as_str(),
                 rel.as_str()
             );
-            out.push((stmt, json!({"rows": chunk, "run": run})));
+            let mut params = json!({"rows": chunk, "run": run});
+            if let Some(eng) = engagement {
+                params["engagement"] = json!(eng);
+            }
+            out.push((stmt, params));
         }
     }
     out
@@ -1895,13 +1900,21 @@ fn cypher_literal(v: &Value) -> String {
 /// An offline Cypher script: `cypher-shell -u neo4j -p … -f graph.cypher`.
 /// Values are emitted as escaped literals bound once per statement.
 pub fn export_cypher(b: &GraphBatch, run: &str) -> String {
+    export_cypher_with_engagement(b, run, None)
+}
+
+pub fn export_cypher_with_engagement(b: &GraphBatch, run: &str, engagement: Option<&str>) -> String {
     let mut s = String::from(
         "// NeuroSploit attack graph — load with:\n//   cypher-shell -a <uri> -u <user> -p <password> -f graph.cypher\n// Idempotent: MERGE on stable keys; secrets are fingerprints only.\n\n",
     );
-    for (stmt, params) in cypher_statements(b, run) {
+    for (stmt, params) in cypher_statements_with_engagement(b, run, engagement) {
         let rows = params.get("rows").map(cypher_literal);
         let run_lit = cypher_literal(&json!(run));
+        let eng_lit = engagement.map(|e| cypher_literal(&json!(e)));
         let mut st = stmt.replace("$run", &run_lit);
+        if let Some(el) = &eng_lit {
+            st = st.replace("$engagement", el);
+        }
         if let Some(r) = rows {
             st = st.replacen("UNWIND $rows AS row", &format!("UNWIND {r} AS row"), 1);
         }
@@ -2026,7 +2039,13 @@ impl Neo4j {
 
     /// MERGE the batch. Returns (nodes, relationships) sent.
     pub async fn push(&self, b: &GraphBatch, run: &str) -> anyhow::Result<(usize, usize)> {
-        let stmts = cypher_statements(b, run);
+        self.push_with_engagement(b, run, None).await
+    }
+
+    /// MERGE the batch with an optional engagement identifier stamped on every
+    /// node and edge so separate engagements with overlapping IPs stay apart.
+    pub async fn push_with_engagement(&self, b: &GraphBatch, run: &str, engagement: Option<&str>) -> anyhow::Result<(usize, usize)> {
+        let stmts = cypher_statements_with_engagement(b, run, engagement);
         // Constraints are schema operations: run them on their own first.
         let (schema, data): (Vec<_>, Vec<_>) = stmts.into_iter().partition(|(s, _)| s.starts_with("CREATE CONSTRAINT"));
         for (s, p) in schema {
@@ -2135,6 +2154,65 @@ impl Neo4j {
                 vec![]
             }
         }
+    }
+
+    /// Query Neo4j for attack paths from owned nodes to high-value targets
+    /// (DCs, DAs, forest roots). Returns a formatted context block for the planner.
+    pub async fn query_graph_suggestions(&self, engagement: Option<&str>) -> String {
+        let mut parts: Vec<String> = Vec::new();
+
+        // 1. Owned footholds
+        let owned = self.query_owned_nodes(engagement).await;
+        if !owned.is_empty() {
+            let hosts: Vec<String> = owned.iter().filter_map(|o| {
+                let name = o.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                let addr = o.get("address").and_then(|a| a.as_str()).unwrap_or("");
+                let label = o.get("label").and_then(|l| l.as_str()).unwrap_or("");
+                if name.is_empty() && addr.is_empty() { return None; }
+                Some(format!("{label} {name}{}", if addr.is_empty() { String::new() } else { format!(" ({addr})") }))
+            }).collect();
+            if !hosts.is_empty() {
+                parts.push(format!("Owned footholds: {}", hosts.join(", ")));
+            }
+        }
+
+        // 2. Next moves from graph (reachable unowned targets)
+        let moves = self.query_next_moves(engagement).await;
+        if !moves.is_empty() {
+            let mut lines: Vec<String> = Vec::new();
+            for m in moves.iter().take(10) {
+                let from = m.get("from_name").and_then(|v| v.as_str()).unwrap_or("?");
+                let rel = m.get("rel").and_then(|v| v.as_str()).unwrap_or("?");
+                let to = m.get("to_name").and_then(|v| v.as_str()).unwrap_or("?");
+                let addr = m.get("to_address").and_then(|v| v.as_str()).unwrap_or("");
+                lines.push(format!("  {from} -[{rel}]-> {to}{}", if addr.is_empty() { String::new() } else { format!(" ({addr})") }));
+            }
+            parts.push(format!("Graph-derived attack paths (from owned to unowned):\n{}", lines.join("\n")));
+        }
+
+        // 3. Shortest path to DC/DA if any exist in graph
+        for target_label in ["Host", "Identity"] {
+            for target_name in ["DC01-VANGUARD", "DC01-AUREON", "DC01-HELIX", "d.kim", "Administrator"] {
+                let path = self.query_shortest_path("Host", target_label, target_name, engagement).await;
+                if !path.is_empty() {
+                    if let Some(arr) = path[0].as_array() {
+                        let steps: Vec<String> = arr.iter().filter_map(|n| {
+                            let name = n.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                            let label = n.get("label").and_then(|v| v.as_str()).unwrap_or("");
+                            if name.is_empty() { None } else { Some(format!("[{label}]{name}")) }
+                        }).collect();
+                        if steps.len() > 1 {
+                            parts.push(format!("Shortest path to {target_name}: {}", steps.join(" -> ")));
+                        }
+                    }
+                }
+            }
+        }
+
+        if parts.is_empty() {
+            return String::new();
+        }
+        format!("\nNEO4J GRAPH INTELLIGENCE (BloodHound-style path analysis):\n{}\n", parts.join("\n"))
     }
 
     /// Query Neo4j for suggested next moves: edges from owned nodes to unowned targets.

@@ -13,12 +13,12 @@
 //! So every artifact carries the same three-part identity:
 //!
 //! ```text
-//!   JOASNSCOPE - <build fingerprint> - <run id> - <per-artifact nonce>
+//!   NEUROSPLOIT - <build fingerprint> - <run id> - <per-artifact nonce>
 //!        │             │                  │              │
 //!     who made it   which build      which engagement   which artifact
 //! ```
 //!
-//! The prefix is deliberately a single literal, `JOASNSCOPE`, so a grep for it
+//! The prefix is deliberately a single literal, `NEUROSPLOIT`, so a grep for it
 //! across any document finds every trace at once — a marker nobody can find is
 //! a marker that proves nothing when it matters.
 //!
@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// The literal every trace shares. Grep-able on purpose.
-pub const SIGIL: &str = "JOASNSCOPE";
+pub const SIGIL: &str = "NEUROSPLOIT";
 
 /// Engine name as it appears in artifacts.
 pub const ENGINE: &str = "neurosploit";

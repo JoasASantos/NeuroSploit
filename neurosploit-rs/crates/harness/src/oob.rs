@@ -11,7 +11,7 @@
 //! then watch for it to arrive:
 //!
 //! ```text
-//!   payload:  http://JOASNSCOPEssrf1a2b.oob.example.com/
+//!   payload:  http://NEUROSPLOITssrf1a2b.oob.example.com/
 //!                            │
 //!   target ─────────────────→│ DNS query for that name   ← proof of resolution
 //!          ─────────────────→│ HTTP GET to that name     ← proof of egress
