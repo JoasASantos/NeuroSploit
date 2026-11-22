@@ -35,7 +35,7 @@ pub fn providers() -> Vec<Provider> {
         Provider { key: "deepseek", label: "DeepSeek", base_url: "https://api.deepseek.com/v1", env_key: "DEEPSEEK_API_KEY", kind: "api",
             models: vec!["deepseek-v4-pro", "deepseek-flash", "deepseek-reasoner", "deepseek-chat"] },
         Provider { key: "mistral", label: "Mistral", base_url: "https://api.mistral.ai/v1", env_key: "MISTRAL_API_KEY", kind: "api",
-            models: vec!["mistral-large-latest", "codestral-latest"] },
+            models: vec!["mistral-large-latest", "mistral-small-latest", "codestral-latest", "ministral-8b-latest", "ministral-3b-latest", "mistral-medium-latest"] },
         Provider { key: "qwen", label: "Qwen (DashScope)", base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", env_key: "DASHSCOPE_API_KEY", kind: "api",
             models: vec!["qwen3.8-max", "qwen3.8-omni-flash", "qwen-max", "qwen2.5-coder-32b-instruct", "qwq-plus"] },
         // Z.ai (Zhipu / GLM). OpenAI-compatible open platform endpoint.
