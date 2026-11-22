@@ -1709,3 +1709,73 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
 #c2View .badge-muted { color: var(--text-faint); }
 /* Attack-graph finding detail: evidence/payload blocks */
 .fd-pre { font-family: var(--mono); font-size: var(--fs-xs); white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-2, rgba(127,127,127,.08)); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; margin: 2px 0 0; max-height: 240px; overflow: auto; }
+/* Asset context in finding detail */
+.fd-asset-ctx { display:flex; flex-wrap:wrap; gap:6px 16px; padding:10px 14px; background:var(--surface-2, rgba(127,127,127,.06)); border-radius:8px; margin:8px 0 4px; border-left:3px solid var(--accent) }
+.fd-asset-row { display:flex; gap:6px; align-items:baseline; min-width:200px }
+.fd-asset-label { font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-faint); white-space:nowrap; font-weight:600 }
+.fd-asset-value { font-size:12px; font-family:var(--mono); color:var(--text) }
+/* Filter dropdowns */
+.gm-filter { background:var(--surface-2, rgba(127,127,127,.06)); color:var(--text); border:1px solid var(--border); border-radius:4px; padding:2px 6px; font-size:11px; cursor:pointer; outline:none }
+.gm-filter:focus { border-color:var(--accent) }
+/* Re-validate button */
+.fd-actions { padding:10px 14px; display:flex; gap:8px }
+.fd-revalidate { font-size:12px }
+/* Kill chain coverage bar */
+.gm-killchain { display:flex; gap:2px; padding:6px 0; width:100%; margin-top:4px }
+.kc-stage { flex:1; text-align:center; min-width:0 }
+.kc-bar { height:4px; background:var(--border); border-radius:2px; transition:background .2s }
+.kc-covered .kc-bar { background:var(--accent) }
+.kc-label { font-size:8px; color:var(--text-faint); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:2px }
+.kc-covered .kc-label { color:var(--accent) }
+
+/* Agent findings panel — clickable rows */
+.agent-row { cursor: pointer; transition: background var(--t-fast), border-color var(--t-fast); }
+.agent-row:hover { border-color: var(--accent); background: var(--surface-2); }
+.agent-expanded { background: var(--surface-2) !important; border-left: 3px solid var(--accent) !important; }
+.at-card-expand { font-size: var(--fs-xs); color: var(--text-faint); width: 16px; text-align: center; flex: none; transition: transform var(--t-fast); }
+.agent-findings-panel {
+  margin: 0 0 8px 20px; padding: 8px 12px;
+  background: var(--bg); border-radius: var(--radius-sm); border: 1px solid var(--border);
+  animation: afpSlideDown .15s ease-out;
+}
+@keyframes afpSlideDown { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+.afp-header { font-size: var(--fs-2xs); color: var(--text-faint); margin-bottom: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
+.afp-finding {
+  display: flex; align-items: center; gap: 8px; padding: 4px 8px; cursor: pointer;
+  border-radius: var(--radius-xs); transition: background var(--t-fast); font-size: var(--fs-sm);
+}
+.afp-finding:hover { background: rgba(255,255,255,.06); }
+.afp-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.afp-status { font-size: var(--fs-2xs); color: var(--text-faint); padding: 1px 6px; background: rgba(255,255,255,.06); border-radius: var(--radius-xs); }
+.afp-endpoint { font-size: var(--fs-2xs); color: var(--accent); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Move cards */
+.moves-grid { display: flex; flex-direction: column; gap: 4px; }
+.move-card {
+  padding: 8px 12px; background: var(--surface-2); border-radius: var(--radius-sm); margin-bottom: 0;
+  border-left: 3px solid var(--accent); display: flex; gap: 8px; align-items: flex-start;
+}
+.move-type {
+  font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+  padding: 2px 6px; border-radius: var(--radius-xs); background: var(--accent); color: var(--bg); white-space: nowrap; margin-top: 1px;
+}
+.move-type.mt-validate { background: var(--sev-medium-fg); }
+.move-type.mt-exploit { background: var(--sev-critical-fg); }
+.move-type.mt-escalate { background: var(--sev-high-fg); }
+.move-type.mt-pivot { background: #a855f7; }
+.move-type.mt-lateral { background: #a855f7; }
+.move-type.mt-enumerate, .move-type.mt-recon { background: #38bdf8; }
+.move-desc { font-size: var(--fs-sm); color: var(--text); line-height: 1.4; overflow-wrap: anywhere; }
+
+/* Chain edge badges — color-coded by relation type */
+.chain-rel.chain-edge-ESCALATES_TO { background: var(--sev-high-fg); color: #fff; }
+.chain-rel.chain-edge-IMPACTS { background: var(--sev-critical-fg); color: #fff; }
+.chain-rel.chain-edge-PROVES { background: #22c55e; color: #000; }
+.chain-rel.chain-edge-CAN_ACCESS { background: #38bdf8; color: #000; }
+.chain-rel.chain-edge-PIVOTS_TO { background: #a855f7; color: #fff; }
+.chain-rel.chain-edge-ENABLES { background: #f59e0b; color: #000; }
+.chain-rel.chain-edge-YIELDS { background: #06b6d4; color: #000; }
+
+/* Chain confidence bar */
+.chain-conf-bar { display: inline-block; width: 40px; height: 4px; background: var(--border); border-radius: 2px; vertical-align: middle; margin-left: 6px; }
+.chain-conf-fill { display: block; height: 100%; border-radius: 2px; background: var(--accent); }

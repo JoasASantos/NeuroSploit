@@ -32,6 +32,10 @@ use serde_json::Value;
 /// best-first order and returning the first that parses. `None` means the reply
 /// contained no recoverable JSON (genuine prose, a refusal, or an empty reply).
 pub fn parse_reply(text: &str) -> Option<Value> {
+    // Strip model-specific markup that wraps or replaces JSON output.
+    let cleaned = strip_model_markup(text);
+    let text = &cleaned;
+
     for cand in candidates(text) {
         if let Some(v) = parse_lenient(&cand) {
             return Some(v);
@@ -61,6 +65,38 @@ pub fn parse_lenient(slice: &str) -> Option<Value> {
         }
     }
     None
+}
+
+/// Strip model-specific markup formats that some providers emit instead of
+/// (or around) the requested JSON. Currently handles:
+/// - DeepSeek DSML tags (`｜｜DSML｜｜...｜｜DSML｜｜`) — fullwidth pipes U+FF5C
+/// - XML-like `<tool_call>...</tool_call>` wrappers
+/// - `<|tool▁call|>` / `<|tool_call|>` delimiters (DeepSeek V2/V3 chat format)
+fn strip_model_markup(text: &str) -> String {
+    let mut out = text.to_string();
+
+    // DeepSeek DSML tags (fullwidth pipes ｜ = U+FF5C)
+    let dsml = "\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}";
+    if out.contains(dsml) {
+        out = out.replace(dsml, "\n");
+    }
+
+    // DeepSeek V2/V3 tool_call delimiters
+    for marker in ["<|tool\u{2581}call|>", "<|tool_call|>", "<|/tool\u{2581}call|>", "<|/tool_call|>"] {
+        out = out.replace(marker, "\n");
+    }
+
+    // XML tool_call wrappers
+    out = out.replace("<tool_call>", "\n");
+    out = out.replace("</tool_call>", "\n");
+
+    // Common XML wrappers around JSON
+    for tag in ["output", "result", "response", "answer", "json"] {
+        out = out.replace(&format!("<{tag}>"), "\n");
+        out = out.replace(&format!("</{tag}>"), "\n");
+    }
+
+    out
 }
 
 /// Candidate JSON slices, in the order we should try them.
@@ -304,5 +340,27 @@ mod tests {
     #[test]
     fn empty_array_is_recovered_not_lost() {
         assert!(parse_reply("```json\n[]\n```").unwrap().as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn deepseek_dsml_tags_stripped() {
+        let dsml = "\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}";
+        let t = format!("{dsml}tool_call\ncurl -s http://target\n{dsml}\n[{{\"title\":\"XSS\",\"severity\":\"High\"}}]");
+        let v = parse_reply(&t).unwrap();
+        assert_eq!(v[0]["title"], "XSS");
+    }
+
+    #[test]
+    fn xml_tool_call_wrapper_stripped() {
+        let t = "<tool_call>\n{\"name\":\"run\"}\n</tool_call>\n[{\"title\":\"SQLi\",\"severity\":\"Critical\"}]";
+        let v = parse_reply(t).unwrap();
+        assert_eq!(v[0]["title"], "SQLi");
+    }
+
+    #[test]
+    fn deepseek_v3_tool_delimiter_stripped() {
+        let t = "<|tool_call|>\ncurl http://t\n<|/tool_call|>\n```json\n[{\"title\":\"SSRF\"}]\n```";
+        let v = parse_reply(t).unwrap();
+        assert_eq!(v[0]["title"], "SSRF");
     }
 }

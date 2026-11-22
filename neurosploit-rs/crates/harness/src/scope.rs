@@ -801,6 +801,16 @@ fn truthy(s: &str) -> bool {
     matches!(s.trim().to_lowercase().as_str(), "true" | "yes" | "on" | "1")
 }
 
+/// Parse a target string that may contain multiple comma- or semicolon-separated
+/// CIDRs, hosts, or URLs. Returns all individual targets trimmed.
+pub fn parse_multi_target(target: &str) -> Vec<String> {
+    target
+        .split(|c: char| c == ',' || c == ';')
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

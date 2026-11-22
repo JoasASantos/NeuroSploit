@@ -161,6 +161,10 @@ struct Cli {
     /// the pool executes and validates.
     #[arg(long = "planner-model", global = true)]
     planner_model: Option<String>,
+    /// Engagement identifier: groups runs under one test ID, stamps Neo4j
+    /// nodes, and keeps separate engagements with overlapping IPs apart.
+    #[arg(long = "engagement", alias = "test-id", global = true)]
+    engagement: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -807,6 +811,9 @@ enum Cmd {
     Agents,
     /// List providers and models.
     Models,
+    /// Pre-flight health check: verify tools, API keys, Neo4j, MCP servers,
+    /// disk space, and dependencies.
+    Doctor,
 }
 
 /// Locate the repo root that holds `agents_md/`.
@@ -1109,6 +1116,92 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Cmd::Doctor => {
+            println!("\n  NeuroSploit — Health Check\n");
+            let mut ok = 0u32;
+            let mut warn = 0u32;
+            let mut fail = 0u32;
+
+            let providers_env = [
+                ("ANTHROPIC_API_KEY", "Anthropic"),
+                ("OPENAI_API_KEY", "OpenAI"),
+                ("GEMINI_API_KEY", "Gemini"),
+                ("XAI_API_KEY", "xAI/Grok"),
+                ("DEEPSEEK_API_KEY", "DeepSeek"),
+            ];
+            for (env_key, name) in providers_env {
+                if std::env::var(env_key).ok().filter(|v| !v.trim().is_empty()).is_some() {
+                    println!("  \x1b[32m✓\x1b[0m {name} API key set");
+                    ok += 1;
+                } else {
+                    println!("  \x1b[2m○\x1b[0m {name} API key not set");
+                }
+            }
+
+            for (cmd, name) in [("claude", "Claude CLI"), ("codex", "Codex CLI"), ("gemini", "Gemini CLI")] {
+                if std::process::Command::new("which").arg(cmd).output().map(|o| o.status.success()).unwrap_or(false) {
+                    println!("  \x1b[32m✓\x1b[0m {name} installed");
+                    ok += 1;
+                }
+            }
+
+            for tool in ["nmap", "curl", "git", "python3", "pip3", "docker"] {
+                if std::process::Command::new("which").arg(tool).output().map(|o| o.status.success()).unwrap_or(false) {
+                    println!("  \x1b[32m✓\x1b[0m {tool}");
+                    ok += 1;
+                } else {
+                    println!("  \x1b[33m⚠\x1b[0m {tool} not found");
+                    warn += 1;
+                }
+            }
+
+            let neo4j_uri = std::env::var("NEO4J_URI").unwrap_or_default();
+            if !neo4j_uri.is_empty() {
+                println!("  \x1b[32m✓\x1b[0m Neo4j configured: {neo4j_uri}");
+                ok += 1;
+            } else {
+                println!("  \x1b[2m○\x1b[0m Neo4j not configured (optional)");
+            }
+
+            if std::process::Command::new("docker").args(["info"])
+                .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+                .status().map(|s| s.success()).unwrap_or(false) {
+                println!("  \x1b[32m✓\x1b[0m Docker daemon running");
+                ok += 1;
+            } else {
+                println!("  \x1b[33m⚠\x1b[0m Docker not running");
+                warn += 1;
+            }
+
+            if base.join("agents_md").is_dir() {
+                let count = std::fs::read_dir(base.join("agents_md")).map(|d| d.count()).unwrap_or(0);
+                println!("  \x1b[32m✓\x1b[0m Agent library: {count} agents");
+                ok += 1;
+            } else {
+                println!("  \x1b[31m✗\x1b[0m Agent library not found");
+                fail += 1;
+            }
+
+            if let Ok(output) = std::process::Command::new("df").args(["-h", "."]).output() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                if let Some(line) = text.lines().nth(1) {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 4 {
+                        println!("  \x1b[2m○\x1b[0m Disk: {} available", parts[3]);
+                    }
+                }
+            }
+
+            let runs = base.join("runs");
+            if runs.is_dir() {
+                let count = std::fs::read_dir(&runs).map(|d| d.filter(|e| {
+                    e.as_ref().map(|e| e.file_name().to_string_lossy().starts_with("ns-")).unwrap_or(false)
+                }).count()).unwrap_or(0);
+                println!("  \x1b[2m○\x1b[0m Runs: {count} completed");
+            }
+
+            println!("\n  Summary: {ok} ok, {warn} warnings, {fail} failures\n");
+        }
         Cmd::Tools { cmd } => { toolscli::handle(cmd).await?; }
         Cmd::Logs { cmd } => { handle_logs(&base, cmd).await?; }
         Cmd::Tunnel { port, authtoken, region, domain, bind, no_serve } => {
@@ -1215,6 +1308,7 @@ async fn main() -> anyhow::Result<()> {
             cfg.stealth = cli.stealth;
             cfg.no_validate = cli.no_validate;
             cfg.planner_model = cli.planner_model.clone();
+            cfg.engagement = cli.engagement.clone();
             if cfg.no_validate { std::env::set_var("NEUROSPLOIT_NO_VALIDATE", "1"); }
             if cfg.stealth && cfg.recon_intensity > 2 { cfg.recon_intensity = 2; }
             apply_creds(&mut cfg, creds.as_deref()).await;
@@ -1340,6 +1434,7 @@ async fn main() -> anyhow::Result<()> {
             cfg.stealth = cli.stealth;
             cfg.no_validate = cli.no_validate;
             cfg.planner_model = cli.planner_model.clone();
+            cfg.engagement = cli.engagement.clone();
             // A dedicated planner model also joins the pool so it actually runs
             // (proposes alternative approaches alongside the primary) and takes
             // part in cross-model voting.
@@ -1659,7 +1754,9 @@ pub(crate) fn spawn_engagement(base: &Path, mut cfg: RunConfig, mcp: bool, mode:
         .unwrap_or_else(harness::pipeline::default_user_agent);
     std::env::set_var("NEUROSPLOIT_UA", &ua);
     println!("  │  ua     : {ua}");
-    write_status(&workdir, "running", &format!("\"target\":{:?}", cfg.target));
+    write_status(&workdir, "running", &format!("\"target\":{:?}{}",
+        cfg.target,
+        cfg.engagement.as_ref().map(|e| format!(",\"engagement\":{:?}", e)).unwrap_or_default()));
 
     println!("  ┌─ NeuroSploit v{}  ·  by Joas A Santos & Red Team Leaders", env!("CARGO_PKG_VERSION"));
     println!("  │  run id : {run_id}");

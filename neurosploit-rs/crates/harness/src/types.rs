@@ -358,6 +358,11 @@ pub struct RunConfig {
     /// use the rest of the pool. Empty → the primary model plans.
     #[serde(default)]
     pub planner_model: Option<String>,
+    /// Engagement identifier for grouping runs across the same test. Stamped
+    /// into every run's metadata and Neo4j nodes so separate engagements with
+    /// overlapping IPs never mix.
+    #[serde(default)]
+    pub engagement: Option<String>,
 }
 
 fn default_autonomy() -> String {
@@ -431,6 +436,7 @@ impl RunConfig {
             stealth: false,
             no_validate: false,
             planner_model: None,
+            engagement: None,
         }
     }
 }

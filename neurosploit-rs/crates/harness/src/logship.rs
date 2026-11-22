@@ -440,6 +440,91 @@ mod tests {
         assert_eq!(rfc3339_from_unix(1_700_000_000), "2023-11-14T22:13:20Z");
     }
 
+}
+
+/// Structured log entry for per-agent real-time logging.
+/// Complements the post-run [`LogEvent`] with live entries emitted during execution.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StructuredLog {
+    pub ts: u64,
+    pub level: String,
+    pub agent: String,
+    pub phase: String,
+    pub message: String,
+    pub target: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finding_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl StructuredLog {
+    pub fn info(agent: &str, phase: &str, msg: &str, target: &str) -> Self {
+        Self {
+            ts: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            level: "info".into(),
+            agent: agent.to_string(),
+            phase: phase.to_string(),
+            message: msg.to_string(),
+            target: target.to_string(),
+            finding_id: None,
+            error: None,
+        }
+    }
+
+    pub fn warn(agent: &str, phase: &str, msg: &str, target: &str) -> Self {
+        Self {
+            ts: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            level: "warn".into(),
+            agent: agent.to_string(),
+            phase: phase.to_string(),
+            message: msg.to_string(),
+            target: target.to_string(),
+            finding_id: None,
+            error: None,
+        }
+    }
+
+    pub fn error(agent: &str, phase: &str, msg: &str, err: &str, target: &str) -> Self {
+        Self {
+            ts: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            level: "error".into(),
+            agent: agent.to_string(),
+            phase: phase.to_string(),
+            message: msg.to_string(),
+            target: target.to_string(),
+            finding_id: None,
+            error: Some(err.to_string()),
+        }
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests_structured {
+    use super::*;
+
+    #[test]
+    fn structured_log_serializes() {
+        let log = StructuredLog::info("sqli", "exploit", "testing param id", "http://t");
+        let json = log.to_json();
+        assert!(json.contains("\"agent\":\"sqli\""));
+        assert!(json.contains("\"level\":\"info\""));
+        assert!(!json.contains("finding_id"));
+    }
+
     #[test]
     fn collect_reads_audit_and_traces() {
         let dir = std::env::temp_dir().join(format!("ns-logship-test-{}", std::process::id()));
