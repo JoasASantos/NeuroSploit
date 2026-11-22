@@ -1501,11 +1501,14 @@ fn write_meta(cfg: &RunConfig, p: &crate::probe::Probe, asset: &str) {
     // from the artifacts alone.
     let typesafe_on = std::env::var("NEUROSPLOIT_TYPESAFE").unwrap_or_default().trim().to_lowercase() != "off"
         && std::env::var("TYPESAFE_API_KEY").map(|k| !k.trim().is_empty()).unwrap_or(false);
-    let meta = serde_json::json!({
+    let mut meta = serde_json::json!({
         "target": cfg.target, "asset": asset, "title": p.title, "brand": p.brand,
         "tech": p.tech, "server": p.server, "status": p.status,
         "typesafe": typesafe_on,
     });
+    if let Some(eng) = &cfg.engagement {
+        meta["engagement"] = serde_json::json!(eng);
+    }
     if let Ok(j) = serde_json::to_string_pretty(&meta) {
         let _ = std::fs::write(format!("{}/meta.json", dir.trim_end_matches('/')), j);
     }
@@ -2984,7 +2987,7 @@ async fn graph_checkpoint(
         let mut pb = gm::build(&cfg.target, &rid, findings, internal.as_ref(), None);
         gm::project_recon(&mut pb, &cfg.target, recon, &in_scope);
         gm::record_paths(&mut pb, &cs, &rid);
-        match n.push(&pb, &rid).await {
+        match n.push_with_engagement(&pb, &rid, cfg.engagement.as_deref()).await {
             Ok(_) => synced = " · neo4j synced".into(),
             Err(e) => synced = format!(" · neo4j push skipped ({e})"),
         }
@@ -3002,6 +3005,16 @@ async fn graph_checkpoint(
                     Err(e) => synced.push_str(&format!(" · exploration sync skipped ({e})")),
                 }
             }
+        }
+        // Neo4j graph intelligence: query owned nodes, attack paths, shortest
+        // paths to high-value targets. Append to live context so agents get
+        // BloodHound-style path suggestions.
+        let engagement_id = cfg.engagement.as_deref();
+        let suggestions = n.query_graph_suggestions(engagement_id).await;
+        if !suggestions.is_empty() {
+            let cur = gm::live_context(&rid);
+            gm::set_live_context(&rid, format!("{cur}{suggestions}"));
+            synced.push_str(" · neo4j path intelligence");
         }
     }
     let (h, sv, ep, sec) = gm::surface_counts(&gb);

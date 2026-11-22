@@ -4111,7 +4111,8 @@ function extrasPanelsHtml(uid) {
       </div>
       <div class="graph-main">
         <div class="panel-toolbar"><div class="chip-row" data-x="legend"></div><div class="topbar-spacer"></div>
-          <label class="toggle"><input type="checkbox" data-x="full" /> full graph</label></div>
+          <label class="toggle"><input type="checkbox" data-x="full" /> full graph</label>
+          <label class="toggle"><input type="checkbox" data-x="killchain" /> kill chain</label></div>
         <div class="gm-finding-desc" data-x="fdesc" hidden></div>
         <div class="gm-wrap" data-x="wrap"><div class="gm-stage" data-x="stage"></div>
           <div class="gm-zoom"><button class="btn btn-sm" data-z="in">+</button><button class="btn btn-sm" data-z="out">−</button><button class="btn btn-sm" data-z="fit">⤢</button></div></div>
@@ -4179,6 +4180,7 @@ function makeExtras(viewSel, uid, getRunId) {
   x.q('t-method').addEventListener('change', () => extrasTraffic(x));
   x.q('tr-q').addEventListener('input', debounce('tr', () => extrasTraces(x)));
   x.q('full').addEventListener('change', () => renderGraphMemory(x));
+  x.q('killchain').addEventListener('change', () => { x.drawnSig = null; renderGraphMemory(x); });
   bindGraphInteractions(x);
   return x;
 }
@@ -4409,7 +4411,8 @@ function renderGraphFindingList(x) {
   const data = x.graphData?.graph;
   const list = x.q('gflist');
   if (!list || !data) return;
-  const findings = (data.nodes || []).filter(n => n.label === 'Finding');
+  const hasFilters = x.view.filterSev || x.view.filterStatus || x.view.filterSubnet;
+  const findings = (data.nodes || []).filter(n => n.label === 'Finding' && (!hasFilters || !x._filteredNodeIds || x._filteredNodeIds.has(`${n.label}|${n.key}`)));
   findings.sort((a, b) => sevRank(a.props?.local_severity) - sevRank(b.props?.local_severity));
   const sel = x.view.filterFinding || 'overview';
   const runIds = new Set();
@@ -4456,9 +4459,9 @@ function renderGraphMemory(x) {
     .map(([k, l]) => `<button class="gm-leg gk-${k}${kf.has(k) ? '' : ' gm-leg-active'}" data-kind="${k}"><span class="gm-leg-dot"></span>${esc(l)}</button>`).join('') +
     '<span class="gm-leg-sep"></span><span class="gm-edge-leg es-confirmed">confirmed</span><span class="gm-edge-leg es-needs_validation">needs validation</span><span class="gm-edge-leg es-hypothesis">hypothesis</span>' +
     '<span class="gm-leg-sep"></span>' +
-    `<select class="gm-filter" data-filter="severity"><option value="">Severity</option>${[...allSevs].sort((a,b)=>sevRank(a)-sevRank(b)).map(s=>`<option value="${esc(s)}"${x.view.filterSev===s?' selected':''}>${esc(s)}</option>`).join('')}</select>` +
-    `<select class="gm-filter" data-filter="status"><option value="">Status</option>${[...allStatuses].sort().map(s=>`<option value="${esc(s)}"${x.view.filterStatus===s?' selected':''}>${esc(s)}</option>`).join('')}</select>` +
-    `<select class="gm-filter" data-filter="subnet"><option value="">Subnet</option>${[...allSubnets].sort().map(s=>`<option value="${esc(s)}"${x.view.filterSubnet===s?' selected':''}>${esc(s)}</option>`).join('')}</select>` +
+    `<label class="gm-filter-wrap"><span class="gm-filter-label">Severity</span><select class="gm-filter" data-filter="severity"><option value="">All</option>${[...allSevs].sort((a,b)=>sevRank(a)-sevRank(b)).map(s=>`<option value="${esc(s)}"${x.view.filterSev===s?' selected':''}>${esc(s)}</option>`).join('')}</select></label>` +
+    `<label class="gm-filter-wrap"><span class="gm-filter-label">Status</span><select class="gm-filter" data-filter="status"><option value="">All</option>${[...allStatuses].sort().map(s=>`<option value="${esc(s)}"${x.view.filterStatus===s?' selected':''}>${esc(s)}</option>`).join('')}</select></label>` +
+    `<label class="gm-filter-wrap"><span class="gm-filter-label">Subnet</span><select class="gm-filter" data-filter="subnet"><option value="">All</option>${[...allSubnets].sort().map(s=>`<option value="${esc(s)}"${x.view.filterSubnet===s?' selected':''}>${esc(s)}</option>`).join('')}</select></label>` +
     `<div class="gm-killchain">${KILL_CHAIN_STAGES.map(s => `<div class="kc-stage ${stageCoverage[s] ? 'kc-covered' : ''}" title="${esc(s)}: ${stageCoverage[s] || 0} findings"><div class="kc-bar"></div><div class="kc-label">${esc(s)}</div></div>`).join('')}</div>`;
   $$('[data-kind]', x.q('legend')).forEach(btn => btn.addEventListener('click', () => {
     const k = btn.dataset.kind;
@@ -4485,6 +4488,8 @@ function renderGraphMemory(x) {
   if (x.view.filterSev) nodes = nodes.filter(n => !n.props?.local_severity || n.props.local_severity === x.view.filterSev);
   if (x.view.filterStatus) nodes = nodes.filter(n => !n.props?.status || n.props.status === x.view.filterStatus);
   if (x.view.filterSubnet) { const pfx = x.view.filterSubnet.replace('.0/24', '.'); nodes = nodes.filter(n => !n.props?.address || n.props.address.startsWith(pfx)); }
+  x._filteredNodeIds = new Set(nodes.filter(n => n.label === 'Finding').map(n => id(n)));
+  if (x.view.filterSev || x.view.filterStatus || x.view.filterSubnet) renderGraphFindingList(x);
   let keep = new Set(nodes.map(id));
   let edges = (data.edges || []).filter((e) => keep.has(eid(e.from)) && keep.has(eid(e.to)));
   if (!full) {
@@ -4630,7 +4635,7 @@ function renderGraphMemory(x) {
       ${assetCtx}
       <div class="fd-cards">
         ${cweStr ? `<div class="fd-card"><div class="fd-card-label">CWE</div><div class="fd-card-value">${esc(Array.isArray(cweStr) ? cweStr.join(', ') : cweStr)}</div></div>` : ''}
-        ${cvssStr ? `<div class="fd-card"><div class="fd-card-label">CVSS</div><div class="fd-card-value">${esc(String(cvssStr))}</div></div>` : ''}
+        ${cvssStr ? (() => { const cs = String(cvssStr); const vm = cs.match(/([\d.]+)\s*(\(.*\))?/); const score = vm ? vm[1] : cs; const vec = vm && vm[2] ? vm[2] : (cs.includes('/') && !vm ? cs : ''); return `<div class="fd-card"><div class="fd-card-label">CVSS</div><div class="fd-card-value">${esc(score)}${vec ? `<span class="cvss-vector">${esc(vec)}</span>` : ''}</div></div>`; })() : ''}
         ${owasp ? `<div class="fd-card"><div class="fd-card-label">OWASP</div><div class="fd-card-value">${esc(owasp)}</div></div>` : ''}
         ${mitre ? `<div class="fd-card"><div class="fd-card-label">MITRE</div><div class="fd-card-value">${esc(mitre)}</div></div>` : ''}
         ${stageVal ? `<div class="fd-card"><div class="fd-card-label">Stage</div><div class="fd-card-value">${esc(stageVal)}</div></div>` : ''}
@@ -4657,6 +4662,49 @@ function renderGraphMemory(x) {
     }
   } else if (descBox) {
     show(descBox, false);
+  }
+
+  // Kill chain: find longest attack path through traversal edges
+  const CHAIN_EDGES = new Set(['ESCALATES_TO', 'CAN_ACCESS', 'PIVOTS_TO', 'ENABLES', 'IMPACTS']);
+  const chainEdges = edges.filter(e => CHAIN_EDGES.has(e.type));
+  const fwd = new Map();
+  const rev = new Map();
+  for (const e of chainEdges) {
+    const f = eid(e.from), t = eid(e.to);
+    (fwd.get(f) || fwd.set(f, []).get(f)).push({ to: t, edge: e });
+    (rev.get(t) || rev.set(t, []).get(t)).push({ from: f, edge: e });
+  }
+  const allChainNodes = new Set([...fwd.keys(), ...rev.keys()]);
+  const roots = [...allChainNodes].filter(n => !rev.has(n) || rev.get(n).length === 0);
+  if (!roots.length) for (const n of allChainNodes) { roots.push(n); break; }
+  let longestPath = [];
+  const dfs = (cur, path, visited) => {
+    if (path.length > longestPath.length) longestPath = [...path];
+    for (const { to } of (fwd.get(cur) || [])) {
+      if (!visited.has(to)) { visited.add(to); path.push(to); dfs(to, path, visited); path.pop(); visited.delete(to); }
+    }
+  };
+  for (const r of roots) { const v = new Set([r]); dfs(r, [r], v); }
+  const killChainSet = new Set(longestPath);
+  const killChainEdgeSet = new Set();
+  for (let i = 0; i < longestPath.length - 1; i++) {
+    const from = longestPath[i];
+    for (const { to, edge } of (fwd.get(from) || [])) {
+      if (to === longestPath[i + 1]) killChainEdgeSet.add(edge);
+    }
+  }
+
+  const showKillChain = x.q('killchain')?.checked;
+  if (showKillChain && longestPath.length > 1) {
+    const neighbors = new Set(killChainSet);
+    for (const e of edges) {
+      const f = eid(e.from), t = eid(e.to);
+      if (killChainSet.has(f)) neighbors.add(t);
+      if (killChainSet.has(t)) neighbors.add(f);
+    }
+    nodes = nodes.filter(n => neighbors.has(id(n)));
+    keep = new Set(nodes.map(id));
+    edges = edges.filter(e => keep.has(eid(e.from)) && keep.has(eid(e.to)));
   }
 
   // Circular node layout — left-to-right columns by entity kind
@@ -4723,7 +4771,8 @@ function renderGraphMemory(x) {
     const a = pos.get(eid(e.from)), b = pos.get(eid(e.to));
     if (!a || !b) return '';
     const st = e.status || 'needs_validation';
-    return `<path class="gm-e es-${esc(st)}${GM_TRAVERSAL.has(e.type) ? ' gm-trav' : ''}" data-from="${esc(eid(e.from))}" data-to="${esc(eid(e.to))}" marker-end="url(#${arrow(st)})" d="${path(a, b)}"><title>${esc(e.type)} · ${esc(st)} · conf ${Number(e.confidence || 0).toFixed(2)}</title></path>`;
+    const onKC = killChainEdgeSet.has(e);
+    return `<path class="gm-e es-${esc(st)}${GM_TRAVERSAL.has(e.type) ? ' gm-trav' : ''}${onKC ? ' gm-e-onpath' : ''}" data-from="${esc(eid(e.from))}" data-to="${esc(eid(e.to))}" marker-end="url(#${arrow(st)})" d="${path(a, b)}"><title>${esc(e.type)} · ${esc(st)} · conf ${Number(e.confidence || 0).toFixed(2)}</title></path>`;
   }).join('');
   const cards = nodes.map((n) => {
     const p = pos.get(id(n));
@@ -4733,7 +4782,8 @@ function renderGraphMemory(x) {
     const sevBadge = sev ? `<span class="gm-sev-badge sev ${sevClass(sev)}">${esc(sev.charAt(0).toUpperCase())}</span>` : '';
     const countBadge = props.endpoint_count ? `<span class="gm-badge" style="background:var(--sev-high-fg);color:#fff">${props.endpoint_count}</span>` : '';
     const sub = gmSub(n);
-    return `<div class="gm-node gk-${kind}" style="left:${p.x}px;top:${p.y}px;width:${NW}px" data-id="${esc(id(n))}">
+    const onKC = killChainSet.has(id(n));
+    return `<div class="gm-node gk-${kind}${onKC ? ' gm-onpath' : ''}" style="left:${p.x}px;top:${p.y}px;width:${NW}px" data-id="${esc(id(n))}">
       <div class="gm-circle">${gmIcon(n.label)}${sevBadge}${countBadge}</div>
       <div class="gm-node-label" title="${esc(gmName(n))}">${esc(gmName(n))}</div>
       ${sub ? `<div class="gm-node-info" title="${esc(sub)}">${esc(sub)}</div>` : ''}
@@ -4997,20 +5047,31 @@ async function loadPentests() {
   const body = $('#pentestsBody');
   if (!body) return;
   try {
-    const runs = await api('/api/runs');
+    const [runs, projects] = await Promise.all([api('/api/runs'), api('/api/projects').catch(() => [])]);
     if (!runs.length) { body.innerHTML = '<div class="empty-state">No pentests yet. Click <strong>+ New Pentest</strong> to start.</div>'; return; }
+    const matchRun = (p, r) => (r.projectId && r.projectId === p.id)
+      || (p.runIds || []).includes(r.id)
+      || (p.targets || []).some(t => {
+        const needle = t.replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
+        const hay = (String(r.target || '') + ' ' + String(r.name || '') + ' ' + String(r.id || '')).toLowerCase();
+        return needle && hay.includes(needle);
+      })
+      || (p.name && r.name && r.name.toLowerCase().includes(p.name.toLowerCase()));
+    const projectFor = (r) => { for (const p of projects) { if (matchRun(p, r)) return p.name; } return ''; };
     const renderRows = (q) => {
       const lq = (q || '').trim().toLowerCase();
       const filtered = lq ? runs.filter(r => {
-        const blob = `${r.id || ''} ${r.target || ''} ${r.name || ''} ${r.state || ''}`.toLowerCase();
+        const blob = `${r.id || ''} ${r.target || ''} ${r.name || ''} ${r.state || ''} ${projectFor(r)}`.toLowerCase();
         return blob.includes(lq);
       }) : runs;
       const rows = filtered.map(r => {
         const mode = (r.id || '').startsWith('ns-wb-') ? 'whitebox' : (r.id || '').startsWith('ns-gb-') ? 'greybox' : (r.id || '').startsWith('ns-host-') ? 'host' : 'blackbox';
         const when = r.when ? timeAgo(Math.floor(new Date(r.when).getTime() / 1000)) : '';
+        const proj = projectFor(r);
         return `<tr class="pentest-row" data-id="${esc(r.id)}">
           <td class="mono">${esc(r.id)}</td>
           <td>${esc(r.target || r.name || '')}</td>
+          <td>${esc(proj)}</td>
           <td>${esc(mode)}</td>
           <td>${r.findings ?? 0}</td>
           <td>${esc(r.state || 'done')}</td>
@@ -5018,7 +5079,7 @@ async function loadPentests() {
         </tr>`;
       }).join('');
       body.innerHTML = rows
-        ? `<table class="data-table"><thead><tr><th>ID</th><th>Target</th><th>Mode</th><th>Findings</th><th>Status</th><th>When</th></tr></thead><tbody>${rows}</tbody></table>`
+        ? `<table class="data-table"><thead><tr><th>ID</th><th>Target</th><th>Project</th><th>Mode</th><th>Findings</th><th>Status</th><th>When</th></tr></thead><tbody>${rows}</tbody></table>`
         : `<div class="empty-state">No pentests matching "${esc(q)}".</div>`;
       $$('.pentest-row', body).forEach(row => {
         row.style.cursor = 'pointer';
@@ -5205,8 +5266,8 @@ async function loadProjects() {
       || (p.runIds || []).includes(r.id)
       || (p.targets || []).some(t => {
         const needle = t.replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
-        const hay = String(r.target || '').toLowerCase();
-        return needle && (hay === needle || hay.includes(needle));
+        const hay = (String(r.target || '') + ' ' + String(r.name || '') + ' ' + String(r.id || '')).toLowerCase();
+        return needle && hay.includes(needle);
       });
     const group = new Map();
     for (const p of projects) {
@@ -5230,6 +5291,7 @@ async function loadProjects() {
               <span class="project-run-meta">${r.findings || 0}f · ${esc(r.state || '')}</span>
             </button>`).join('')}${rs.length > 6 ? `<div class="project-run-more">+${rs.length - 6} more</div>` : ''}</div>` : '<div class="project-empty">No tests matched yet.</div>'}
             <div class="config-card-actions">
+              <button class="btn btn-sm btn-primary" data-manage-runs="${esc(p.id)}">Manage Runs</button>
               <button class="btn btn-sm" data-edit-project="${esc(p.id)}">Edit</button>
               <button class="btn btn-sm btn-danger" data-del-project="${esc(p.id)}">Delete</button>
             </div>
@@ -5240,6 +5302,7 @@ async function loadProjects() {
       const r = runs.find(x => x.id === el.dataset.run);
       if (r) openRun({ id: r.id, state: r.state });
     }));
+    $$('[data-manage-runs]', body).forEach(el => el.addEventListener('click', () => openProjectRuns(el.dataset.manageRuns, projects, runs, matches)));
     $$('[data-edit-project]', body).forEach(el => el.addEventListener('click', () => openProject(el.dataset.editProject, projects)));
     $$('[data-del-project]', body).forEach(el => el.addEventListener('click', async () => {
       if (!confirm('Delete this project? The runs themselves are not touched.')) return;
@@ -5290,6 +5353,60 @@ $('#btnProjectSubmit')?.addEventListener('click', async () => {
     loadProjects();
   } catch (e) { toast(`Failed: ${e.message}`, 'error'); }
 });
+
+function openProjectRuns(projectId, projects, allRuns, matchFn) {
+  const p = projects.find(x => x.id === projectId);
+  if (!p) return;
+  $('#projectRunsId').value = projectId;
+  $('#projectRunsTitle').textContent = `${p.name} — Manage Runs`;
+  const explicitIds = new Set(p.runIds || []);
+  const renderList = (q) => {
+    const lq = (q || '').trim().toLowerCase();
+    const sorted = [...allRuns].sort((a, b) => {
+      const aMatch = explicitIds.has(a.id) || matchFn(p, a);
+      const bMatch = explicitIds.has(b.id) || matchFn(p, b);
+      if (aMatch && !bMatch) return -1;
+      if (!aMatch && bMatch) return 1;
+      return (b.ts || 0) - (a.ts || 0);
+    });
+    const filtered = lq ? sorted.filter(r => {
+      const blob = `${r.id || ''} ${r.target || ''} ${r.name || ''} ${r.state || ''}`.toLowerCase();
+      return blob.includes(lq);
+    }) : sorted;
+    $('#projectRunsList').innerHTML = filtered.map(r => {
+      const checked = explicitIds.has(r.id) || matchFn(p, r);
+      const autoMatch = !explicitIds.has(r.id) && matchFn(p, r);
+      return `<label class="project-run-check" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--border);cursor:pointer">
+        <input type="checkbox" data-rid="${esc(r.id)}" ${checked ? 'checked' : ''} ${autoMatch ? 'title="Auto-matched by target"' : ''} />
+        <span class="state-dot state-${esc(r.state || 'unknown')}" style="flex-shrink:0"></span>
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name || r.target || r.id)}</span>
+        <span class="muted" style="flex-shrink:0;font-size:12px">${r.findings || 0}f · ${esc(r.state || '')}</span>
+        ${autoMatch ? '<span style="font-size:10px;color:var(--accent);flex-shrink:0">auto</span>' : ''}
+      </label>`;
+    }).join('');
+  };
+  renderList('');
+  const searchEl = $('#projectRunsSearch');
+  searchEl.value = '';
+  searchEl.oninput = () => renderList(searchEl.value);
+  const saveBtn = $('#btnProjectRunsSave');
+  const newSave = saveBtn.cloneNode(true);
+  saveBtn.replaceWith(newSave);
+  newSave.addEventListener('click', async () => {
+    const checked = [...$$('input[data-rid]:checked', $('#projectRunsList'))].map(el => el.dataset.rid);
+    try {
+      await api(`/api/projects/${encodeURIComponent(projectId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...p, runIds: checked }),
+      });
+      closeModal('#projectRunsModal');
+      toast('Runs updated', 'ok');
+      loadProjects();
+    } catch (e) { toast(`Failed: ${e.message}`, 'error'); }
+  });
+  openModal('#projectRunsModal');
+}
 
 async function loadNetworks() {
   const body = $('#networksBody');
