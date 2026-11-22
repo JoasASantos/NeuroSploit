@@ -107,12 +107,8 @@ pub(crate) fn unb64(s: &str) -> Option<Vec<u8>> {
         .ok()
 }
 
-pub(crate) fn clip(mut s: String) -> String {
-    if s.len() > OUTPUT_CAP {
-        s.truncate(OUTPUT_CAP);
-        s.push_str("\n[truncated by NeuroSploit C2]");
-    }
-    s
+pub(crate) fn clip(s: String) -> String {
+    crate::limits::clip(&s, crate::limits::env_cap("NEUROSPLOIT_C2_OUTPUT_CAP", OUTPUT_CAP))
 }
 
 /// Post-exploitation doctrine injected into agent prompts when `--c2` is on.

@@ -1,247 +1,224 @@
-<h1 align="center">🧠 NeuroSploit v4.4.3</h1>
+<div align="center">
 
-<p align="center">
-  <a href="https://github.com/JoasASantos/NeuroSploit/stargazers"><img src="https://img.shields.io/github/stars/JoasASantos/NeuroSploit?style=for-the-badge&logo=github&color=8b5cf6" alt="Stars"></a>
-  <a href="https://github.com/JoasASantos/NeuroSploit/network/members"><img src="https://img.shields.io/github/forks/JoasASantos/NeuroSploit?style=for-the-badge&logo=github&color=a855f7" alt="Forks"></a>
-  <a href="https://github.com/JoasASantos/NeuroSploit/issues"><img src="https://img.shields.io/github/issues/JoasASantos/NeuroSploit?style=for-the-badge&color=22d3ee" alt="Issues"></a>
-</p>
+<img src="web/public/logo.svg" width="120" alt="NeuroSploit">
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Version-4.4.3-blue?style=flat-square">
-  <img src="https://img.shields.io/badge/Harness-Rust%20%7C%20tokio-e6b673?style=flat-square">
-  <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
-  <img src="https://img.shields.io/badge/MD%20Agents-486-red?style=flat-square">
-  <img src="https://img.shields.io/badge/Modes-Black%20%7C%20White%20%7C%20Grey%20%7C%20Host%20%7C%20AI%20%7C%20Mobile%20%7C%20Container-9cf?style=flat-square">
-</p>
+# NeuroSploit
 
-<p align="center">
-  <a href="https://neurosploitai.github.io/"><img src="https://img.shields.io/badge/Website-neurosploitai.github.io-8b5cf6?style=for-the-badge&logo=githubpages&logoColor=white" alt="Website"></a>
-  <a href="https://neurosploitai.github.io/docs.html"><img src="https://img.shields.io/badge/Docs-Tutorial%20%26%20Guide-22d3ee?style=for-the-badge&logo=readthedocs&logoColor=white" alt="Docs"></a>
-</p>
+**Autonomous penetration-testing harness — Rust, multi-model, CLI-first.**
 
-<p align="center"><b>Autonomous, multi-model penetration-testing harness — Rust, CLI-first.</b><br>
-<i>by Joas A Santos &amp; Red Team Leaders</i></p>
+[![Stars](https://img.shields.io/github/stars/JoasASantos/NeuroSploit?style=for-the-badge&logo=github&color=8b5cf6)](https://github.com/JoasASantos/NeuroSploit/stargazers)
+[![Forks](https://img.shields.io/github/forks/JoasASantos/NeuroSploit?style=for-the-badge&logo=github&color=a855f7)](https://github.com/JoasASantos/NeuroSploit/network/members)
+[![Issues](https://img.shields.io/github/issues/JoasASantos/NeuroSploit?style=for-the-badge&color=22d3ee)](https://github.com/JoasASantos/NeuroSploit/issues)
+
+<br>
+
+[![Rust](https://img.shields.io/badge/Rust-tokio%20async-e6b673?style=flat-square&logo=rust)](https://www.rust-lang.org)
+[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
+[![Agents](https://img.shields.io/badge/MD%20Agents-486-red?style=flat-square)](agents_md/)
+[![Modes](https://img.shields.io/badge/Modes-8-9cf?style=flat-square)](#modes)
+[![MCP Profiles](https://img.shields.io/badge/MCP%20Profiles-12-f59e0b?style=flat-square)](#mcp-profiles)
+[![Providers](https://img.shields.io/badge/LLM%20Providers-19-38bdf8?style=flat-square)](#providers)
+
+<br>
+
+[**Website**](https://neurosploitai.github.io/) · [**Docs & Tutorial**](https://neurosploitai.github.io/docs.html) · [**TUTORIAL.md**](TUTORIAL.md) · [**BENCHMARK.md**](BENCHMARK.md)
+
+</div>
 
 ---
 
 ## What is NeuroSploit?
 
-**NeuroSploit is an autonomous penetration-testing tool.** You point it at a
-target; it does the security assessment on its own and hands you a report —
-recon, exploitation, chaining findings into real impact, and validation, with no
-human driving each step.
+Point it at a target. It runs the security assessment autonomously and hands you a report — recon, exploitation, chaining, validation — no human driving each step.
 
-The key idea: **the harness is the pentester, not the model.** Instead of asking
-one LLM to "hack this", a Rust engine runs the methodology — it picks the right
-specialist agents for what it finds, runs them in parallel, re-sends every claim
-over the wire to confirm it's real, and has a second model check each finding
-before it's reported. The LLMs are the hands; the harness is the discipline that
-keeps them honest. That's why it finds more and invents less than running a model
-directly.
+**The harness is the pentester, not the model.** A Rust engine runs the methodology: picks specialist agents for what it finds, runs them in parallel, re-sends every claim over the wire to confirm it's real, and has a second model check each finding before reporting. The LLMs are the hands; the harness is the discipline.
 
-It's **CLI-first** (with a web console and a TUI), **open source (MIT)**, and runs
-on **your own API keys or a local subscription** — nothing about your targets
-leaves your machine unless you send it.
+```
+recon ─▶ select agents ─▶ exploit in parallel ─▶ wire-check ─▶ cross-model vote ─▶ chain ─▶ report
+```
 
 ---
 
-Give NeuroSploit a **URL, a source repo, a running app, or a host/IP**. A Rust
-harness (`tokio`) drives a **pool of LLMs** — via **API key** or local
-**subscription** (Claude Code / Codex / Gemini / Grok) — and runs the whole
-engagement for you:
-
-```
-recon ─▶ pick only the agents that fit the surface ─▶ exploit in parallel
-      ─▶ wire-check every claim ─▶ cross-model vote ─▶ chain into deeper impact ─▶ report
-```
-
-It won't invent findings: **every claim needs a receipt** (raw tool output or a
-`file:line`), is **re-sent by the harness itself** to confirm it reproduces, and
-is adjudicated by a **second model** before it reaches the report.
-
-> ⭐ Useful? **Star the repo.**
-> 🌐 Website & live docs: **[neurosploitai.github.io](https://neurosploitai.github.io/)** · **[Tutorial & Guide](https://neurosploitai.github.io/docs.html)**
-> 📖 Deep dive: **[TUTORIAL.md](TUTORIAL.md)** · changelog: **[RELEASE.md](RELEASE.md)** · honest comparison: **[BENCHMARK.md](BENCHMARK.md)**
-
 ## Install
 
-**Linux / macOS** (x64 & arm64):
 ```bash
+# Linux / macOS (x64 & arm64)
 curl -fsSL https://raw.githubusercontent.com/JoasASantos/NeuroSploit/main/setup.sh | bash
-```
-**Windows** (PowerShell):
-```powershell
+
+# Windows (PowerShell)
 irm https://raw.githubusercontent.com/JoasASantos/NeuroSploit/main/install.ps1 | iex
-```
-The installer sets up Rust if missing, builds the release binary, and links
-`neurosploit` onto your PATH. Build by hand instead:
-```bash
+
+# From source
 git clone https://github.com/JoasASantos/NeuroSploit && cd NeuroSploit/neurosploit-rs
 cargo build --release      # → target/release/neurosploit
 ```
 
-## Quick start
+## Quick Start
 
 ```bash
-# just run it — the interactive session asks everything, in plain language:
+# Interactive wizard (asks everything):
 neurosploit
 
-# black-box, subscription login (no API key):
-neurosploit run http://testphp.vulnweb.com/ --subscription --model anthropic:claude-opus-4-8 -v
+# Black-box with subscription:
+neurosploit run http://target.com --subscription --model anthropic:claude-opus-4-8 -v
 
-# white-box — review a source repo (file:line evidence):
+# White-box source review:
 neurosploit whitebox /path/to/repo --subscription --model anthropic:claude-opus-4-8 -v
 
-# web console — a browser UI over the same CLI:
-cd web && npm start     # → http://localhost:4173
+# Host / AD / infra:
+neurosploit host 10.0.0.5 --subscription --model anthropic:claude-opus-4-8 -v
+
+# Web console:
+cd web && npm start     # → http://localhost:3000
 ```
 
-No subscription? Use an **API key** for any provider instead — see [TUTORIAL.md](TUTORIAL.md#authentication).
+---
 
 ## Modes
 
-| Mode | Command | What it does |
-|------|---------|-------------|
-| **Black-box** | `neurosploit run <url>` | recon → select → exploit → vote → report |
-| **White-box** | `neurosploit whitebox <repo>` | source / SAST review (file:line evidence) |
-| **Grey-box** | `neurosploit greybox <repo> --url <app>` | code review **+** live exploitation together |
-| **Host / Infra** | `neurosploit host <ip> --creds creds.yaml` | Linux / Windows / AD + cloud (AWS/GCP/Azure) |
-| **AI / LLM** | `neurosploit aitest <ai-url>` | jailbreaks, prompt injection, OWASP LLM Top 10 / MCP |
-| **Mobile / Binary** | `neurosploit mobile <app.apk\|.ipa\|bin>` | RE a local artifact (Ghidra / MobSF / Frida) |
-| **Container** | `neurosploit container <image:tag>` | OCI image scan + SBOM (trivy/grype/syft) |
-| **Mission Control** | `neurosploit tui <url>` | live TUI panels + a composer you type in mid-run |
+| Mode | Command | Surface |
+|:-----|:--------|:--------|
+| **Black-box** | `neurosploit run <url>` | Web apps, APIs — recon → exploit → vote → report |
+| **White-box** | `neurosploit whitebox <repo>` | Source / SAST review (`file:line` evidence) |
+| **Grey-box** | `neurosploit greybox <repo> --url <app>` | Code review **+** live exploitation |
+| **Host / Infra** | `neurosploit host <ip>` | Linux, Windows, AD, cloud (AWS/GCP/Azure) |
+| **AI / LLM** | `neurosploit aitest <ai-url>` | Jailbreaks, prompt injection, OWASP LLM Top 10 |
+| **Mobile** | `neurosploit mobile <app.apk\|.ipa>` | APK/IPA RE (Ghidra / MobSF / Frida) |
+| **Container** | `neurosploit container <image:tag>` | OCI scan + SBOM (trivy/grype/syft) |
+| **Mission Control** | `neurosploit tui <url>` | Live TUI with mid-run composer |
 
-## Add-ons: Toolbox, MCP tool servers, C2 & WebShells
+---
 
-- **Toolbox (225 tools, opt-in).** Run the right pentest tool instead of only
-  curl/scripts: nmap, rustscan, httpx, nuclei, ffuf, netexec, impacket,
-  bloodhound, trivy, apktool, ghidra and more. `neurosploit tools list` /
-  `run nmap --target 10.0.0.5`; `--tools` gives agents the doctrine and
-  `--agent-tools` lets API models request cataloged tools in a bounded loop.
-- **MCP tool servers.** Curated nmap / Kali / Playwright / Burp / REA templates:
-  `neurosploit tools mcp add nmap`, then run with `--mcp`.
-- **C2 & WebShell management (authorized internal engagements only).** Disabled
-  by default; enabling requires an authorization reference. Listeners, sessions,
-  tasks, payloads, persistence/lateral opt-ins, WebShell exec/file ops, and an
-  append-only audit trail under `.neurosploit/c2/`.
+## Architecture
 
-See [`docs/TOOLBOX.md`](docs/TOOLBOX.md) for guardrails and the full surface.
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     NeuroSploit Harness                      │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────────┐  │
+│  │  Recon   │─▶│  Select  │─▶│ Parallel │─▶│  Validate  │  │
+│  │  Engine  │  │  486 MDs │  │  Exploit │  │  Wire+Vote │  │
+│  └──────────┘  └──────────┘  └──────────┘  └────────────┘  │
+│       │              │              │              │         │
+│       ▼              ▼              ▼              ▼         │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │          Attack Knowledge Graph (Neo4j opt.)         │   │
+│  │   Host → Service → Finding → Credential → Impact    │   │
+│  └──────────────────────────────────────────────────────┘   │
+│       │                                      │              │
+│       ▼                                      ▼              │
+│  ┌──────────┐                        ┌────────────┐         │
+│  │  Chain   │                        │   Report   │         │
+│  │  Engine  │                        │ HTML·PDF·MD│         │
+│  └──────────┘                        └────────────┘         │
+├─────────────────────────────────────────────────────────────┤
+│  LLM Pool: Claude · GPT · Gemini · Grok · GLM · DeepSeek  │
+│  Qwen · Kimi · Mistral · Ollama · LiteLLM · 19 providers  │
+└─────────────────────────────────────────────────────────────┘
+```
 
-## What makes it different
+---
 
-- **The harness is the pentester.** Agent selection is recon-driven; findings
-  **chain** (reduce a foothold to a primitive — exec / read / write / SSRF /
-  identity / secret — then pivot), each stage proven and non-destructive.
-- **Wire-bound evidence** — every reported exchange is re-sent through a
-  scope-guarded replay engine and checked against recorded traffic. A claim the
-  wire contradicts can't stand as confirmed.
-- **Attack knowledge graph (Neo4j optional)** — the run is a typed graph of
-  hosts, services, findings, credentials and impact, spanning **web and internal
-  network**. It directs the next move during the run and is written to `graph/`
-  even without a database.
-- **Deterministic validation** — per-CWE validators judge the measured
-  request/response bytes, not the model's prose. Grounding gate, POMDP belief and
-  an anti-hallucination check demote anything the evidence doesn't support.
-- **Secrets never leak the report** — credentials the agents observe become
-  `$SECRET_n` in every human-facing report; raw values stay in the run's vault for
-  re-testing only.
-- **Execution resilience** — classified error handling (7 error types), exponential
-  backoff (5 retries, 2s–90s), crash-state salvage (partial findings survive agent
-  failure), agent lifecycle nudge (3 retries with simplified prompts), progressive
-  budget warnings (70/85/95%), and run snapshot/resume so interrupted engagements
-  pick up where they left off.
-- **LLM-powered dedup** — deterministic fast-path for exact matches, plus a
-  semantic LLM judge for findings with different wording but the same root cause.
-- **486 markdown agents** across web, code (SAST), AI, infra/AD/cloud, chains and
-  recon — each a self-contained playbook you can read, edit or add to.
-- **Run via API key or subscription**, 19 providers, including local & CPU-only
-  (`ollama:` / `llamacpp:`) with no data leaving the host.
+## MCP Profiles
 
-## Web console
+Built-in profiles swap the tool surface at runtime:
+
+| Profile | Tools | Use Case |
+|:--------|:------|:---------|
+| `Web` | Playwright browser automation | Web app testing |
+| `MobileAndroid` / `MobileIos` | REA reverse engineering | APK/IPA analysis |
+| `BinaryAnalysis` | REA decompiler, call graphs | Native binary RE |
+| `BurpSuite` | Burp REST API | Proxy-driven testing |
+| `CobaltStrike` | Official CS MCP (team server) | C2 integration |
+| `Infra` / `Nmap` | Nmap MCP server | Network discovery |
+| `AD` / `Kali` | Kali MCP (80+ tools) | AD / full toolkit |
+| `Cloud` | Trivy, Prowler, ScoutSuite | Cloud posture |
 
 ```bash
-cd web && npm start     # → http://localhost:4173
+neurosploit run http://target.com --mcp-profile web
+neurosploit host 10.0.0.5 --mcp-profile ad
 ```
-A browser UI that drives the **same CLI** — no second engine. Launch and watch a
-run live, then per finding:
 
-- **Attack graph** — host → service → finding → credential → impact, every edge
-  marked confirmed / needs-validation / hypothesis, ordered by kill-chain stage.
-- **Wire evidence** — the real request/response pairs behind a finding (baseline
-  vs. attack, the identity pair, matrix probes, the oracle), each tagged with its
-  wire provenance — the proof as bytes, not prose.
-- **Re-test one finding** — re-run its proof through the replay engine; the dated
-  history shows a finding drift to "gone" over time.
-- **Transcript viewer** — any agent's run, split into navigable blocks; search
-  spans every agent.
-- Chains, dependency todolist, recorded traffic, deliverables, PDF export.
+---
 
-## What a run leaves behind
+## Toolbox & C2
 
-Every run is a self-contained folder, `runs/ns-<ts>-<target>/`:
+- **Toolbox (225 tools):** nmap, rustscan, httpx, nuclei, ffuf, netexec, impacket, bloodhound, trivy, apktool, ghidra and more. `neurosploit tools list`
+- **MCP servers:** `neurosploit tools mcp add nmap` then `--mcp`
+- **C2 & WebShell:** Authorized engagements only. Listeners, sessions, tasks, payloads, audit trail under `.neurosploit/c2/`
+- **Pivot Proxy:** Multi-hop tunnel engine through compromised hosts — portproxy, chisel, SOCKS. `--pivot-proxy auto`
+
+---
+
+## What Makes It Different
+
+| Feature | How |
+|:--------|:----|
+| **Wire-bound evidence** | Every claim re-sent through scope-guarded replay engine |
+| **Attack knowledge graph** | Typed graph: hosts, services, findings, credentials, impact |
+| **Per-CWE validators** | Deterministic judgment on measured bytes, not prose |
+| **Secret redaction** | Credentials become `$SECRET_n` in reports; raw in vault only |
+| **Execution resilience** | 7 error types, exponential backoff, crash-state salvage, resume |
+| **LLM-powered dedup** | Fast-path exact + semantic judge for same root cause |
+| **Multi-hop pivoting** | Auto-detect unreachable subnets, establish tunnel chains |
+| **Universal cache** | Identical prompts served from memory/disk — token savings |
+
+---
+
+## Providers
+
+19 LLM providers supported — API key or local subscription:
+
+`anthropic` · `openai` · `gemini` · `azure` · `xai` · `nvidia_nim` · `deepseek` · `mistral` · `qwen` · `zai` · `moonshot` · `groq` · `together` · `openrouter` · `opencode` · `nous` · `ollama` · `litellm`
+
+Multi-model voting: `--model anthropic:claude-opus-4-8 --model openai:gpt-5.1 --vote-n 3`
+
+---
+
+## Web Console
+
+```bash
+cd web && npm start     # → http://localhost:3000
+```
+
+- **Attack graph** — host → service → finding → credential → impact, with clickable filters
+- **Wire evidence** — real request/response pairs with wire provenance
+- **Re-test** — re-run proof through replay engine
+- **Chains & todo** — attack chains with validation status
+- **Transcript viewer** — per-agent run split into navigable blocks
+- **PDF export** — via Typst
+
+---
+
+## Run Output
+
+Every run → `runs/ns-<ts>-<target>/`:
 
 | File | Contents |
-|------|----------|
-| `report.html` · `report.pdf` · `report.md` | the report (PDF via Typst), secrets redacted |
-| `findings.json` / `findings.md` | validated findings (raw, for tools & re-testing) |
+|:-----|:---------|
+| `report.html` · `.pdf` · `.md` | Report (PDF via Typst), secrets redacted |
+| `findings.json` / `.md` | Validated findings for tooling & re-testing |
 | `report.sarif` | SARIF 2.1.0 for CI code-scanning |
-| `graph/` | attack chains, dependency todolist, Cypher + JSON export |
-| `attack-paths.json` · `attack-paths.mmd` | cross-domain attack paths (graph + Mermaid timeline) |
-| `loot.json` | credentials, tokens, hosts and endpoints the chaining rounds carried forward |
-| `recon.json` · `exploitation.md` · `traces/` | surface, transcript, per-agent traces |
-| `pocs/` · `evidence/` | runnable PoCs and proof screenshots |
+| `graph/` | Attack chains, todo, Cypher + JSON export |
+| `attack-paths.json` · `.mmd` | Cross-domain paths (graph + Mermaid) |
+| `loot.json` | Credentials, tokens, hosts, endpoints |
+| `pocs/` · `evidence/` | Runnable PoCs and proof screenshots |
 
-## Attack paths
-
-A single weakness is one step. The engagement is the sequence, and the sequence
-is what produces the impact: a traversal on a hypervisor yields root, root
-yields a machine-account keytab, the keytab authenticates to the directory, a
-share holds a database password, the database runs commands, the service
-account becomes SYSTEM, SYSTEM reads a domain admin hash out of memory, that
-hash reaches a workstation, and the workstation's process memory holds a cloud
-token that ends in a tenant administrator.
-
-NeuroSploit derives that sequence after every agent has reported, across every
-kind of test it runs — web, API, mobile, binaries, firmware, hosts, internal
-network, Active Directory, cloud, SaaS identity, containers, CI/CD and supply
-chain, AI/LLM agents, wireless, OT. Chaining is on what each step **produces**
-and the next one **consumes** (a hash, a ticket, a token, a shell, an implant,
-a file, reach into a network), and a link is drawn only where that material
-could actually travel:
-
-- **host-local** access (a shell, a writable service, a database role) stays on
-  the host it was obtained on;
-- **realm-wide** material (domain identities, Kerberos tickets, cloud roles)
-  moves inside its directory or tenant, with realm names matched across their
-  spellings (`CORP\\user`, `corp.local`, `CORP.LOCAL`);
-- **portable** material (passwords, hashes, API keys, bearer tokens) moves
-  anywhere, because that is what an attacker does with it.
-
-```bash
-neurosploit paths <run>              # ranked paths, on the run's own timeline
-neurosploit paths <run> --mermaid    # the graph
-neurosploit paths <run> --json       # nodes + edges for your own tooling
-```
-
-The same view is written into `report.md`, `report.html` and the PDF, and each
-finding's `chains_from` is filled with the causes that were derived for it.
+---
 
 ## Integrations
 
-GitHub / GitLab PR review gate (`neurosploit pr <repo> <n> --fail-on critical`),
-`@neurosploit` mention bot, one Jira card per finding, MCP server
-(`neurosploit mcp`), compliance mapping (PCI-DSS / HIPAA / SOC 2 / GDPR). See
-**[TUTORIAL.md](TUTORIAL.md)**.
+GitHub / GitLab PR review gate · `@neurosploit` mention bot · Jira cards per finding · MCP server (`neurosploit mcp`) · Compliance mapping (PCI-DSS / HIPAA / SOC 2 / GDPR) · Neo4j graph · OpenSearch logs
+
+---
 
 ## Safety
 
-For **authorized** testing only. Agents stay in scope, never run destructive / DoS
-actions, and require proof of exploitation. You are responsible for having
-permission for every target.
+For **authorized** testing only. Agents stay in scope, never run destructive/DoS actions, and require proof of exploitation. You are responsible for having permission for every target.
 
-## Credits & license
+---
 
-**Joas A Santos** & **Red Team Leaders** — MIT.
+<div align="center">
 
-> This is the slim, **Rust-only** distribution (`neurosploit-rs/` + `agents_md/`).
-> The older Python engine and web GUIs live on the `v3.4.0` branch.
+**Joas A Santos** & **Red Team Leaders** — MIT License
+
+</div>

@@ -129,7 +129,7 @@ impl Pattern {
         // dodged by respelling the same address. See `crate::netguard`.
         let host = crate::netguard::normalize_host(&host_of(url));
         match self {
-            Pattern::Host(h) => host == crate::netguard::normalize_host(h),
+            Pattern::Host(h) => same_host(&host, &crate::netguard::normalize_host(h)),
             Pattern::Wildcard(root) => { let root = crate::netguard::normalize_host(root); host == root || host.ends_with(&format!(".{root}")) }
             Pattern::Cidr { base, bits } => ipv4_to_u32(&host).map(|ip| ip & mask(*bits) == *base).unwrap_or(false),
             Pattern::UrlPrefix(p) => {
@@ -149,6 +149,26 @@ impl Pattern {
             Pattern::UrlPrefix(p) => p.clone(),
         }
     }
+}
+
+/// Loopback spellings are the same host. An engagement authorized against
+/// `localhost` must not be blocked when the target resolves itself as
+/// `127.0.0.1`, and vice versa.
+fn is_loopback(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "::1" | "0.0.0.0")
+}
+
+fn same_host(a: &str, b: &str) -> bool {
+    a == b || (is_loopback(a) && is_loopback(b))
+}
+
+/// Is `host` a sub-domain of `root`? IPs never have sub-domains, so an IP rule
+/// stays exact.
+fn host_is_subdomain(host: &str, root: &str) -> bool {
+    if root.is_empty() || host == root || crate::netguard::parse_ip_any(root).is_some() {
+        return false;
+    }
+    host.ends_with(&format!(".{root}"))
 }
 
 fn mask(bits: u8) -> u32 {
@@ -235,6 +255,13 @@ pub struct SoftScope {
     /// Requests per minute across the engagement (0 = unlimited).
     #[serde(default = "default_rate")]
     pub max_requests_per_minute: u32,
+    /// Treat a `host` rule as also covering its sub-domains (`api.example.com`
+    /// under `example.com`). On by default: an engagement against a domain
+    /// almost always means the domain, and refusing every sub-domain turned a
+    /// normal test into a stream of false denials. Exclusions still win, and a
+    /// stricter engagement can turn this off in the scope YAML.
+    #[serde(default = "yes")]
+    pub allow_subdomains: bool,
     /// Payload substrings that are never acceptable, whatever the finding.
     /// Defaults cover data destruction and resource exhaustion — the two
     /// classes that damage a production target rather than demonstrate a bug.
@@ -275,6 +302,7 @@ impl Default for SoftScope {
             allow_account_creation: true,
             max_accounts: default_max_accounts(),
             max_requests_per_minute: default_rate(),
+            allow_subdomains: true,
             forbidden_payloads: default_forbidden_payloads(),
             notes: Vec::new(),
         }
@@ -469,6 +497,7 @@ impl ScopePolicy {
                 (false, "allow_account_creation") => { p.soft.allow_account_creation = truthy(&value); sect = Sect::None; }
                 (false, "max_accounts") => { if let Ok(n) = value.parse() { p.soft.max_accounts = n; } sect = Sect::None; }
                 (false, "max_requests_per_minute") => { if let Ok(n) = value.parse() { p.soft.max_requests_per_minute = n; } sect = Sect::None; }
+                (false, "allow_subdomains") => { p.soft.allow_subdomains = truthy(&value); sect = Sect::None; }
                 _ => { sect = Sect::None; }
             }
         }
@@ -526,11 +555,22 @@ impl ScopePolicy {
         }
     }
 
+    /// The allowlist rule that authorizes `url`, if any — including the
+    /// optional sub-domain expansion of a `host` rule.
+    fn hard_match(&self, url: &str) -> Option<&Pattern> {
+        let host = crate::netguard::normalize_host(&host_of(url));
+        self.hard.iter().find(|p| {
+            p.matches(url)
+                || (self.soft.allow_subdomains
+                    && matches!(p, Pattern::Host(h) if host_is_subdomain(&host, &crate::netguard::normalize_host(h))))
+        })
+    }
+
     pub fn in_hard_scope(&self, url: &str) -> bool {
         if self.exclude.iter().any(|p| p.matches(url)) {
             return false;
         }
-        self.hard.iter().any(|p| p.matches(url))
+        self.hard_match(url).is_some()
     }
 
     /// The authorization decision for one interaction.
@@ -545,7 +585,7 @@ impl ScopePolicy {
         if self.hard.is_empty() {
             return Decision::Deny("no hard scope configured — nothing is authorized".into());
         }
-        if !self.hard.iter().any(|p| p.matches(url)) {
+        if self.hard_match(url).is_none() {
             return Decision::Deny(format!(
                 "{host} is outside the authorized scope ({})",
                 self.hard.iter().map(|p| p.as_text()).collect::<Vec<_>>().join(", ")
@@ -674,7 +714,7 @@ impl ScopePolicy {
             if self.soft.allow_account_creation && self.soft.max_accounts > 0 { format!(" (max {})", self.soft.max_accounts) } else { String::new() },
             self.soft.max_requests_per_minute
         ));
-        s.push_str("  Discovering a host, link, subdomain or API does NOT authorize testing it. Report it as an observation instead.\n");
+        s.push_str("  Discovering an unrelated host, link or API does NOT authorize testing it. Report it as an observation instead.\n");
         for n in &self.soft.notes {
             s.push_str(&format!("  note: {n}\n"));
         }
@@ -770,6 +810,30 @@ mod tests {
         let mut p = ScopePolicy::for_target("https://app.example.com/login");
         p.soft.max_requests_per_minute = 0; // rate guard tested separately
         p
+    }
+
+    #[test]
+    fn a_host_rule_also_covers_its_subdomains_by_default() {
+        let p = policy();
+        assert!(p.in_hard_scope("https://api.app.example.com/v1"));
+        assert!(p.in_hard_scope("https://app.example.com/x"));
+        assert!(!p.in_hard_scope("https://example.com/"));
+        assert!(!p.in_hard_scope("https://app.example.com.evil.test/"));
+    }
+
+    #[test]
+    fn subdomain_expansion_can_be_turned_off() {
+        let mut p = policy();
+        p.soft.allow_subdomains = false;
+        assert!(p.in_hard_scope("https://app.example.com/x"));
+        assert!(!p.in_hard_scope("https://api.app.example.com/v1"));
+    }
+
+    #[test]
+    fn loopback_spellings_are_the_same_host() {
+        let p = ScopePolicy::for_target("http://localhost:3000");
+        assert!(p.in_hard_scope("http://127.0.0.1:3000/"));
+        assert!(p.in_hard_scope("http://[::1]:3000/"));
     }
 
     #[test]

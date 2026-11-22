@@ -338,7 +338,8 @@ pub struct RunConfig {
     /// the default and the most tested path.
     #[serde(default)]
     pub reactive: bool,
-    /// MCP tool profile: `web`, `mobile-android`, `mobile-ios`, `binary`, `burp`.
+    /// MCP tool profile: `web`, `mobile-android`, `mobile-ios`, `binary`, `burp`,
+    /// `cobaltstrike`, `infra`, `ad`, `cloud`, `kali`, `nmap`, `full`.
     /// When set, the matching MCP server and tool allowlist are auto-configured.
     #[serde(default)]
     pub mcp_profile: Option<String>,

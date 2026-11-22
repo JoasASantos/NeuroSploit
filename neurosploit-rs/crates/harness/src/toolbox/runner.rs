@@ -127,12 +127,10 @@ async fn run_shell(command: &str, timeout_secs: u64, sandbox: Option<&Sandbox>) 
     }
 }
 
-fn clip(mut s: String) -> String {
-    if s.len() > OUTPUT_CAP {
-        s.truncate(OUTPUT_CAP);
-        s.push_str("\n[truncated by NeuroSploit toolbox]");
-    }
-    s
+fn clip(s: String) -> String {
+    // Head+tail, UTF-8 safe. `OUTPUT_CAP` is overridable for operators who
+    // need the whole scanner dump; the default is deliberately generous.
+    crate::limits::clip(&s, crate::limits::env_cap("NEUROSPLOIT_CMD_CAP", OUTPUT_CAP))
 }
 
 fn substitute(template: &str, target: &str) -> Result<String, String> {

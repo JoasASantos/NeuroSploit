@@ -20,6 +20,7 @@ pub enum Profile {
     MobileIos,
     BinaryAnalysis,
     BurpSuite,
+    CobaltStrike,
     Infra,
     Ad,
     Cloud,
@@ -110,6 +111,26 @@ pub fn profile(p: &Profile) -> McpProfile {
                 "env": {}
             }),
         },
+        // Official Cobalt Strike MCP (github.com/Cobalt-Strike/cobaltstrike-mcp-server).
+        // It is an HTTP-transport MCP served by the team server (Cobalt Strike
+        // 4.13+), not a stdio child — point `CS_MCP_URL` at it (default
+        // http://teamserver:50051/mcp) and keep the credentials in the env.
+        Profile::CobaltStrike => McpProfile {
+            name: "Cobalt Strike".into(),
+            description: "Cobalt Strike team-server C2 via the official HTTP MCP".into(),
+            server_name: "cobaltstrike".into(),
+            tools: tool_allowlist(p),
+            config: json!({
+                "transport": "http",
+                "url": "http://teamserver:50051/mcp",
+                "env": {
+                    "CS_MCP_URL": "https://localhost:50443",
+                    "CS_MCP_USERNAME": "mcp",
+                    "CS_MCP_PASSWORD": "",
+                    "CS_MCP_VERIFY_SSL": "false"
+                }
+            }),
+        },
         Profile::Infra => McpProfile {
             name: "Infra".into(),
             description: "Network/infra testing with an Nmap MCP server".into(),
@@ -198,6 +219,10 @@ pub fn all_profiles() -> Vec<(Profile, &'static str)> {
             Profile::BurpSuite,
             "Burp Suite REST API integration (placeholder)",
         ),
+        (
+            Profile::CobaltStrike,
+            "Cobalt Strike team-server C2 via the official HTTP MCP",
+        ),
         (Profile::Infra, "Network/infra testing with Nmap MCP"),
         (Profile::Ad, "Active Directory testing with Kali MCP"),
         (Profile::Cloud, "Cloud/container tooling via Kali MCP"),
@@ -269,6 +294,20 @@ pub fn tool_allowlist(p: &Profile) -> Vec<String> {
             "proxy_history",
             "send_to_repeater",
         ],
+        Profile::CobaltStrike => &[
+            "cs_list_beacons",
+            "cs_list_commands",
+            "cs_execute_command",
+            "cs_list_command_executions",
+            "cs_read_command_output",
+            "cs_list_artifacts",
+            "cs_upload_artifact",
+            "cs_list_downloads",
+            "cs_fetch_download",
+            "cs_list_screenshots",
+            "cs_fetch_screenshot",
+            "cs_get_team_server",
+        ],
         Profile::Infra | Profile::Nmap => &[
             "do-nmap", "nmap_scan", "nmap_service_scan", "nmap_vuln_scan",
             "nmap_os_detect", "nmap_ping_sweep",
@@ -334,6 +373,15 @@ pub fn prompt_context(p: &Profile) -> String {
              Available tools: {tool_list}. \
              Note: this profile is a placeholder; ensure the Burp REST API \
              is running before invoking tools."
+        ),
+        Profile::CobaltStrike => format!(
+            "You are operating in COBALT STRIKE mode through the official team-server MCP. \
+             Available tools: {tool_list}. Use cs_list_beacons to establish the current session \
+             inventory before acting, cs_execute_command to run one authorized command at a time, \
+             and cs_read_command_output for the receipt. Every action is attributable to the \
+             engagement — stay inside the authorized hosts, never run destructive or \
+             persistence-changing commands unless the operator explicitly approved them, \
+             and put the raw command output into the finding evidence."
         ),
         Profile::Infra => format!(
             "You are operating in INFRA/NETWORK testing mode. Use the Nmap MCP server for \
@@ -415,6 +463,7 @@ mod tests {
             Profile::MobileIos,
             Profile::BinaryAnalysis,
             Profile::BurpSuite,
+            Profile::CobaltStrike,
             Profile::Infra,
             Profile::Ad,
             Profile::Cloud,

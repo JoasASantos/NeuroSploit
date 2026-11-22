@@ -195,7 +195,8 @@ enum Cmd {
         /// support MCP fall back to their built-in tools).
         #[arg(long)]
         mcp: bool,
-        /// MCP tool profile: web · mobile-android · mobile-ios · binary · burp.
+        /// MCP tool profile: web · mobile-android · mobile-ios · binary · burp ·
+        /// cobaltstrike (official team-server HTTP MCP) · infra · ad · cloud · kali · nmap.
         /// Auto-registers the right MCP server and tool allowlist for the test type.
         #[arg(long = "mcp-profile")]
         mcp_profile: Option<String>,
@@ -281,6 +282,34 @@ enum Cmd {
     Tools {
         #[command(subcommand)]
         cmd: toolscli::ToolsCmd,
+    },
+    /// Ship a run's logs (audit · traces · findings · errors · pocs) to
+    /// OpenSearch, one index per engagement project.
+    Logs {
+        #[command(subcommand)]
+        cmd: LogsCmd,
+    },
+    /// Start an ngrok tunnel plus a local HTTP sink for OOB callbacks and
+    /// webshell check-ins. Needs NGROK_AUTHTOKEN (or --authtoken).
+    Tunnel {
+        /// Local port to forward (the callback sink binds here).
+        #[arg(long)]
+        port: Option<u16>,
+        /// ngrok authtoken (defaults to NGROK_AUTHTOKEN).
+        #[arg(long)]
+        authtoken: Option<String>,
+        /// ngrok region (us, eu, ap, au, sa, jp, in).
+        #[arg(long)]
+        region: Option<String>,
+        /// Reserved/custom ngrok domain, when the plan provides one.
+        #[arg(long)]
+        domain: Option<String>,
+        /// Bind address for the local sink (default 127.0.0.1).
+        #[arg(long)]
+        bind: Option<String>,
+        /// Do not start the sink — only open the tunnel to an existing service.
+        #[arg(long = "no-serve")]
+        no_serve: bool,
     },
     /// Command & Control for authorized internal engagements: listeners,
     /// sessions, tasks, payloads, persistence and lateral movement.
@@ -400,6 +429,61 @@ enum Cmd {
         /// Emit the results as JSON (one object per finding) instead of a table.
         #[arg(long = "json")]
         json: bool,
+    },
+    /// Turn engagement inputs (IP list · OpenAPI/Swagger · .ovpn · RoE ·
+    /// topology image) into targets, a scope YAML and a transport suggestion.
+    Ingest {
+        /// File with IPs/hosts/CIDRs, one per line.
+        #[arg(long)]
+        ips: Option<String>,
+        /// OpenAPI/Swagger document (JSON or YAML) — base URLs and paths.
+        #[arg(long)]
+        swagger: Option<String>,
+        /// OpenVPN profile; becomes `openvpn:<path>` transport.
+        #[arg(long)]
+        ovpn: Option<String>,
+        /// Rules of Engagement text; `out-of-scope:` / `exclude:` lines become
+        /// hard exclusions, the rest becomes prompt notes.
+        #[arg(long)]
+        roe: Option<String>,
+        /// Topology image to record with the engagement.
+        #[arg(long)]
+        topology: Option<String>,
+        /// Where to write brief.json and scope.yaml (default `.neurosploit/ingest`).
+        #[arg(long)]
+        out: Option<String>,
+    },
+    /// Review a run's friction signals with a cheap model and write an
+    /// improvement issue (problem · evidence · proposed fix · example patch).
+    /// Local Markdown by default; `--create --repo` posts it with `gh`.
+    Improve {
+        /// Run id (`ns-…`) or path to the run directory.
+        run: String,
+        /// Cheap model, e.g. `deepseek:deepseek-chat` (default: NEUROSPLOIT_IMPROVE_MODEL).
+        #[arg(long)]
+        model: Option<String>,
+        /// Print the prompt instead of calling a model.
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        /// Actually create the GitHub issue (requires --repo and `gh`).
+        #[arg(long)]
+        create: bool,
+        /// GitHub repo for `--create`, as `owner/repo`.
+        #[arg(long)]
+        repo: Option<String>,
+    },
+    /// Print a rich, step-by-step reproduction kit for a run's findings. Secrets
+    /// stay in the vault as `{{REVEALSECRET:name}}` unless --reveal is passed.
+    Repro {
+        /// Run id (`ns-…`) or path to the run directory.
+        run: String,
+        /// Only this finding id (or exact title).
+        #[arg(long = "only")]
+        only: Option<String>,
+        /// Substitute vault values instead of masked placeholders. Prints real
+        /// credentials — use only on the operator's machine.
+        #[arg(long = "reveal")]
+        reveal: bool,
     },
     /// Assemble/print/verify a run's assurance bundle (P1–P5 in one manifest).
     Assurance {
@@ -1026,6 +1110,16 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Cmd::Tools { cmd } => { toolscli::handle(cmd).await?; }
+        Cmd::Logs { cmd } => { handle_logs(&base, cmd).await?; }
+        Cmd::Tunnel { port, authtoken, region, domain, bind, no_serve } => {
+            let mut cfg = harness::TunnelConfig::from_env(port);
+            if authtoken.is_some() { cfg.authtoken = authtoken; }
+            if region.is_some() { cfg.region = region; }
+            if domain.is_some() { cfg.domain = domain; }
+            if let Some(b) = bind { cfg.bind = b; }
+            cfg.serve = !no_serve;
+            harness::tunnel::run(cfg).await?;
+        }
         Cmd::C2 { cmd } => { c2cli::handle_c2(cmd).await?; }
         Cmd::Webshell { cmd } => { c2cli::handle_webshell(cmd).await?; }
         Cmd::Mcp => { mcp::serve()?; }
@@ -1050,6 +1144,13 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Assurance { run, verify } => handle_assurance(&base, &run, verify)?,
         Cmd::Compliance { run, framework, include_leads } => handle_compliance(&base, &run, &framework, include_leads)?,
         Cmd::Poc { run, repeats, apply, only, json } => handle_poc(&base, &run, repeats, apply, only, json).await?,
+        Cmd::Repro { run, only, reveal } => handle_repro(&base, &run, only.as_deref(), reveal)?,
+        Cmd::Ingest { ips, swagger, ovpn, roe, topology, out } => {
+            handle_ingest(ips.as_deref(), swagger.as_deref(), ovpn.as_deref(), roe.as_deref(), topology.as_deref(), out.as_deref())?
+        }
+        Cmd::Improve { run, model, dry_run, create, repo } => {
+            handle_improve(&base, &run, model.as_deref(), dry_run, create, repo.as_deref()).await?
+        }
         Cmd::Sandbox { cmd } => handle_sandbox(cmd).await?,
         Cmd::Neo4j { cmd } => handle_neo4j(&base, cmd).await?,
         Cmd::Capability { cmd } => handle_capability(cmd)?,
@@ -1831,6 +1932,31 @@ fn apply_authorization(
 }
 
 #[derive(Subcommand)]
+enum LogsCmd {
+    /// Check the OpenSearch endpoint, credentials and reachability.
+    Ping,
+    /// Ship a run's artifacts (audit · traces · findings · errors · usage · pocs)
+    /// to OpenSearch, under one index per engagement project.
+    Push {
+        /// Run id (`ns-…`) or path to the run directory.
+        run: String,
+        /// Engagement/customer/domain label for the index (defaults to
+        /// NS_LOG_PROJECT). The index is `ns-<project>` unless OPENSEARCH_INDEX
+        /// overrides it.
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Print the events that would be shipped, without sending them.
+    Preview {
+        run: String,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
+}
+
+#[derive(Subcommand)]
 enum Neo4jCmd {
     /// Create/start the Neo4j container (127.0.0.1 only), save the connection,
     /// and wait until it answers. Safe to re-run.
@@ -2205,6 +2331,55 @@ fn handle_sarif(base: &std::path::Path, run: &str, out: Option<&str>) -> anyhow:
     Ok(())
 }
 
+async fn handle_logs(base: &std::path::Path, cmd: LogsCmd) -> anyhow::Result<()> {
+    let runs = base.join("runs");
+    match cmd {
+        LogsCmd::Ping => {
+            let cfg = harness::logship::Config::from_env(None)
+                .ok_or_else(|| anyhow::anyhow!("OPENSEARCH_URL is not set (see docker-compose.opensearch.yml)"))?;
+            let body = harness::logship::ping(&cfg).await?;
+            let version = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("version").and_then(|x| x.get("number")).and_then(|x| x.as_str()).map(String::from));
+            match version {
+                Some(v) => println!("  \x1b[32mOpenSearch reachable\x1b[0m {} (v{v})", cfg.url),
+                None => println!("  \x1b[32mOpenSearch reachable\x1b[0m {}", cfg.url),
+            }
+        }
+        LogsCmd::Push { run, project } => {
+            let cfg = harness::logship::Config::from_env(project.as_deref())
+                .ok_or_else(|| anyhow::anyhow!("OPENSEARCH_URL is not set (see docker-compose.opensearch.yml)"))?;
+            let dir = harness::logship::resolve_run(&runs, &run)
+                .ok_or_else(|| anyhow::anyhow!("no such run: {run}"))?;
+            let (report, total) = harness::logship::push_run(&cfg, &dir).await?;
+            let index = cfg.index_for(&harness::logship::today());
+            println!(
+                "  \x1b[32mshipped\x1b[0m {}/{} event(s) → {} ({index})",
+                report.indexed, total, cfg.url
+            );
+            if report.failed > 0 {
+                eprintln!("  \x1b[33m⚠ {} document(s) rejected by OpenSearch\x1b[0m", report.failed);
+            }
+            if report.indexed == 0 && report.failed > 0 {
+                anyhow::bail!("OpenSearch rejected every document");
+            }
+        }
+        LogsCmd::Preview { run, project, limit } => {
+            let dir = harness::logship::resolve_run(&runs, &run)
+                .ok_or_else(|| anyhow::anyhow!("no such run: {run}"))?;
+            let label = project
+                .or_else(|| std::env::var("NS_LOG_PROJECT").ok())
+                .unwrap_or_else(|| "default".to_string());
+            let events = harness::logship::collect_run(&dir, &label);
+            println!("{} event(s) for project '{label}'", events.len());
+            for e in events.iter().take(limit) {
+                println!("{}", serde_json::to_string(e)?);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn handle_audit(base: &std::path::Path, run: &str, anchor: bool) -> anyhow::Result<()> {
     let dir = resolve_run(base, run)?;
     let log = harness::audit::AuditLog::open(dir.join("audit.jsonl"));
@@ -2250,6 +2425,106 @@ fn handle_compliance(base: &std::path::Path, run: &str, frameworks: &[String], i
         std::fs::write(&out, &md)?;
         println!("\n{}", md);
         println!("  \x1b[2msaved → {}\x1b[0m", out.display());
+    }
+    Ok(())
+}
+
+fn handle_ingest(
+    ips: Option<&str>,
+    swagger: Option<&str>,
+    ovpn: Option<&str>,
+    roe: Option<&str>,
+    topology: Option<&str>,
+    out: Option<&str>,
+) -> anyhow::Result<()> {
+    let brief = harness::ingest::from_files(
+        ips.map(std::path::Path::new),
+        swagger.map(std::path::Path::new),
+        ovpn.map(std::path::Path::new),
+        roe.map(std::path::Path::new),
+        topology.map(std::path::Path::new),
+    )?;
+    let out_dir = out.map(std::path::PathBuf::from).unwrap_or_else(|| std::path::PathBuf::from(".neurosploit/ingest"));
+    let (brief_path, scope_path) = harness::ingest::write(&brief, &out_dir)?;
+    println!("{}", brief.summary());
+    for t in brief.targets().iter().take(25) {
+        println!("  target  : {t}");
+    }
+    for e in brief.endpoints.iter().take(25) {
+        println!("  endpoint: {e}");
+    }
+    println!("\n  brief → {}", brief_path.display());
+    println!("  scope → {}", scope_path.display());
+    if let Some(first) = brief.targets().first() {
+        let mut cmd = format!("neurosploit run '{first}' --scope-file '{}'", scope_path.display());
+        if let Some(t) = &brief.transport {
+            cmd.push_str(&format!(" --transport '{t}'"));
+        }
+        println!("\n  next: {cmd}");
+    }
+    Ok(())
+}
+
+async fn handle_improve(
+    base: &std::path::Path,
+    run: &str,
+    model: Option<&str>,
+    dry_run: bool,
+    create: bool,
+    repo: Option<&str>,
+) -> anyhow::Result<()> {
+    let dir = resolve_run(base, run)?;
+    let signals = harness::improve::collect(&dir);
+    let user = harness::improve::prompt(&dir, &signals);
+    if dry_run {
+        println!("{user}");
+        return Ok(());
+    }
+    let model = model
+        .map(str::to_string)
+        .or_else(|| std::env::var("NEUROSPLOIT_IMPROVE_MODEL").ok().filter(|s| !s.trim().is_empty()))
+        .unwrap_or_else(|| "deepseek:deepseek-chat".to_string());
+    let pool = ModelPool::new(vec![ModelRef::parse(&model)], 1);
+    println!("  reviewing {} signal(s) with {model}…", signals.len());
+    let (_m, text) = pool.complete(harness::improve::SYSTEM, &user).await
+        .map_err(|e| anyhow::anyhow!("improvement model failed: {e}"))?;
+    let run_id = dir.file_name().and_then(|s| s.to_str()).unwrap_or("run").to_string();
+    let path = harness::improve::save(&dir, &run_id, &text)?;
+    println!("\n{text}\n\n  \x1b[2mwritten → {}\x1b[0m", path.display());
+    if create {
+        let repo = repo.ok_or_else(|| anyhow::anyhow!("--create needs --repo owner/repo"))?;
+        let title = text
+            .lines()
+            .find(|l| l.trim_start().starts_with("# "))
+            .map(|l| l.trim_start_matches('#').trim().to_string())
+            .unwrap_or_else(|| format!("Improve run {run_id}"));
+        let out = tokio::process::Command::new("gh")
+            .args(["issue", "create", "--repo", repo, "--title", &title, "--body-file"])
+            .arg(&path)
+            .output()
+            .await
+            .map_err(|e| anyhow::anyhow!("could not run gh: {e}"))?;
+        if !out.status.success() {
+            anyhow::bail!("gh issue create failed: {}", String::from_utf8_lossy(&out.stderr));
+        }
+        println!("  \x1b[32missue created\x1b[0m {}", String::from_utf8_lossy(&out.stdout).trim());
+    }
+    Ok(())
+}
+
+fn handle_repro(base: &std::path::Path, run: &str, only: Option<&str>, reveal: bool) -> anyhow::Result<()> {
+    let dir = resolve_run(base, run)?;
+    let findings = load_findings(&dir)?;
+    let store = harness::repro::SecretStore::load(&dir);
+    let md = harness::repro::markdown(&dir, &findings, &store, reveal, only);
+    let out = dir.join("reproduction.md");
+    std::fs::write(&out, &md)?;
+    print!("{md}");
+    println!("\n  \x1b[2mwritten → {}\x1b[0m", out.display());
+    if store.is_empty() {
+        eprintln!("  \x1b[33m⚠ no vault entries found — REVEALSECRET tokens stay unresolved\x1b[0m");
+    } else if !reveal {
+        println!("  \x1b[2m{} secret(s) in the vault; pass --reveal to print them\x1b[0m", store.len());
     }
     Ok(())
 }
