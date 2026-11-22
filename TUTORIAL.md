@@ -1,4 +1,4 @@
-# NeuroSploit — Tutorial & User Guide (v4.3.1)
+# NeuroSploit — Tutorial & User Guide (v4.4.0)
 
 A complete, hands-on guide to installing, configuring and running NeuroSploit —
 the autonomous, multi-model penetration-testing harness.
@@ -48,12 +48,14 @@ You give NeuroSploit a **target** (URL, repo, app, or host/IP). It:
 
 1. **Recons** the target with real tools (curl/nmap/…).
 2. **Intelligently selects** only the agents whose preconditions match the recon
-   (it does *not* blindly run all 430).
+   (it does *not* blindly run all 493).
 3. **Exploits** in parallel — each agent works in a ReAct loop and must prove its
    claim with a **tool receipt** (raw output).
 4. **Validates** every candidate by **cross-model voting** (a different model
    adjudicates) and a **grounding gate** (no claim without a receipt).
 5. **Chains** confirmed findings into deeper impact (SQLi→RCE→LPE, SSRF→cloud…).
+   Footholds with a concrete receipt (needs-review or confirmed) seed chain
+   expansion — the graph drives next-move decisions via Neo4j path intelligence.
 6. **Reports** — HTML + Typst PDF + JSON/MD, with an attack-graph / kill-chain
    mapped to OWASP / CWE / MITRE ATT&CK.
 
@@ -203,6 +205,21 @@ to exploitation, to save tokens. See `neurosploit models` for the full list
 NVIDIA NIM, DeepSeek, Mistral, Qwen, Groq, Together, Moonshot/Kimi K3, OpenRouter,
 Ollama).
 
+### Planner model override (`--planner-model`)
+
+Route the **planner/strategist** role to a specific model while executor and
+validator use the pool. Useful for cost optimization — a fast model plans, the
+strongest model exploits:
+
+```bash
+neurosploit host 10.0.0.0/24 \
+  --model claude-opus-4-8,deepseek-v4.1 \
+  --planner-model deepseek-v4.1
+```
+
+The planner model receives Neo4j graph intelligence (owned nodes, shortest paths,
+attack suggestions) to make BloodHound-style routing decisions.
+
 ---
 
 ## 5. Engagement modes
@@ -295,6 +312,58 @@ neurosploit host 10.0.0.10 --creds creds.yaml \
 Runs infra agents: port/service scan, SMB enum, Linux privesc/sudo/cron/SSH,
 Windows privesc/SMB-signing/WinRM, and AD kerberoasting / AS-REP / ACL abuse /
 DCSync / default-creds.
+
+#### Stealth / OPSEC mode (`--stealth`)
+
+```bash
+neurosploit host 10.0.0.0/24 --stealth --model claude-opus-4-8
+```
+
+Slower and quieter, without dropping test coverage:
+
+- **Recon**: nmap `-T2`/`-T1` instead of `-T4`, fewer probes, jitter between actions
+- **Tooling**: prefers LOLBins and native OS tools over noisy uploads (PowerShell
+  remoting over chisel.exe, WMI over uploaded binaries)
+- **Pacing**: lockout-safe credential spraying, spaced actions, no aggressive bursts
+- **Agent preamble**: OPSEC instructions injected into every agent's system prompt
+
+#### Skip validation (`--no-validate`)
+
+```bash
+neurosploit host 10.0.0.5 --no-validate --model claude-opus-4-8
+```
+
+Skips the cross-model voting phase. All findings are kept with status `unvalidated`
+and retain their agent-assigned severity. Receipt-bearing findings (looted
+credentials, command output proof) are never rejected regardless of this flag.
+
+#### Engagement identifier (`--engagement`)
+
+```bash
+neurosploit host 10.0.0.0/24 --engagement CADP-2026 --model claude-opus-4-8
+```
+
+Groups runs under one test ID. Stamps every Neo4j node and edge with
+`engagement=<id>`, so separate engagements with overlapping internal IPs
+(10.0.0.0/8) stay apart in the graph. The merge script groups by engagement ID
+instead of IP. Alias: `--test-id`.
+
+#### CADP benchmark
+
+NeuroSploit v4.4.0 was benchmarked on the **CADP** (Certified Active Directory
+Professional) lab from Red Team Leaders — a 3-forest Active Directory environment:
+
+| Metric | Value |
+|--------|-------|
+| Forests | aureon.local, helix.local, vanguard.local |
+| Findings | 199 (18 critical, 27 high, 43 medium) |
+| DC compromises | 3/3 (Full Domain Controller Compromise) |
+| Attack path | Triple-hop pivot: DMZ → DC01-AUREON → DC01-HELIX → DC01-VANGUARD |
+| Agents | 50 coordinated |
+| Chains | 50 mapped |
+| Models | Claude Opus 4.8 (planner/exploit) + DeepSeek v4.1-Flash (validation) |
+| Time | < 6 hours for full chain compromise |
+| API cost | ~$25 USD |
 
 ### 5.5 AI / LLM red-teaming (agents, jailbreaks & prompt injection)
 
@@ -707,7 +776,7 @@ Zero npm dependencies (Node ≥18 built-ins only). Override the port with
 2. **Scope & Auth** — objective, focus, out-of-scope, and a link into the **Auth & Keys** menu
    (target auth header, named roles for IDOR/BOLA/BFLA, per-provider API keys — kept in the
    server process's memory only, never written to disk).
-3. **Leads** — the 486-agent board, auto-categorized (Business Logic, Broken Access Control,
+3. **Leads** — the 493-agent board, auto-categorized (Business Logic, Broken Access Control,
    Injection, LLM Application, Auth & Session, SSRF & Network, Cloud & Infra, …). Toggle a
    single lead, a whole category, or **Select all / Clear all** (respects the active search
    filter). Leave everything off to let the harness's own recon-driven selection choose. **+
@@ -761,6 +830,14 @@ and any recorded flows on the same endpoint.
 finding's recorded proof through the scope-guarded replay engine and appends a dated entry to its
 history — **reproduced / changed / gone / unverifiable** — so you can watch a finding drift to
 "gone" over time. Nothing is written back to `findings.json`; it is a read-only check.
+
+**Projects (v4.4.0):** group every run of one customer, domain or target into a
+project. The **Projects** page lets you create a project (name, organisation,
+targets), and runs whose target, name or ID matches a project's targets are
+auto-grouped. Click **Manage Runs** to manually include or exclude runs with
+checkboxes. The **Pentests** table also shows a **Project** column so you can see
+which project each run belongs to at a glance. Projects are stored in
+`.neurosploit/projects.json`.
 
 Full API reference: [`web/API.md`](web/API.md) · quick start: [`web/README.md`](web/README.md).
 
@@ -854,6 +931,38 @@ ever becomes a graph property. Secrets are stored as **salted fingerprints** (sa
 `NEUROSPLOIT_GRAPH_SALT`, or `~/.neurosploit/graph-salt`; share one value across a team that
 shares a Neo4j so credential reuse still correlates). Cross-run memory is scoped to the target —
 another engagement's history never enters this one.
+
+### Neo4j planner intelligence (v4.4.0)
+
+When Neo4j is active, the **graph checkpoint** now queries the database for
+BloodHound-style path intelligence and injects it into every agent's live context:
+
+- **Owned nodes** — lists all footholds (hosts, credentials, identities) the run
+  currently controls
+- **Next moves** — finds unowned targets reachable within 1–3 hops from owned nodes
+  via `ESCALATES_TO` / `CAN_ACCESS` / `PIVOTS_TO` edges
+- **Shortest path to objectives** — runs `shortestPath` queries from owned
+  principals to high-value targets (Domain Controllers, Domain Admins)
+
+This gives every agent (and the planner, via `--planner-model`) graph-driven
+awareness of which targets are reachable and how, without needing to rediscover
+attack paths that the graph already knows.
+
+### Engagement-scoped graph (`--engagement`)
+
+When `--engagement <id>` is set, every node **and edge** pushed to Neo4j carries
+an `engagement` property. Queries automatically scope to that engagement, so
+separate tests with overlapping IPs (e.g. two different clients both using
+10.0.0.0/8) stay apart in the same database.
+
+### Web console: graph view improvements (v4.4.0)
+
+- **Kill chain highlight** — toggle "kill chain" to trace the attack path with
+  golden glow on nodes and thick amber edges from entry to objective
+- **Filters** — Severity, Status and Subnet dropdown filters with labels; the
+  finding sidebar list respects the active filters
+- **Full graph toggle** — shows structural nodes (Evidence, ValidationResult,
+  Domain, IPAddress) hidden in the default attack view
 
 ---
 
@@ -1021,6 +1130,10 @@ Every run writes a self-contained folder `runs/ns-<ts>-<target>/`:
 | `report.typ` / `report.pdf` | Typst source + compiled PDF (if `typst` installed) |
 
 The CLI prints a severity summary, an ASCII kill-chain, and the token/cost total.
+
+**Provenance watermark.** Every report, prompt and artifact is stamped with the
+`NEUROSPLOIT` sigil via the provenance system — a verifiable marker that traces
+each artifact back to the harness run that produced it.
 
 ---
 
@@ -1255,6 +1368,16 @@ Common flags (run / greybox / host / tui):
 --authz-matrix <file>    role × route authorization matrix to validate against
 --offline                pipeline self-test, no model calls
 -v, --verbose            log each agent, recon, votes
+```
+
+Host-specific flags (v4.4.0):
+
+```
+--stealth                OPSEC mode: slower recon, LOLBins, paced actions
+--no-validate            skip cross-model validation, keep all findings
+--planner-model <MODEL>  route the planner/strategist to a specific model
+--engagement <ID>        engagement identifier — groups runs, namespaces Neo4j
+                         (alias: --test-id)
 ```
 
 > `--neo4j` and `--authz-matrix` are global flags (valid on any mode). Neo4j
