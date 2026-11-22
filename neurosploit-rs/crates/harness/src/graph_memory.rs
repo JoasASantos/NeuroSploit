@@ -1802,8 +1802,13 @@ pub fn chains_markdown(target: &str, chains: &[AttackChain], moves: &[String]) -
 /// Parameterised MERGE statements: constraints, nodes per label, edges per
 /// (type, from-label, to-label). Labels/types come from the closed enums only.
 pub fn cypher_statements(b: &GraphBatch, run: &str) -> Vec<(String, Value)> {
+    cypher_statements_with_engagement(b, run, None)
+}
+
+pub fn cypher_statements_with_engagement(b: &GraphBatch, run: &str, engagement: Option<&str>) -> Vec<(String, Value)> {
     let mut out: Vec<(String, Value)> = Vec::new();
     let labels: BTreeSet<Label> = b.nodes.keys().map(|k| k.0).collect();
+    let eng_set = engagement.map(|_| ", n.engagement = $engagement").unwrap_or("");
     for l in &labels {
         out.push((
             format!("CREATE CONSTRAINT ns_{}_key IF NOT EXISTS FOR (n:{}) REQUIRE n.key IS UNIQUE", l.as_str().to_lowercase(), l.as_str()),
@@ -1814,14 +1819,18 @@ pub fn cypher_statements(b: &GraphBatch, run: &str) -> Vec<(String, Value)> {
         let rows: Vec<Value> = b.nodes.values().filter(|n| n.label == *l).map(|n| json!({"key": n.key, "props": n.props})).collect();
         for chunk in rows.chunks(500) {
             let stmt = if *l == Label::Evidence {
-                format!("UNWIND $rows AS row MERGE (n:{} {{key: row.key}}) ON CREATE SET n += row.props, n.created_at = timestamp(), n.first_run = $run", l.as_str())
+                format!("UNWIND $rows AS row MERGE (n:{} {{key: row.key}}) ON CREATE SET n += row.props, n.created_at = timestamp(), n.first_run = $run{eng_set}", l.as_str())
             } else {
                 format!(
-                    "UNWIND $rows AS row MERGE (n:{} {{key: row.key}}) ON CREATE SET n.created_at = timestamp(), n.first_run = $run SET n += row.props, n.updated_at = timestamp(), n.last_run = $run",
+                    "UNWIND $rows AS row MERGE (n:{} {{key: row.key}}) ON CREATE SET n.created_at = timestamp(), n.first_run = $run SET n += row.props, n.updated_at = timestamp(), n.last_run = $run{eng_set}",
                     l.as_str()
                 )
             };
-            out.push((stmt, json!({"rows": chunk, "run": run})));
+            let mut params = json!({"rows": chunk, "run": run});
+            if let Some(eng) = engagement {
+                params["engagement"] = json!(eng);
+            }
+            out.push((stmt, params));
         }
     }
     let mut groups: BTreeMap<(Rel, Label, Label), Vec<Value>> = BTreeMap::new();
@@ -2071,6 +2080,89 @@ impl Neo4j {
             }
         }
         Ok(b)
+    }
+
+    /// Query Neo4j for the shortest path from any owned node to a named target.
+    /// Used by the planner to decide next attack moves (BloodHound-style).
+    pub async fn query_shortest_path(
+        &self,
+        from_label: &str,
+        to_label: &str,
+        to_name: &str,
+        engagement: Option<&str>,
+    ) -> Vec<Value> {
+        let eng_filter = if engagement.is_some() {
+            " WHERE ALL(n IN nodes(p) WHERE n.engagement = $engagement)"
+        } else {
+            ""
+        };
+        let cypher = format!(
+            "MATCH p=shortestPath((a:{from_label} {{status:'owned'}})-[*..10]->(b:{to_label} {{name:$target}})) \
+             {eng_filter} \
+             RETURN [n IN nodes(p) | {{label: labels(n)[0], name: n.name, address: coalesce(n.address,''), status: coalesce(n.status,'')}}] AS path \
+             LIMIT 1"
+        );
+        let params = json!({ "target": to_name, "engagement": engagement.unwrap_or("") });
+        match self.query_rows(&cypher, params).await {
+            Ok(rows) => rows.into_iter().filter_map(|r| r.into_iter().next()).collect(),
+            Err(e) => {
+                eprintln!("[graph_memory] query_shortest_path error: {e}");
+                vec![]
+            }
+        }
+    }
+
+    /// Query Neo4j for all owned nodes (confirmed footholds).
+    pub async fn query_owned_nodes(&self, engagement: Option<&str>) -> Vec<Value> {
+        let cypher = if engagement.is_some() {
+            "MATCH (n) WHERE n.status = 'owned' AND n.engagement = $engagement \
+             RETURN n.name AS name, labels(n)[0] AS label, n.address AS address LIMIT 50"
+        } else {
+            "MATCH (n) WHERE n.status = 'owned' \
+             RETURN n.name AS name, labels(n)[0] AS label, n.address AS address LIMIT 50"
+        };
+        let params = json!({ "engagement": engagement.unwrap_or("") });
+        match self.query_rows(cypher, params).await {
+            Ok(rows) => rows.into_iter().map(|cols| {
+                let mut obj = serde_json::Map::new();
+                for (i, key) in ["name", "label", "address"].iter().enumerate() {
+                    obj.insert(key.to_string(), cols.get(i).cloned().unwrap_or(Value::Null));
+                }
+                Value::Object(obj)
+            }).collect(),
+            Err(e) => {
+                eprintln!("[graph_memory] query_owned_nodes error: {e}");
+                vec![]
+            }
+        }
+    }
+
+    /// Query Neo4j for suggested next moves: edges from owned nodes to unowned targets.
+    pub async fn query_next_moves(&self, engagement: Option<&str>) -> Vec<Value> {
+        let cypher = if engagement.is_some() {
+            "MATCH (a)-[r]->(b) WHERE a.status = 'owned' AND (b.status IS NULL OR b.status <> 'owned') \
+             AND a.engagement = $engagement \
+             RETURN a.name AS from_name, type(r) AS rel, b.name AS to_name, labels(b)[0] AS to_label, \
+             b.address AS to_address LIMIT 20"
+        } else {
+            "MATCH (a)-[r]->(b) WHERE a.status = 'owned' AND (b.status IS NULL OR b.status <> 'owned') \
+             RETURN a.name AS from_name, type(r) AS rel, b.name AS to_name, labels(b)[0] AS to_label, \
+             b.address AS to_address LIMIT 20"
+        };
+        let params = json!({ "engagement": engagement.unwrap_or("") });
+        match self.query_rows(cypher, params).await {
+            Ok(rows) => rows.into_iter().map(|cols| {
+                let mut obj = serde_json::Map::new();
+                for (i, key) in ["from_name", "rel", "to_name", "to_label", "to_address"].iter().enumerate() {
+                    obj.insert(key.to_string(), cols.get(i).cloned().unwrap_or(Value::Null));
+                }
+                Value::Object(obj)
+            }).collect(),
+            Err(e) => {
+                eprintln!("[graph_memory] query_next_moves error: {e}");
+                vec![]
+            }
+        }
     }
 }
 

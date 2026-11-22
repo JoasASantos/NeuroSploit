@@ -5227,6 +5227,57 @@ fn findings_items(val: serde_json::Value) -> Vec<serde_json::Value> {
     }
 }
 
+/// Load confirmed findings from previous runs of the same target.
+/// Used to seed the current run with known vulnerabilities, avoiding re-testing.
+pub(crate) fn load_prior_findings(target: &str, runs_dir: &std::path::Path) -> Vec<Finding> {
+    let mut prior = Vec::new();
+    let normalized = target
+        .trim()
+        .trim_end_matches('/')
+        .to_lowercase()
+        .replace("https://", "")
+        .replace("http://", "");
+    let Ok(entries) = std::fs::read_dir(runs_dir) else {
+        return prior;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with("ns-") {
+            continue;
+        }
+        let status_path = entry.path().join("status.json");
+        let findings_path = entry.path().join("findings.json");
+        if !findings_path.exists() {
+            continue;
+        }
+        if let Ok(status_text) = std::fs::read_to_string(&status_path) {
+            if let Ok(status) = serde_json::from_str::<serde_json::Value>(&status_text) {
+                let run_target = status["target"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .replace("https://", "")
+                    .replace("http://", "")
+                    .trim_end_matches('/')
+                    .to_string();
+                if run_target != normalized {
+                    continue;
+                }
+            }
+        }
+        if let Ok(text) = std::fs::read_to_string(&findings_path) {
+            if let Ok(findings) = serde_json::from_str::<Vec<Finding>>(&text) {
+                for f in findings {
+                    if f.review_status == "confirmed" || f.validated {
+                        prior.push(f);
+                    }
+                }
+            }
+        }
+    }
+    prior
+}
+
 /// Pull the findings array out of a model's reply.
 ///
 /// Locating and parsing the JSON is delegated to [`crate::json_extract`], which
@@ -5705,6 +5756,12 @@ fn dedup_findings(mut v: Vec<Finding>) -> Vec<Finding> {
         }
     }
     kept
+}
+
+/// Normalize a target for deduplication: lowercase, strip scheme and trailing slash.
+fn normalize_target(target: &str) -> String {
+    target.trim().trim_end_matches('/').to_lowercase()
+        .replace("https://", "").replace("http://", "")
 }
 
 /// Just the digits of a CWE id, so `CWE-614` and `CWE-614 (Sensitive Cookie…)`

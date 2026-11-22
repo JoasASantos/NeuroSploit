@@ -2187,13 +2187,44 @@ function renderDetailAgents(detail) {
     `;
   }
   grid.innerHTML = entries.map(([name, st]) =>
-    `<div class="at-card">
+    `<div class="at-card agent-row" data-agent="${esc(name)}">
       <span class="at-card-status ${st.found > 0 ? 'found' : 'done'}"></span>
       <span class="at-card-name">${esc(name)}</span>
       <span class="at-card-state done">done</span>
       ${st.found ? `<span class="at-card-findings">${st.found}</span>` : ''}
+      <span class="at-card-expand">${st.found ? '▸' : ''}</span>
     </div>`
   ).join('');
+  $$('.agent-row[data-agent]', grid).forEach(row => row.addEventListener('click', () => {
+    const agentName = row.dataset.agent;
+    const agentFindings = (detail.findings || []).filter(f => f.agent === agentName);
+    const existing = row.nextElementSibling;
+    if (existing?.classList.contains('agent-findings-panel')) {
+      existing.remove();
+      row.classList.remove('agent-expanded');
+      row.querySelector('.at-card-expand').textContent = agentFindings.length ? '▸' : '';
+      return;
+    }
+    if (!agentFindings.length) return;
+    row.classList.add('agent-expanded');
+    row.querySelector('.at-card-expand').textContent = '▾';
+    const panel = document.createElement('div');
+    panel.className = 'agent-findings-panel';
+    panel.innerHTML = `<div class="afp-header">${agentFindings.length} finding(s) by ${esc(agentName)}</div>
+      ${agentFindings.map(f => `<div class="afp-finding" data-fid="${esc(f.id)}">
+        <span class="sev ${sevClass(f.severity)}">${esc(f.severity)}</span>
+        <span class="afp-title">${esc(f.title)}</span>
+        <span class="afp-status">${esc(f.review_status || (f.validated ? 'confirmed' : 'unvalidated'))}</span>
+        ${f.endpoint ? `<span class="afp-endpoint mono">${esc(f.endpoint)}</span>` : ''}
+      </div>`).join('')}`;
+    row.after(panel);
+    $$('.afp-finding', panel).forEach(el => el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const fid = el.dataset.fid;
+      const f = agentFindings.find(x => x.id === fid);
+      if (f) openFindingModal(f, detail.pocs || [], state.currentDetailId);
+    }));
+  }));
 }
 
 function renderDetailCoverage(detail) {
@@ -4211,10 +4242,16 @@ function renderChains(x, g) {
   x.q('chain-filters').innerHTML = ['all', 'confirmed', 'needs_validation', 'hypothesis']
     .map((k) => `<button class="chip${x.chainFilter === k ? ' chip-active' : ''}" data-cf="${k}">${esc(k === 'all' ? 'all' : STATUS_LABEL[k])} <span>${counts[k] || 0}</span></button>`).join('');
   $$('[data-cf]', x.q('chain-filters')).forEach((b) => b.addEventListener('click', () => { x.chainFilter = b.dataset.cf; renderChains(x, g); }));
-  const mv = (m) => `<li title="${esc(m)}">${esc(m)}</li>`;
+  const moveCard = (m) => {
+    const s = String(m || '');
+    const typeMatch = s.match(/^(VALIDATE|EXPLOIT|ESCALATE|PIVOT|ENUMERATE|LATERAL|RECON|CONFIRM|TEST)\b/i);
+    const moveType = typeMatch ? typeMatch[1].toUpperCase() : 'ACTION';
+    const desc = typeMatch ? s.slice(typeMatch[0].length).replace(/^[\s:—-]+/, '') : s;
+    return `<div class="move-card"><div class="move-type mt-${moveType.toLowerCase()}">${esc(moveType)}</div><div class="move-desc">${chainText(desc)}</div></div>`;
+  };
   x.q('moves').innerHTML = moves.length ? `<div class="moves"><div class="moves-h">Next moves · ${moves.length}</div>
-    <ul>${moves.slice(0, 3).map(mv).join('')}</ul>
-    ${moves.length > 3 ? `<details><summary>show all ${moves.length}</summary><ul>${moves.slice(3).map(mv).join('')}</ul></details>` : ''}</div>` : '';
+    <div class="moves-grid">${moves.slice(0, 3).map(moveCard).join('')}</div>
+    ${moves.length > 3 ? `<details><summary>show all ${moves.length}</summary><div class="moves-grid">${moves.slice(3).map(moveCard).join('')}</div></details>` : ''}</div>` : '';
   const list = all.filter((c) => x.chainFilter === 'all' || c.status === x.chainFilter);
   show(x.q('chains-empty'), all.length === 0);
   x.q('chains').innerHTML = list.map((c, i) => `
@@ -4228,7 +4265,12 @@ function renderChains(x, g) {
       </summary>
       <div class="chain-body">
         <div class="chain-impact"><b>Impact:</b> ${chainText(c.impact)}</div>
-        <ol class="chain-steps">${(c.step_text || []).map((s, j) => `<li class="step st-${esc(c.steps?.[j]?.status || '')}">${chainText(s)}</li>`).join('')}</ol>
+        <ol class="chain-steps">${(c.step_text || []).map((s, j) => {
+          const step = c.steps?.[j] || {};
+          const conf = Number(step.confidence || 0);
+          const confBar = conf > 0 ? `<span class="chain-conf-bar"><span class="chain-conf-fill" style="width:${Math.round(conf * 100)}%"></span></span>` : '';
+          return `<li class="step st-${esc(step.status || '')}">${chainText(s)}${confBar}</li>`;
+        }).join('')}</ol>
         ${block('Findings involved', (c.findings || []).map((f) => `${chainText(f.title)} <span class="sev ${sevClass(f.severity)}">${esc(f.severity)}</span> <span class="chain-note">${esc(f.status)}</span>`), null, true)}
         ${block('Evidence references', (c.evidence || []).map(chainText), 'none recorded — this chain is unproven', true)}
         ${block('Required assumptions', (c.assumptions || []).map(chainText), 'none — every step is evidenced', true)}
@@ -4251,8 +4293,8 @@ function chainText(s) {
   });
   // Generic node-type words before a reference are noise once it is a code chip.
   e = e.replace(/\b(?:Finding|BusinessImpact|Host|Service|Endpoint|Credential|Identity|AttackStep|Vulnerability)\s+(?=<code)/g, '');
-  // Relation tokens, em-dash or ASCII arrow form.
-  e = e.replace(/\s*(?:—|-)\[([A-Z_]+)\](?:→|-&gt;|->)\s*/g, ' <span class="chain-rel">$1</span> ');
+  // Relation tokens, em-dash or ASCII arrow form — color-coded by edge type.
+  e = e.replace(/\s*(?:—|-)\[([A-Z_]+)\](?:→|-&gt;|->)\s*/g, (_m, rel) => ` <span class="chain-rel chain-edge-${rel}">${rel}</span> `);
   // Trailing status/confidence note.
   e = e.replace(/\(([a-z_]+,\s*conf\s*[0-9.]+)\)/g, '<span class="chain-note">$1</span>');
   return e;
@@ -4400,12 +4442,35 @@ function renderGraphMemory(x) {
   renderGraphFindingList(x);
   const kf = x.view.kindFilters || new Set();
   const legendItems = [['internet', 'Internet'], ['asset', 'Host / Target'], ['surface', 'Service / Endpoint'], ['weak', 'Finding'], ['step', 'Attack Step'], ['cred', 'Credential / Role'], ['impact', 'Impact']];
+  const allSevs = new Set(); const allStatuses = new Set(); const allSubnets = new Set();
+  for (const n of (data?.nodes || [])) {
+    if (n.props?.local_severity) allSevs.add(n.props.local_severity);
+    if (n.props?.status) allStatuses.add(n.props.status);
+    if (n.props?.address) { const pts = n.props.address.split('.'); if (pts.length === 4) allSubnets.add(pts.slice(0,3).join('.') + '.0/24'); }
+  }
+  const stageCoverage = {};
+  for (const n of (data?.nodes || [])) {
+    if (n.label === 'Finding' && n.props?.stage) { stageCoverage[n.props.stage] = (stageCoverage[n.props.stage] || 0) + 1; }
+  }
   x.q('legend').innerHTML = legendItems
     .map(([k, l]) => `<button class="gm-leg gk-${k}${kf.has(k) ? '' : ' gm-leg-active'}" data-kind="${k}"><span class="gm-leg-dot"></span>${esc(l)}</button>`).join('') +
-    '<span class="gm-leg-sep"></span><span class="gm-edge-leg es-confirmed">confirmed</span><span class="gm-edge-leg es-needs_validation">needs validation</span><span class="gm-edge-leg es-hypothesis">hypothesis</span>';
+    '<span class="gm-leg-sep"></span><span class="gm-edge-leg es-confirmed">confirmed</span><span class="gm-edge-leg es-needs_validation">needs validation</span><span class="gm-edge-leg es-hypothesis">hypothesis</span>' +
+    '<span class="gm-leg-sep"></span>' +
+    `<select class="gm-filter" data-filter="severity"><option value="">Severity</option>${[...allSevs].sort((a,b)=>sevRank(a)-sevRank(b)).map(s=>`<option value="${esc(s)}"${x.view.filterSev===s?' selected':''}>${esc(s)}</option>`).join('')}</select>` +
+    `<select class="gm-filter" data-filter="status"><option value="">Status</option>${[...allStatuses].sort().map(s=>`<option value="${esc(s)}"${x.view.filterStatus===s?' selected':''}>${esc(s)}</option>`).join('')}</select>` +
+    `<select class="gm-filter" data-filter="subnet"><option value="">Subnet</option>${[...allSubnets].sort().map(s=>`<option value="${esc(s)}"${x.view.filterSubnet===s?' selected':''}>${esc(s)}</option>`).join('')}</select>` +
+    `<div class="gm-killchain">${KILL_CHAIN_STAGES.map(s => `<div class="kc-stage ${stageCoverage[s] ? 'kc-covered' : ''}" title="${esc(s)}: ${stageCoverage[s] || 0} findings"><div class="kc-bar"></div><div class="kc-label">${esc(s)}</div></div>`).join('')}</div>`;
   $$('[data-kind]', x.q('legend')).forEach(btn => btn.addEventListener('click', () => {
     const k = btn.dataset.kind;
     if (kf.has(k)) kf.delete(k); else kf.add(k);
+    x.drawnSig = null;
+    renderGraphMemory(x);
+  }));
+  $$('.gm-filter', x.q('legend')).forEach(sel => sel.addEventListener('change', () => {
+    const f = sel.dataset.filter;
+    if (f === 'severity') x.view.filterSev = sel.value || null;
+    if (f === 'status') x.view.filterStatus = sel.value || null;
+    if (f === 'subnet') x.view.filterSubnet = sel.value || null;
     x.drawnSig = null;
     renderGraphMemory(x);
   }));
@@ -4417,6 +4482,9 @@ function renderGraphMemory(x) {
   const eid = (e) => `${e.label}|${e.key}`;
   let nodes = data.nodes.filter((n) => full || !GM_HIDDEN.has(n.label));
   if (kf.size) nodes = nodes.filter((n) => !kf.has(GM_KIND[n.label] || 'meta'));
+  if (x.view.filterSev) nodes = nodes.filter(n => !n.props?.local_severity || n.props.local_severity === x.view.filterSev);
+  if (x.view.filterStatus) nodes = nodes.filter(n => !n.props?.status || n.props.status === x.view.filterStatus);
+  if (x.view.filterSubnet) { const pfx = x.view.filterSubnet.replace('.0/24', '.'); nodes = nodes.filter(n => !n.props?.address || n.props.address.startsWith(pfx)); }
   let keep = new Set(nodes.map(id));
   let edges = (data.edges || []).filter((e) => keep.has(eid(e.from)) && keep.has(eid(e.to)));
   if (!full) {
@@ -4499,10 +4567,67 @@ function renderGraphMemory(x) {
       const impactText = finding.impact || '';
       const whatText = finding.what_text || impactText || '';
       const fixText = finding.fix_text || finding.remediation || '';
+      // --- asset context: host, domain, pivoting ---
+      const _fid = id(fNode);
+      const connHosts = []; const connDoms = []; const pivots = [];
+      for (const e of data.edges || []) {
+        const ef = eid(e.from), et = eid(e.to);
+        if (ef === _fid || et === _fid) {
+          const o = ef === _fid ? e.to : e.from;
+          const on = data.nodes.find(n => n.label === o.label && n.key === o.key);
+          if (on) {
+            if (['Host','Target','IPAddress'].includes(on.label) && !connHosts.find(h => id(h)===id(on))) connHosts.push(on);
+            if (on.label === 'Domain' && !connDoms.find(d => id(d)===id(on))) connDoms.push(on);
+          }
+        }
+      }
+      for (const e of data.edges || []) {
+        if (eid(e.to) === _fid && ['HAS_FINDING','HAS_VULNERABILITY','EXPOSES'].includes(e.type)) {
+          const pid = eid(e.from);
+          const pn = data.nodes.find(n => id(n) === pid);
+          if (pn && ['Service','Endpoint','Technology'].includes(pn.label)) {
+            for (const e2 of data.edges || []) {
+              if (eid(e2.to) === pid && ['HAS_SERVICE','HAS_ENDPOINT','HAS_ASSET'].includes(e2.type)) {
+                const hn = data.nodes.find(n => id(n) === eid(e2.from));
+                if (hn && ['Host','Target','IPAddress'].includes(hn.label) && !connHosts.find(h => id(h)===id(hn))) connHosts.push(hn);
+              }
+            }
+          }
+          if (pn && ['Host','Target','IPAddress'].includes(pn.label) && !connHosts.find(h => id(h)===id(pn))) connHosts.push(pn);
+        }
+      }
+      for (const h of connHosts) {
+        for (const e of data.edges || []) {
+          if ((eid(e.from)===id(h)||eid(e.to)===id(h)) && ['RESOLVES_TO','HAS_DOMAIN','BELONGS_TO'].includes(e.type)) {
+            const did = eid(e.from)===id(h) ? eid(e.to) : eid(e.from);
+            const dn = data.nodes.find(n => id(n)===did && n.label==='Domain');
+            if (dn && !connDoms.find(d => id(d)===id(dn))) connDoms.push(dn);
+          }
+        }
+      }
+      for (const e of data.edges || []) {
+        if (e.type === 'PIVOTS_TO') {
+          for (const h of connHosts) {
+            if (eid(e.to) === id(h)) { const fn = data.nodes.find(n => id(n)===eid(e.from)); pivots.push({from:fn,to:h,edge:e}); }
+          }
+        }
+      }
+      const hostStr = connHosts.map(h => { const a = h.props?.address||h.props?.ip||h.props?.hostname||h.props?.name||gmName(h); const hn = h.props?.hostname; return hn && h.props?.address ? `${a} (${hn})` : a; }).join(', ');
+      const domStr = connDoms.map(d => d.props?.domain||d.props?.name||gmName(d)).join(', ');
+      const pivotStr = pivots.length ? pivots.map(p => gmName(p.from) + ' → ' + gmName(p.to)).join(' → ') : '';
+      const chainsFrom = finding.chains_from || [];
+      const assetCtx = `<div class="fd-asset-ctx">
+        ${hostStr ? `<div class="fd-asset-row"><span class="fd-asset-label">Target Host</span><span class="fd-asset-value">${esc(hostStr)}</span></div>` : ''}
+        ${domStr ? `<div class="fd-asset-row"><span class="fd-asset-label">Domain</span><span class="fd-asset-value">${esc(domStr)}</span></div>` : ''}
+        <div class="fd-asset-row"><span class="fd-asset-label">Access</span><span class="fd-asset-value">${pivotStr ? '🔗 Via Pivoting: ' + esc(pivotStr) : 'Direct'}</span></div>
+        ${chainsFrom.length ? `<div class="fd-asset-row"><span class="fd-asset-label">Chains From</span><span class="fd-asset-value">${chainsFrom.map(c => esc(c)).join(' → ')}</span></div>` : ''}
+      </div>`;
+      const runId = f?.runId || x.getRunId?.() || '';
       descBox.innerHTML = `<div class="fd-header">
         <span class="sev ${sevClass(props.local_severity || 'info')}">${esc(props.local_severity || 'info')}</span>
         <span class="fd-title">${esc(finding.title || gmName(fNode))}</span>
       </div>
+      ${assetCtx}
       <div class="fd-cards">
         ${cweStr ? `<div class="fd-card"><div class="fd-card-label">CWE</div><div class="fd-card-value">${esc(Array.isArray(cweStr) ? cweStr.join(', ') : cweStr)}</div></div>` : ''}
         ${cvssStr ? `<div class="fd-card"><div class="fd-card-label">CVSS</div><div class="fd-card-value">${esc(String(cvssStr))}</div></div>` : ''}
@@ -4518,8 +4643,17 @@ function renderGraphMemory(x) {
       ${payloadText ? `<div class="fd-section"><div class="fd-section-title">PAYLOAD / COMMAND</div><pre class="fd-pre">${esc(payloadText)}</pre></div>` : ''}
       ${evidenceText ? `<div class="fd-section"><div class="fd-section-title">EVIDENCE — WHAT WAS DONE</div><pre class="fd-pre">${esc(evidenceText)}</pre></div>` : ''}
       ${whatText ? `<div class="fd-section"><div class="fd-section-title">IMPACT</div><p>${esc(whatText)}</p></div>` : ''}
-      ${fixText ? `<div class="fd-section"><div class="fd-section-title">HOW TO FIX IT</div><p>${esc(fixText)}</p></div>` : ''}`;
+      ${fixText ? `<div class="fd-section"><div class="fd-section-title">HOW TO FIX IT</div><p>${esc(fixText)}</p></div>` : ''}
+      <div class="fd-actions"><button class="btn btn-accent fd-revalidate" data-fid="${esc(finding.id || '')}" data-run="${esc(runId)}">Re-validate PoC</button></div>`;
       show(descBox, true);
+      const revalBtn = descBox.querySelector('.fd-revalidate');
+      if (revalBtn) revalBtn.addEventListener('click', async () => {
+        revalBtn.disabled = true; revalBtn.textContent = 'Validating...';
+        try {
+          const res = await api(`/api/runs/${encodeURIComponent(revalBtn.dataset.run)}/poc/${encodeURIComponent(revalBtn.dataset.fid)}`, { method: 'POST' });
+          revalBtn.textContent = res.ok ? 'Validated ✓' : 'Failed ✗';
+        } catch { revalBtn.textContent = 'Error'; }
+      });
     }
   } else if (descBox) {
     show(descBox, false);

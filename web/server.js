@@ -813,6 +813,7 @@ async function listRuns() {
       findings: findings.length,
       severities: sevCount,
       hasReport: fs.existsSync(path.join(dir, 'report.html')) || fs.existsSync(path.join(dir, 'report.pdf')),
+      engagement: status.engagement || null,
     };
   }));
   // A brand-new live job hasn't written its run dir yet (the run id is only
@@ -935,7 +936,7 @@ async function runDetail(id) {
       }
     } catch { /* no job files */ }
   }
-  return { id, name: engagementNames.get(id) || '', meta, status, findings, assets, pocs, extras, launch };
+  return { id, name: engagementNames.get(id) || '', meta, status, findings, assets, pocs, extras, launch, engagement: status.engagement || null };
 }
 
 /// Relative file list under a directory (one level of nesting is enough for
@@ -2289,6 +2290,33 @@ const server = http.createServer(async (req, res) => {
       const dir = safeRunDir(decodeURIComponent(m[1]));
       if (!dir || !fs.existsSync(dir)) return sendJson(res, 404, { error: 'run not found' });
       return sendJson(res, 200, await findingTraffic(dir, decodeURIComponent(m[2])));
+    }
+
+    // ---- kill chain / OWASP / MITRE coverage for a run ----
+    m = p.match(/^\/api\/runs\/([^/]+)\/coverage$/);
+    if (req.method === 'GET' && m) {
+      const dir = safeRunDir(decodeURIComponent(m[1]));
+      if (!dir || !fs.existsSync(dir)) return sendJson(res, 404, { error: 'run not found' });
+      const findings = await readJsonSafe(path.join(dir, 'findings.json'), []);
+      const killchain = {};
+      const owaspMap = {};
+      const mitreMap = {};
+      for (const f of findings) {
+        if (f.stage) {
+          if (!killchain[f.stage]) killchain[f.stage] = [];
+          killchain[f.stage].push({ id: f.id, title: f.title, severity: f.severity });
+        }
+        if (f.owasp) {
+          const cat = f.owasp.split('-')[0]?.trim() || f.owasp;
+          if (!owaspMap[cat]) owaspMap[cat] = [];
+          owaspMap[cat].push({ id: f.id, title: f.title, severity: f.severity });
+        }
+        if (f.mitre) {
+          if (!mitreMap[f.mitre]) mitreMap[f.mitre] = [];
+          mitreMap[f.mitre].push({ id: f.id, title: f.title, severity: f.severity });
+        }
+      }
+      return sendJson(res, 200, { killchain, owasp: owaspMap, mitre: mitreMap, total: findings.length });
     }
 
     // ---- report rebuild (generate/refresh the PDF for a finished run) ----
