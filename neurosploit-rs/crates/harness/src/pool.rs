@@ -310,6 +310,13 @@ impl ModelPool {
             return Err(anyhow!("cancelled"));
         }
         let use_cli = m.use_cli(self.subscription);
+        let cache_key = crate::cache::key(&m.provider, &m.model, use_cli, system, user);
+        if let Some(hit) = crate::cache::get(&cache_key) {
+            if let Some(tx) = self.progress() {
+                let _ = tx.send(format!("cache hit → {}:{}", m.provider, m.model));
+            }
+            return Ok(hit);
+        }
         let progress = self.progress();
         let mut last = anyhow::anyhow!("no attempt");
         for attempt in 0..MAX_TRANSIENT_RETRIES {
@@ -334,7 +341,10 @@ impl ModelPool {
                 r = call => r,
             };
             match r {
-                Ok(t) => return Ok(t),
+                Ok(t) => {
+                    crate::cache::put(&cache_key, &m.model, &t);
+                    return Ok(t);
+                }
                 Err(e) => {
                     let class = classify_error(&format!("{e:#}"));
                     match class {

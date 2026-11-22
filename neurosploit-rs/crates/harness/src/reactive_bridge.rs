@@ -117,6 +117,7 @@ pub async fn run_reactive(
                 "mobile-ios" => crate::mcp_profiles::Profile::MobileIos,
                 "binary" => crate::mcp_profiles::Profile::BinaryAnalysis,
                 "burp" => crate::mcp_profiles::Profile::BurpSuite,
+                "cobaltstrike" | "cobalt" | "cs" | "c2" => crate::mcp_profiles::Profile::CobaltStrike,
                 "infra" | "host" => crate::mcp_profiles::Profile::Infra,
                 "ad" | "internal" => crate::mcp_profiles::Profile::Ad,
                 "cloud" => crate::mcp_profiles::Profile::Cloud,

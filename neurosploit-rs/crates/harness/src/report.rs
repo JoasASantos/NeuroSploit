@@ -349,7 +349,10 @@ pub fn curl_command(f: &Finding) -> String {
             for (k, v) in &a.request_headers {
                 // Never print a real credential into a document that gets
                 // shared; the reader substitutes their own.
-                let val = if is_secret_header(k) { "<redacted — use your own>" } else { v.as_str() };
+                // A token, not the value: the vault resolves it on demand, so
+                // a shared report never carries a live credential.
+                let masked = format!("{{{{REVEALSECRET:{}}}}}", k.to_lowercase());
+                let val = if is_secret_header(k) { masked.as_str() } else { v.as_str() };
                 cmd.push_str(&format!(" \\\n  -H '{k}: {val}'"));
             }
             if !f.payload.trim().is_empty() && method != "GET" {

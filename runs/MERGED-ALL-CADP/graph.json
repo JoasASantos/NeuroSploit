@@ -1,0 +1,20 @@
+{
+  "nodes": [],
+  "edges": [
+    {
+      "confidence": 1.0,
+      "evidence": [],
+      "from": {
+        "key": "180d338d162d",
+        "label": "Target"
+      },
+      "props": {},
+      "status": "confirmed",
+      "to": {
+        "key": "180d338d162d|10.0.0.4",
+        "label": "Host"
+      },
+      "type": "HAS_ASSET"
+    }
+  ]
+}

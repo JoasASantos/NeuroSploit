@@ -1438,11 +1438,10 @@ impl C2Manager {
             .bytes()
             .await
             .map_err(|e| format!("read response: {e}"))?;
-        let mut text = String::from_utf8_lossy(&bytes).to_string();
-        if text.len() > OUTPUT_CAP {
-            text.truncate(OUTPUT_CAP);
-            text.push_str("\n[truncated by NeuroSploit]");
-        }
+        let text = crate::limits::clip(
+            &String::from_utf8_lossy(&bytes),
+            crate::limits::env_cap("NEUROSPLOIT_C2_OUTPUT_CAP", OUTPUT_CAP),
+        );
         self.store.audit(
             "webshell.exec",
             json!({"id": conn.id, "command": command, "http_status": status, "authorization": state.policy.authorized_by}),

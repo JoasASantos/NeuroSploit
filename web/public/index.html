@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>NeuroSploit v4.4.3 — Console</title>
+<title>NeuroSploit — Console</title>
 <link rel="icon" type="image/svg+xml" href="logo.svg">
 <link rel="stylesheet" href="/vendor/xterm.css" />
 <link rel="stylesheet" href="/style.css" />
@@ -45,6 +45,7 @@
       <button class="sb-nav-item" data-view="issues"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 21V4M5 4.5h12l-2.2 3.5L17 11.5H5"/></svg></span> Issues</button>
       <div class="sb-nav-separator"></div>
       <button class="sb-nav-item" data-view="repos"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3.5 7a2 2 0 0 1 2-2H10l2 2h6.5a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg></span> Repositories</button>
+      <button class="sb-nav-item" data-view="projects"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3.5 7.5A1.5 1.5 0 0 1 5 6h4l2 2h8a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5z"/><path d="M8 12h8M8 15h5"/></svg></span> Projects</button>
       <button class="sb-nav-item" data-view="domains"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c3 2.6 3 14.4 0 17M12 3.5c-3 2.6-3 14.4 0 17"/></svg></span> Domains</button>
       <button class="sb-nav-item" data-view="networks"><span class="sb-nav-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="5.5" r="2"/><circle cx="5.5" cy="18.5" r="2"/><circle cx="18.5" cy="18.5" r="2"/><path d="M12 7.5v4M12 11.5l-5.2 5.4M12 11.5l5.2 5.4"/></svg></span> Networks</button>
       <div class="sb-nav-separator"></div>
@@ -69,7 +70,7 @@
     </div>
 
     <div class="sb-bottom">
-      <span class="sb-version" id="sbVersion">v4.4.3</span>
+      <span class="sb-version" id="sbVersion"></span>
     </div>
   </aside>
 
@@ -204,6 +205,19 @@
       <div class="page-body" id="domainsBody"><div class="empty-state">No domains configured yet.</div></div>
     </section>
 
+    <!-- ============ PROJECTS / ORGS ============ -->
+    <section class="page-view" id="projectsView" hidden>
+      <header class="topbar">
+        <div>
+          <div class="topbar-title">Projects</div>
+          <div class="topbar-sub">Group every test of one customer, domain or target into its own project and organisation</div>
+        </div>
+        <div class="topbar-spacer"></div>
+        <button class="btn btn-accent" id="btnAddProject">+ New Project</button>
+      </header>
+      <div class="page-body" id="projectsBody"><div class="empty-state">Loading projects…</div></div>
+    </section>
+
     <!-- ============ NETWORKS ============ -->
     <section class="page-view" id="networksView" hidden>
       <header class="topbar">
@@ -300,8 +314,41 @@
         <div class="topbar-spacer"></div>
       </header>
       <div class="page-body" id="guardrailsBody">
+        <div class="config-grid" id="guardrailsSummary">
+          <div class="config-card">
+            <div class="config-card-title">Capability &amp; scope</div>
+            <div class="config-card-desc" id="grSumScope">No scope configured.</div>
+            <div class="config-card-actions"><button class="btn" onclick="openGuardrails('scope')">Edit</button></div>
+          </div>
+          <div class="config-card">
+            <div class="config-card-title">Safety guardrails</div>
+            <div class="config-card-desc" id="grSumSafety">—</div>
+            <div class="config-card-actions"><button class="btn" onclick="openGuardrails('safety')">Edit</button></div>
+          </div>
+          <div class="config-card">
+            <div class="config-card-title">Environment &amp; policy</div>
+            <div class="config-card-desc" id="grSumEnv">—</div>
+            <div class="config-card-actions"><button class="btn" onclick="openGuardrails('env')">Edit</button></div>
+          </div>
+          <div class="config-card">
+            <div class="config-card-title">Egress &amp; out-of-band</div>
+            <div class="config-card-desc" id="grSumEgress">—</div>
+            <div class="config-card-actions"><button class="btn" onclick="openGuardrails('egress')">Edit</button></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Guardrails editor — the long form lives in a modal, the page is a summary. -->
+    <div class="modal-overlay" id="guardrailsModal" hidden>
+      <div class="modal modal-lg">
+        <div class="modal-head">
+          <div class="title">Guardrails<span class="modal-sub">Authorization, scoping, safety controls, environment and egress</span></div>
+          <button class="icon-btn" onclick="closeModal('#guardrailsModal')" aria-label="Close"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        </div>
+        <div class="modal-body">
         <div class="config-grid">
-          <div class="config-card" style="grid-column:1/-1;">
+          <div class="config-card" data-gr-section="scope" style="grid-column:1/-1;">
             <div class="config-card-title">Capability Token</div>
             <div class="form-group">
               <label for="grCapToken">Capability token</label>
@@ -316,7 +363,7 @@
             </div>
           </div>
 
-          <div class="config-card" style="grid-column:1/-1;">
+          <div class="config-card" data-gr-section="safety" style="grid-column:1/-1;">
             <div class="config-card-title">Scoping &amp; Guardrails <span class="pill" style="font-size:10px;">enforced in code</span></div>
             <div class="config-card-desc">The hard scope is the boundary: a request whose host is not listed is refused before it is sent. Exclusions always win. A capability token still caps all of this.</div>
             <div class="form-group">
@@ -369,7 +416,7 @@
             </div>
           </div>
 
-          <div class="config-card" style="grid-column:1/-1;">
+          <div class="config-card" data-gr-section="env" style="grid-column:1/-1;">
             <div class="config-card-title">Environment &amp; Policy</div>
             <div class="field-row">
               <div class="form-group">
@@ -394,7 +441,7 @@
             </div>
           </div>
 
-          <div class="config-card" style="grid-column:1/-1;">
+          <div class="config-card" data-gr-section="egress" style="grid-column:1/-1;">
             <div class="config-card-title">Egress &amp; Out-of-band</div>
             <div class="form-group">
               <label for="grTransport">Transport (how traffic reaches the target)</label>
@@ -425,12 +472,14 @@
             </div>
           </div>
 
-          <div class="config-card" style="grid-column:1/-1;">
-            <div class="config-card-actions"><button class="btn btn-accent" id="btnGuardrailsSave">Save</button></div>
-          </div>
+        </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" onclick="closeModal('#guardrailsModal')">Cancel</button>
+          <button class="btn btn-accent" id="btnGuardrailsSave">Save guardrails</button>
         </div>
       </div>
-    </section>
+    </div>
 
     <!-- ============ INTEGRATIONS ============ -->
     <section class="page-view" id="integrationsView" hidden>
@@ -485,6 +534,13 @@
             <input id="fieldName" type="text" placeholder="Keystone digital banking" aria-describedby="errName" />
             <div class="field-error" id="errName" hidden></div>
             <div class="field-help">Identifies this engagement in the sidebar and run history — required.</div>
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="fieldProject">Project <span class="req">— optional</span></label>
+            <select id="fieldProject">
+              <option value="">No project — save as an ungrouped test</option>
+            </select>
+            <div class="field-help">Every test saved to the same project — across black-box, white-box, host, cloud, PR review — is grouped together in <b>Projects</b>.</div>
           </div>
           <div>
             <div class="section-title">What are you testing?</div>
@@ -1356,6 +1412,42 @@
     <div class="modal-foot">
       <button class="btn" onclick="$('#networkModal').hidden=true">Cancel</button>
       <button class="btn btn-primary" id="btnNetworkSubmit">Add Network</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ PROJECT / ORG MODAL ============ -->
+<div class="modal-overlay" id="projectModal" hidden>
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <div class="title" id="projectModalTitle">New Project</div>
+      <button class="icon-btn" onclick="closeModal('#projectModal')" aria-label="Close"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="projectId" />
+      <div class="field-group">
+        <label class="field-label" for="projectOrg">Organisation</label>
+        <input id="projectOrg" type="text" placeholder="Acme Corp" list="projectOrgList" />
+        <datalist id="projectOrgList"></datalist>
+        <div class="field-help">Groups projects by customer/company. Pick an existing one or type a new name.</div>
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="projectName">Project name</label>
+        <input id="projectName" type="text" placeholder="Production web — acme.com" />
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="projectTargets">Targets</label>
+        <textarea id="projectTargets" rows="3" placeholder="acme.com&#10;10.0.0.4&#10;https://app.acme.com"></textarea>
+        <div class="field-help">One target per line or comma-separated. Runs whose target matches are grouped here automatically.</div>
+      </div>
+      <div class="field-group">
+        <label class="field-label" for="projectDesc">Description (optional)</label>
+        <input id="projectDesc" type="text" placeholder="Q4 external assessment" />
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal('#projectModal')">Cancel</button>
+      <button class="btn btn-primary" id="btnProjectSubmit">Save Project</button>
     </div>
   </div>
 </div>

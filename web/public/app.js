@@ -1,5 +1,5 @@
 'use strict';
-/* NeuroSploit v4.4.3 — web console frontend. Vanilla JS, no build step. */
+/* NeuroSploit — web console frontend. Vanilla JS, no build step. */
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -125,7 +125,7 @@ function clearFieldErrors() { $$('.field-error').forEach((el) => { el.textConten
 // view navigation
 // ---------------------------------------------------------------------------
 
-const ALL_VIEWS = ['homeView','dashView','wizardView','liveView','detailView','pentestsView','prreviewsView','issuesView','reposView','domainsView','networksView','vaultView','guardrailsView','integrationsView','settingsView','c2View','toolboxView'];
+const ALL_VIEWS = ['homeView','dashView','wizardView','liveView','detailView','pentestsView','prreviewsView','issuesView','reposView','projectsView','domainsView','networksView','vaultView','guardrailsView','integrationsView','settingsView','c2View','toolboxView'];
 
 function switchView(viewName) {
   state.activeView = viewName;
@@ -137,9 +137,11 @@ function switchView(viewName) {
   });
   const runHist = $('#sbRunHistory');
   if (runHist) runHist.style.display = ['live','detail'].includes(viewName) ? '' : 'none';
+  if (viewName === 'wizard') loadProjectOptions();
   if (viewName === 'pentests') loadPentests();
   if (viewName === 'issues') loadIssues();
   if (viewName === 'repos') loadRepos();
+  if (viewName === 'projects') loadProjects();
   if (viewName === 'domains') loadDomains();
   if (viewName === 'networks') loadNetworks();
   if (viewName === 'integrations') loadIntegrations();
@@ -791,9 +793,11 @@ async function startExploitation() {
   const model = $('#fieldModelSelect').value;
   const focusParts = [$('#fieldFocus').value.trim(), ...state.customLeads].filter(Boolean);
 
+  await loadProjectOptions();
   const body = {
     mode,
     name,
+    projectId: $('#fieldProject')?.value || undefined,
     target: mode === 'whitebox' ? undefined : target,
     repo: mode === 'whitebox' ? target : (repo || undefined),
     models: collectModels(),
@@ -4121,7 +4125,7 @@ function makeExtras(viewSel, uid, getRunId) {
   body.insertAdjacentHTML('beforeend', extrasPanelsHtml(uid));
   const x = {
     root, getRunId, graphData: null, extras: {}, chainFilter: 'all',
-    view: { k: 1, tx: 20, ty: 20, sel: null }, timers: {},
+    view: { k: 1, tx: 20, ty: 20, sel: null, kindFilters: new Set() }, timers: {},
     q: (k) => $(`[data-x="${k}"]`, root),
     count: (tab, n) => { const el = $(`[data-count="${tab}"]`, root); if (el) el.textContent = n; },
     active: () => $('.run-tab.active', root)?.dataset.tab || 'findings',
@@ -4170,7 +4174,7 @@ function extrasCounts(x) {
 async function extrasRefresh(x, extras, force) {
   if (!x) return;
   const id = x.getRunId();
-  if (x.lastId !== id) { x.lastId = id; x.graphData = null; x.view = { k: 1, tx: 20, ty: 20, sel: null, filterFinding: null }; }
+  if (x.lastId !== id) { x.lastId = id; x.graphData = null; x.view = { k: 1, tx: 20, ty: 20, sel: null, filterFinding: null, kindFilters: new Set() }; }
   x.extras = extras || {};
   try { await extrasGraph(x, force); } catch { /* no graph yet */ }
   extrasCounts(x);
@@ -4322,6 +4326,20 @@ function gmName(n) {
   const p = n.props || {};
   return p.title || p.name || p.category || p.path || p.type || p.address || n.key;
 }
+function gmSub(n) {
+  const p = n.props || {};
+  switch (n.label) {
+    case 'Host': case 'Target': case 'IPAddress': return p.address || p.ip || p.hostname || p.target || '';
+    case 'Domain': return p.domain || p.name || '';
+    case 'Service': case 'Technology': return p.port ? `:${p.port}` : p.url || p.protocol || '';
+    case 'Endpoint': return p.path || p.url || p.method || '';
+    case 'Finding': case 'Vulnerability': return p.cwe || p.owasp || '';
+    case 'Credential': case 'Secret': case 'Identity': return p.username || p.account || p.type || '';
+    case 'AttackStep': case 'ExploitAttempt': return p.technique || p.mitre || '';
+    case 'BusinessImpact': return p.category || p.type || '';
+    default: return '';
+  }
+}
 
 const GM_ICON = {
   Target: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg>`,
@@ -4380,9 +4398,17 @@ function renderGraphMemory(x) {
   show(x.q('graph-empty'), !has);
   show(x.q('wrap'), has);
   renderGraphFindingList(x);
-  x.q('legend').innerHTML = [['internet', 'Internet'], ['asset', 'Host / Target'], ['surface', 'Service / Endpoint'], ['weak', 'Finding'], ['step', 'Attack Step'], ['cred', 'Credential / Role'], ['impact', 'Impact']]
-    .map(([k, l]) => `<span class="gm-leg gk-${k}"><span class="gm-leg-dot"></span>${esc(l)}</span>`).join('') +
+  const kf = x.view.kindFilters || new Set();
+  const legendItems = [['internet', 'Internet'], ['asset', 'Host / Target'], ['surface', 'Service / Endpoint'], ['weak', 'Finding'], ['step', 'Attack Step'], ['cred', 'Credential / Role'], ['impact', 'Impact']];
+  x.q('legend').innerHTML = legendItems
+    .map(([k, l]) => `<button class="gm-leg gk-${k}${kf.has(k) ? '' : ' gm-leg-active'}" data-kind="${k}"><span class="gm-leg-dot"></span>${esc(l)}</button>`).join('') +
     '<span class="gm-leg-sep"></span><span class="gm-edge-leg es-confirmed">confirmed</span><span class="gm-edge-leg es-needs_validation">needs validation</span><span class="gm-edge-leg es-hypothesis">hypothesis</span>';
+  $$('[data-kind]', x.q('legend')).forEach(btn => btn.addEventListener('click', () => {
+    const k = btn.dataset.kind;
+    if (kf.has(k)) kf.delete(k); else kf.add(k);
+    x.drawnSig = null;
+    renderGraphMemory(x);
+  }));
   if (!has) { stage.innerHTML = ''; return; }
   const filterFid = x.view.filterFinding || null;
 
@@ -4390,6 +4416,7 @@ function renderGraphMemory(x) {
   const id = (n) => `${n.label}|${n.key}`;
   const eid = (e) => `${e.label}|${e.key}`;
   let nodes = data.nodes.filter((n) => full || !GM_HIDDEN.has(n.label));
+  if (kf.size) nodes = nodes.filter((n) => !kf.has(GM_KIND[n.label] || 'meta'));
   let keep = new Set(nodes.map(id));
   let edges = (data.edges || []).filter((e) => keep.has(eid(e.from)) && keep.has(eid(e.to)));
   if (!full) {
@@ -4499,7 +4526,7 @@ function renderGraphMemory(x) {
   }
 
   // Circular node layout — left-to-right columns by entity kind
-  const NW = 140, NH = 90, GX = 60, GY = 30, PER = 8;
+  const NW = 180, NH = 110, GX = 90, GY = 42, PER = 7;
   const cols = new Map();
   for (const n of nodes) {
     const c = GM_COL[n.label] ?? 3;
@@ -4545,17 +4572,24 @@ function renderGraphMemory(x) {
     col += sub;
   }
   const width = col * (NW + GX);
-  const CX = NW / 2, CY = 28;
+  const CX = NW / 2, CY = 32;
   const path = (a, b) => {
-    const x1 = a.x + CX + 28, y1 = a.y + CY, x2 = b.x + CX - 28, y2 = b.y + CY;
+    const x1 = a.x + CX + 32, y1 = a.y + CY, x2 = b.x + CX - 32, y2 = b.y + CY;
     const mx = (x1 + x2) / 2;
     return `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`;
   };
+  const arrow = (st) => ({ confirmed: 'gm-ar-confirmed', needs_validation: 'gm-ar-needs', hypothesis: 'gm-ar-hyp', needs_review: 'gm-ar-review' }[st] || 'gm-ar-needs');
+  const defs = `<defs>
+    <marker id="gm-ar-confirmed" viewBox="0 0 8 8" refX="6.5" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="#22c55e"/></marker>
+    <marker id="gm-ar-needs" viewBox="0 0 8 8" refX="6.5" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="#f59e0b"/></marker>
+    <marker id="gm-ar-hyp" viewBox="0 0 8 8" refX="6.5" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="#94a3b8"/></marker>
+    <marker id="gm-ar-review" viewBox="0 0 8 8" refX="6.5" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="#38bdf8"/></marker>
+  </defs>`;
   const svg = edges.map((e) => {
     const a = pos.get(eid(e.from)), b = pos.get(eid(e.to));
     if (!a || !b) return '';
     const st = e.status || 'needs_validation';
-    return `<path class="gm-e es-${esc(st)}${GM_TRAVERSAL.has(e.type) ? ' gm-trav' : ''}" data-from="${esc(eid(e.from))}" data-to="${esc(eid(e.to))}" d="${path(a, b)}"><title>${esc(e.type)} · ${esc(st)} · conf ${Number(e.confidence || 0).toFixed(2)}</title></path>`;
+    return `<path class="gm-e es-${esc(st)}${GM_TRAVERSAL.has(e.type) ? ' gm-trav' : ''}" data-from="${esc(eid(e.from))}" data-to="${esc(eid(e.to))}" marker-end="url(#${arrow(st)})" d="${path(a, b)}"><title>${esc(e.type)} · ${esc(st)} · conf ${Number(e.confidence || 0).toFixed(2)}</title></path>`;
   }).join('');
   const cards = nodes.map((n) => {
     const p = pos.get(id(n));
@@ -4564,12 +4598,14 @@ function renderGraphMemory(x) {
     const sev = props.local_severity;
     const sevBadge = sev ? `<span class="gm-sev-badge sev ${sevClass(sev)}">${esc(sev.charAt(0).toUpperCase())}</span>` : '';
     const countBadge = props.endpoint_count ? `<span class="gm-badge" style="background:var(--sev-high-fg);color:#fff">${props.endpoint_count}</span>` : '';
+    const sub = gmSub(n);
     return `<div class="gm-node gk-${kind}" style="left:${p.x}px;top:${p.y}px;width:${NW}px" data-id="${esc(id(n))}">
       <div class="gm-circle">${gmIcon(n.label)}${sevBadge}${countBadge}</div>
       <div class="gm-node-label" title="${esc(gmName(n))}">${esc(gmName(n))}</div>
+      ${sub ? `<div class="gm-node-info" title="${esc(sub)}">${esc(sub)}</div>` : ''}
       <div class="gm-node-sub">${esc(n.label)}${props.stage ? ` · ${esc(props.stage)}` : ''}</div></div>`;
   }).join('');
-  stage.innerHTML = `<svg class="gm-svg" width="${width + 80}" height="${maxH + 40}">${svg}</svg>${cards}`;
+  stage.innerHTML = `<svg class="gm-svg" width="${width + 80}" height="${maxH + 40}">${defs}${svg}</svg>${cards}`;
   stage.style.width = `${width + 80}px`;
   stage.style.height = `${maxH + 40}px`;
   gmApply(x);
@@ -5004,6 +5040,123 @@ async function loadDomains() {
   } catch { body.innerHTML = '<div class="empty-state">No domains configured yet. Click <strong>+ Add Domain</strong> to add one.</div>'; }
 }
 
+// ---------------------------------------------------------------------------
+// Projects / organisations — group every run of one target together.
+// ---------------------------------------------------------------------------
+async function loadProjectOptions() {
+  const sel = $('#fieldProject');
+  if (!sel) return;
+  try {
+    const projects = await api('/api/projects');
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">No project — save as an ungrouped test</option>' +
+      projects.map(p => `<option value="${esc(p.id)}">${esc(p.org ? p.org + ' / ' : '')}${esc(p.name)}</option>`).join('');
+    if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+  } catch { /* keep the previous options */ }
+}
+
+async function loadProjects() {
+  const body = $('#projectsBody');
+  if (!body) return;
+  try {
+    const [projects, runs] = await Promise.all([api('/api/projects'), api('/api/runs')]);
+    const orgs = [...new Set(projects.map(p => p.org || 'Default'))].sort((a, b) => a.localeCompare(b));
+    const dl = $('#projectOrgList');
+    if (dl) dl.innerHTML = orgs.map(o => `<option value="${esc(o)}"></option>`).join('');
+    if (!projects.length) {
+      body.innerHTML = '<div class="empty-state">No projects yet. Click <strong>+ New Project</strong> to group a target\'s tests into one place.</div>';
+      return;
+    }
+    const matches = (p, r) => (r.projectId && r.projectId === p.id)
+      || (p.runIds || []).includes(r.id)
+      || (p.targets || []).some(t => {
+        const needle = t.replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
+        const hay = String(r.target || '').toLowerCase();
+        return needle && (hay === needle || hay.includes(needle));
+      });
+    const group = new Map();
+    for (const p of projects) {
+      const org = p.org || 'Default';
+      if (!group.has(org)) group.set(org, []);
+      group.get(org).push(p);
+    }
+    body.innerHTML = [...group.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([org, list]) => `
+      <div class="project-org">
+        <div class="project-org-head"><h2>${esc(org)}</h2><span class="pill">${list.length} project${list.length === 1 ? '' : 's'}</span></div>
+        <div class="config-grid">${list.map(p => {
+          const rs = runs.filter(r => matches(p, r)).sort((a, b) => b.ts - a.ts);
+          const findings = rs.reduce((n, r) => n + (r.findings || 0), 0);
+          return `<div class="config-card project-card">
+            <div class="config-card-title">${esc(p.name)}</div>
+            <div class="config-card-desc">${esc(p.description || 'No description')}</div>
+            <div class="config-card-meta">${rs.length} test${rs.length === 1 ? '' : 's'} · ${findings} finding${findings === 1 ? '' : 's'}${p.targets?.length ? ' · ' + esc(p.targets.join(', ')) : ''}</div>
+            ${rs.length ? `<div class="project-runs">${rs.slice(0, 6).map(r => `<button class="project-run" data-run="${esc(r.id)}" title="${esc(r.target || r.id)}">
+              <span class="state-dot state-${esc(r.state || 'unknown')}"></span>
+              <span class="project-run-name">${esc(r.name || r.target || r.id)}</span>
+              <span class="project-run-meta">${r.findings || 0}f · ${esc(r.state || '')}</span>
+            </button>`).join('')}${rs.length > 6 ? `<div class="project-run-more">+${rs.length - 6} more</div>` : ''}</div>` : '<div class="project-empty">No tests matched yet.</div>'}
+            <div class="config-card-actions">
+              <button class="btn btn-sm" data-edit-project="${esc(p.id)}">Edit</button>
+              <button class="btn btn-sm btn-danger" data-del-project="${esc(p.id)}">Delete</button>
+            </div>
+          </div>`;
+        }).join('')}</div>
+      </div>`).join('');
+    $$('[data-run]', body).forEach(el => el.addEventListener('click', () => {
+      const r = runs.find(x => x.id === el.dataset.run);
+      if (r) openRun({ id: r.id, state: r.state });
+    }));
+    $$('[data-edit-project]', body).forEach(el => el.addEventListener('click', () => openProject(el.dataset.editProject, projects)));
+    $$('[data-del-project]', body).forEach(el => el.addEventListener('click', async () => {
+      if (!confirm('Delete this project? The runs themselves are not touched.')) return;
+      try { await api(`/api/projects/${encodeURIComponent(el.dataset.delProject)}`, { method: 'DELETE' }); toast('Project deleted', 'ok'); loadProjects(); }
+      catch (e) { toast(`Failed: ${e.message}`, 'error'); }
+    }));
+  } catch (e) {
+    body.innerHTML = `<div class="empty-state">Could not load projects: ${esc(e.message)}</div>`;
+  }
+}
+
+function openProject(id, projects) {
+  const p = (projects || []).find(x => x.id === id) || {};
+  $('#projectId').value = id || '';
+  $('#projectOrg').value = p.org || '';
+  $('#projectName').value = p.name || '';
+  $('#projectTargets').value = (p.targets || []).join('\n');
+  $('#projectDesc').value = p.description || '';
+  $('#projectModalTitle').textContent = id ? 'Edit Project' : 'New Project';
+  openModal('#projectModal');
+  setTimeout(() => $('#projectName')?.focus(), 30);
+}
+
+$('#btnAddProject')?.addEventListener('click', async () => {
+  let projects = [];
+  try { projects = await api('/api/projects'); } catch { /* still usable */ }
+  openProject(null, projects);
+});
+
+$('#btnProjectSubmit')?.addEventListener('click', async () => {
+  const id = $('#projectId')?.value || '';
+  const name = $('#projectName')?.value?.trim();
+  if (!name) { toast('Project name is required', 'error'); return; }
+  const data = {
+    org: $('#projectOrg')?.value?.trim() || 'Default',
+    name,
+    targets: ($('#projectTargets')?.value || '').split(/[\n,;]+/).map(s => s.trim()).filter(Boolean),
+    description: $('#projectDesc')?.value?.trim() || '',
+  };
+  try {
+    await api(id ? `/api/projects/${encodeURIComponent(id)}` : '/api/projects', {
+      method: id ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    closeModal('#projectModal');
+    toast(id ? 'Project updated' : 'Project created', 'ok');
+    loadProjects();
+  } catch (e) { toast(`Failed: ${e.message}`, 'error'); }
+});
+
 async function loadNetworks() {
   const body = $('#networksBody');
   if (!body) return;
@@ -5343,7 +5496,30 @@ function loadGuardrails() {
     $('#grOobHttp').value = cfg.oobHttp || '';
     $('#grOobDns').value = cfg.oobDns || '';
     $('#grSms').value = cfg.sms || '';
+    renderGuardrailSummary(cfg);
   }).catch(() => {});
+}
+
+// The page is a compact summary; the editable form lives in a modal so the
+// long list of controls does not push everything else off the screen.
+function renderGuardrailSummary(cfg) {
+  const set = (sel, text) => { const el = $(sel); if (el) el.textContent = text; };
+  const scope = [cfg.scopeHard, cfg.inScope].filter(Boolean).join(', ').replace(/\s*\n\s*/g, ', ');
+  set('#grSumScope', scope ? `Allow: ${scope}` : 'No extra scope — the target only.');
+  const rate = cfg.rate ? `${cfg.rate} req/min` : 'unlimited rate';
+  set('#grSumSafety',
+    `${cfg.destructive ? 'State-changing methods allowed' : 'State-changing methods blocked'} · ` +
+    `${cfg.accounts === false ? 'account creation off' : `max ${cfg.maxAccounts ?? 3} accounts`} · ${rate}`);
+  set('#grSumEnv', `${cfg.environment || 'production'} · ${cfg.policy || 'web'} policy`);
+  const egress = [cfg.transport, cfg.oobDomain && `OOB ${cfg.oobDomain}`].filter(Boolean).join(' · ');
+  set('#grSumEgress', egress || 'Direct egress · no out-of-band domain');
+}
+
+function openGuardrails(section) {
+  openModal('#guardrailsModal');
+  if (!section) return;
+  const el = $(`#guardrailsModal [data-gr-section="${section}"]`);
+  if (el) setTimeout(() => el.scrollIntoView({ block: 'start', behavior: 'smooth' }), 30);
 }
 
 $('#btnGuardrailsSave')?.addEventListener('click', async () => {
@@ -5369,6 +5545,8 @@ $('#btnGuardrailsSave')?.addEventListener('click', async () => {
   };
   try {
     await api('/api/config/guardrails', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+    closeModal('#guardrailsModal');
+    renderGuardrailSummary(data);
     toast('Guardrails saved', 'ok');
   } catch (e) { toast(`Failed: ${e.message}`, 'error'); }
 });
@@ -5562,12 +5740,12 @@ $('#btnIntegSubmit')?.addEventListener('click', async () => {
   } finally { btn.disabled = false; btn.textContent = 'Save & Validate'; }
 });
 
-['#repoModal', '#domainModal', '#networkModal', '#integrationModal'].forEach(sel => {
+['#repoModal', '#domainModal', '#networkModal', '#projectModal', '#guardrailsModal', '#integrationModal'].forEach(sel => {
   $(sel)?.addEventListener('click', (e) => { if (e.target === $(sel)) closeModal(sel); });
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    ['#repoModal', '#domainModal', '#networkModal', '#integrationModal'].forEach(sel => {
+    ['#repoModal', '#domainModal', '#networkModal', '#projectModal', '#guardrailsModal', '#integrationModal'].forEach(sel => {
       if (!$(sel)?.hidden) closeModal(sel);
     });
   }

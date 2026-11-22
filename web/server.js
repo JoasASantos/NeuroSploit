@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * NeuroSploit v4.4.3 — web console backend.
+ * NeuroSploit — web console backend.
  *
  * Zero-dependency Node HTTP server that:
  *  - serves the static SPA in ./public
@@ -73,6 +73,35 @@ async function writeConfig(name, data) {
   await fsp.writeFile(configFile(name), JSON.stringify(data, null, 2));
 }
 
+// run-id -> project-id. The launch chooses the project, but the run id is only
+// known after recon prints it, so the binding is recorded here the moment it
+// appears and survives a restart.
+const RUN_PROJECTS_FILE = path.join(CONFIG_DIR, 'run-projects.json');
+const runProjects = new Map();
+try {
+  const raw = JSON.parse(fs.readFileSync(RUN_PROJECTS_FILE, 'utf8'));
+  for (const [k, v] of Object.entries(raw)) runProjects.set(k, v);
+} catch { /* none yet */ }
+
+function assignRunProject(runId, projectId) {
+  if (!runId) return;
+  if (projectId) runProjects.set(runId, projectId);
+  else runProjects.delete(runId);
+  fsp.mkdir(path.dirname(RUN_PROJECTS_FILE), { recursive: true })
+    .then(() => fsp.writeFile(RUN_PROJECTS_FILE, JSON.stringify(Object.fromEntries(runProjects), null, 2)))
+    .catch(() => {});
+  if (!projectId) return;
+  readConfig('projects').then((projects) => {
+    const i = projects.findIndex((p) => p.id === projectId);
+    if (i < 0) return;
+    if (!Array.isArray(projects[i].runIds)) projects[i].runIds = [];
+    if (projects[i].runIds.includes(runId)) return;
+    projects[i].runIds.push(runId);
+    projects[i].updatedAt = new Date().toISOString();
+    return writeConfig('projects', projects);
+  }).catch(() => {});
+}
+
 const JOBS_DIR = path.join(ROOT, '.neurosploit', 'web-jobs');
 function jobFile(id) { return path.join(JOBS_DIR, `${id}.json`); }
 function persistJob(job) {
@@ -90,6 +119,14 @@ function persistJob(job) {
   } catch { /* best-effort — persistence never breaks a run */ }
 }
 function deleteJobFile(id) { try { fs.unlinkSync(jobFile(id)); } catch { /* gone already */ } }
+
+// A project's targets may arrive as a comma/newline separated string or an
+// array. Normalize to a trimmed, de-duplicated array so matching a run against
+// the project is a simple substring test.
+function normalizeTargets(v) {
+  const arr = Array.isArray(v) ? v : String(v || '').split(/[\s,;]+/);
+  return [...new Set(arr.map(s => String(s).trim()).filter(Boolean))];
+}
 
 const PUBLIC_DIR = path.join(WEB_DIR, 'public');
 
@@ -771,6 +808,7 @@ async function listRuns() {
       ts,
       name: engagementNames.get(id) || '',
       target: status.target || meta.target || id.replace(/^ns-\d+-/, ''),
+      projectId: runProjects.get(id) || null,
       state,
       findings: findings.length,
       severities: sevCount,
@@ -792,6 +830,7 @@ async function listRuns() {
       ts: Math.floor((j.startedAt || Date.now()) / 1000),
       name: j.name || '',
       target: j.target || '',
+      projectId: j.projectId || null,
       state: 'running',
       findings: (j.findings || []).length,
       severities: sevCount,
@@ -1152,6 +1191,7 @@ class Job extends EventEmitter {
     this.args = args;
     this.target = target || '';
     this.name = name || '';
+    this.projectId = null;
     this.pinnedAgents = [];
     this.runId = null; // ns-<ts>-<target> workdir basename, once known
     this.phase = 'starting';
@@ -1184,6 +1224,7 @@ class Job extends EventEmitter {
       id: this.id,
       target: this.target,
       name: this.name,
+      projectId: this.projectId,
       pinnedAgents: this.pinnedAgents,
       interactive: !!this.repl,
       runId: this.runId,
@@ -1298,7 +1339,11 @@ function ingestLine(job, rawLine) {
   if (rep) job.reportUrl = rep[1];
 
   const rid = line.match(/run id\s*:\s*(\S+)/);
-  if (rid) { job.runId = rid[1]; saveEngagementName(job.runId, job.name); }
+  if (rid) {
+    job.runId = rid[1];
+    saveEngagementName(job.runId, job.name);
+    assignRunProject(job.runId, job.projectId);
+  }
 
   // --- live per-agent status, for the "what's being tested" panel ---
   if (!job.agentStatus) job.agentStatus = {};
@@ -1419,6 +1464,7 @@ async function startJob(body) {
   const args = buildArgs({ ...body, creds: credsPath, scopePath, collectionPath });
   const job = new Job(id, BIN, args, body.repo || body.target || '', body.name || '');
   job.pinnedAgents = body.agents || [];
+  job.projectId = body.projectId || null;
   jobs.set(id, job);
 
   const cloudEnv = body.cloudProvider ? await cloudEnvOverrides(body.cloudProvider) : {};
@@ -1499,6 +1545,7 @@ function sanitizeLaunch(body) {
     mode: body.mode || 'run',
     target: body.target || '',
     repo: body.repo || '',
+    projectId: body.projectId || null,
     models: body.models || [],
     subscription: !!body.subscription,
     mcp: !!body.mcp,
@@ -1577,6 +1624,7 @@ async function startJobViaRepl(body) {
   const auth = authArgs({ ...body, scopePath });
   const job = new Job(id, BIN, auth, body.repo || body.target || '', body.name || '');
   job.pinnedAgents = body.agents || [];
+  job.projectId = body.projectId || null;
   job.repl = true;
   // Non-secret params needed to relaunch this job after a restart. No API keys,
   // no creds-file contents — only what rebuilds the engagement shape so a
@@ -1682,6 +1730,7 @@ function loadPersistedJobs() {
     if (!rec || !rec.id) continue;
     const job = new Job(rec.id, BIN, [], rec.target || '', rec.name || '');
     job.runId = rec.runId || null;
+    job.projectId = rec.projectId || (rec.launch && rec.launch.projectId) || null;
     job.findings = rec.findings || [];
     job.agents = rec.agents || 0;
     job.agentsDone = rec.agentsDone || 0;
@@ -2684,6 +2733,58 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       await writeConfig('vault', body);
       return sendJson(res, 200, body);
+    }
+
+    // ---- Config CRUD: projects / orgs ----
+    // A project groups every engagement (run) against one customer, domain or
+    // internal target so the console can show "all tests for target X" apart
+    // from everything else. Grouping only — it never touches the run data.
+    if (req.method === 'GET' && p === '/api/projects') return sendJson(res, 200, await readConfig('projects'));
+    if (req.method === 'POST' && p === '/api/projects') {
+      const body = await readBody(req);
+      const name = String(body.name || '').trim();
+      if (!name) return sendJson(res, 400, { error: 'project name is required' });
+      const projects = await readConfig('projects');
+      const item = {
+        id: crypto.randomUUID(),
+        org: String(body.org || 'Default').trim() || 'Default',
+        name,
+        targets: normalizeTargets(body.targets ?? body.target),
+        description: String(body.description || '').trim(),
+        runIds: Array.isArray(body.runIds) ? body.runIds.map(String) : [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      projects.push(item);
+      await writeConfig('projects', projects);
+      return sendJson(res, 200, item);
+    }
+    m = p.match(/^\/api\/projects\/([^/]+)$/);
+    if (req.method === 'PUT' && m) {
+      const body = await readBody(req);
+      const id = decodeURIComponent(m[1]);
+      let projects = await readConfig('projects');
+      const idx = projects.findIndex(x => x.id === id);
+      if (idx < 0) return sendJson(res, 404, { error: 'project not found' });
+      const prev = projects[idx];
+      projects[idx] = {
+        ...prev,
+        org: body.org != null ? (String(body.org).trim() || 'Default') : prev.org,
+        name: body.name != null ? (String(body.name).trim() || prev.name) : prev.name,
+        targets: body.targets != null || body.target != null ? normalizeTargets(body.targets ?? body.target) : prev.targets,
+        description: body.description != null ? String(body.description).trim() : prev.description,
+        runIds: Array.isArray(body.runIds) ? body.runIds.map(String) : prev.runIds,
+        updatedAt: new Date().toISOString(),
+      };
+      await writeConfig('projects', projects);
+      return sendJson(res, 200, projects[idx]);
+    }
+    if (req.method === 'DELETE' && m) {
+      let projects = await readConfig('projects');
+      const before = projects.length;
+      projects = projects.filter(x => x.id !== decodeURIComponent(m[1]));
+      await writeConfig('projects', projects);
+      return sendJson(res, 200, { ok: true, removed: before - projects.length });
     }
 
     // ---- Config: guardrails ----

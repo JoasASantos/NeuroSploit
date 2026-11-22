@@ -23,7 +23,7 @@ pub struct Provider {
 pub fn providers() -> Vec<Provider> {
     vec![
         Provider { key: "anthropic", label: "Anthropic Claude", base_url: "https://api.anthropic.com/v1", env_key: "ANTHROPIC_API_KEY", kind: "cli",
-            models: vec!["claude-opus-5-5", "claude-mythos-5-1", "claude-opus-5", "claude-sonnet-5", "claude-fable-5-1", "claude-opus-4-8", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"] },
+            models: vec!["claude-fable-5-2", "claude-mythos-5-2", "claude-opus-5-5", "claude-fable-5-1", "claude-mythos-5-1", "claude-opus-5", "claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"] },
         Provider { key: "openai", label: "OpenAI (ChatGPT)", base_url: "https://api.openai.com/v1", env_key: "OPENAI_API_KEY", kind: "cli",
             models: vec!["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2", "gpt-5.1", "gpt-5.1-codex", "o4"] },
         Provider { key: "xai", label: "xAI Grok", base_url: "https://api.x.ai/v1", env_key: "XAI_API_KEY", kind: "cli",
@@ -59,7 +59,7 @@ pub fn providers() -> Vec<Provider> {
         Provider { key: "litellm", label: "LiteLLM (proxy)", base_url: "http://localhost:4000/v1", env_key: "LITELLM_API_KEY", kind: "api",
             models: vec!["gpt-4o", "claude-3-7-sonnet", "gemini/gemini-2.5-pro"] },
         Provider { key: "openrouter", label: "OpenRouter", base_url: "https://openrouter.ai/api/v1", env_key: "OPENROUTER_API_KEY", kind: "api",
-            models: vec!["anthropic/claude-opus-5-5", "anthropic/claude-mythos-5-1", "anthropic/claude-opus-4-8", "z-ai/glm-5.3", "qwen/qwen3.8-max", "deepseek/deepseek-v4.1", "meta-llama/llama-3.3-70b-instruct"] },
+            models: vec!["anthropic/claude-fable-5-2", "anthropic/claude-mythos-5-2", "anthropic/claude-opus-5-5", "anthropic/claude-fable-5-1", "anthropic/claude-mythos-5-1", "anthropic/claude-opus-4-8", "z-ai/glm-5.3", "qwen/qwen3.8-max", "deepseek/deepseek-v4.1", "meta-llama/llama-3.3-70b-instruct"] },
         // OpenCode Zen — the curated OpenAI-compatible gateway behind the
         // `opencode` CLI (https://opencode.ai/zen). Works two ways, like
         // anthropic/openai/xai/gemini above: as a plain API-key provider here,
@@ -67,7 +67,7 @@ pub fn providers() -> Vec<Provider> {
         // `opencode` agentic CLI on the user's own Zen/plan login — no key
         // needed in that mode. `kind: "cli"` reflects the latter.
         Provider { key: "opencode", label: "OpenCode Zen", base_url: "https://opencode.ai/zen/v1", env_key: "OPENCODE_API_KEY", kind: "cli",
-            models: vec!["claude-opus-5-5", "claude-mythos-5-1", "claude-opus-5", "claude-sonnet-5", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.5", "gemini-3-pro", "gemini-3.8-flash", "grok-4.7", "grok-4.5", "glm-5.3", "deepseek-v4.1", "deepseek-v4-pro", "qwen3.8-max", "kimi-k3"] },
+            models: vec!["claude-fable-5-2", "claude-mythos-5-2", "claude-opus-5-5", "claude-fable-5-1", "claude-mythos-5-1", "claude-opus-5", "claude-sonnet-5", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.5", "gemini-3-pro", "gemini-3.8-flash", "grok-4.7", "grok-4.5", "glm-5.3", "deepseek-v4.1", "deepseek-v4-pro", "qwen3.8-max", "kimi-k3"] },
         // Nous Research — Hermes models via the Nous Portal. As an API-key
         // provider here (OpenAI-compatible `inference-api.nousresearch.com`),
         // or (with --subscription) driven through the `hermes` CLI
@@ -77,7 +77,7 @@ pub fn providers() -> Vec<Provider> {
         // (`hermes chat -m <model> --provider nous`): `nous:qwen3.8-max` and other
         // routed models work even though only the Hermes-family defaults are listed.
         Provider { key: "nous", label: "Nous Research (Hermes)", base_url: "https://inference-api.nousresearch.com/v1", env_key: "NOUS_API_KEY", kind: "cli",
-            models: vec!["Hermes-4-405B", "Hermes-4-70B", "DeepHermes-3-Mistral-24B-Preview", "claude-mythos-5-1", "qwen3.8-max", "qwen3.8-omni-flash"] },
+            models: vec!["Hermes-4-405B", "Hermes-4-70B", "DeepHermes-3-Mistral-24B-Preview", "claude-fable-5-2", "claude-mythos-5-2", "claude-mythos-5-1", "qwen3.8-max", "qwen3.8-omni-flash"] },
         // Azure OpenAI (OpenAI-compatible). Set AZURE_OPENAI_ENDPOINT (e.g.
         // https://<resource>.openai.azure.com), optionally AZURE_OPENAI_API_VERSION
         // (default 2024-10-21), and use `azure:<your-deployment-name>` as the model.
@@ -1079,10 +1079,15 @@ pub(crate) fn max_tokens_for(model: &str) -> u32 {
     // Anthropic Claude models produce ReAct chains + full JSON findings;
     // 4096 truncates mid-JSON and loses every finding from the agent.
     let claude_large = fam.starts_with("claude-");
+    // Go big. Output budget is the single most common cause of a truncated
+    // ReAct chain or a JSON findings block cut mid-object, and a re-run costs
+    // far more than the extra output tokens. These are ceilings, not usage:
+    // a model that answers in 800 tokens still bills 800. A provider with a
+    // lower hard limit can be pinned with NEUROSPLOIT_MAX_TOKENS.
     if reasoning || claude_large {
-        32768
+        131072
     } else {
-        4096
+        65536
     }
 }
 
@@ -1183,7 +1188,7 @@ mod response_tests {
         }
         assert_eq!(cli_binary_for("zai"), Some("claude"), "GLM runs via the claude CLI");
         // GLM is reasoning-heavy → gets the larger token ceiling.
-        assert_eq!(max_tokens_for("glm-5.3"), 32768);
+        assert_eq!(max_tokens_for("glm-5.3"), 131072);
     }
 
     #[test]
@@ -1198,21 +1203,21 @@ mod response_tests {
     #[test]
     fn reasoning_models_get_more_headroom() {
         for m in ["glm-5.3", "glm-4.6", "deepseek-v4.1", "z-ai/glm-5.3", "qwen3.8-max", "kimi-k3", "o3", "gpt-6-sol"] {
-            assert_eq!(max_tokens_for(m), 32768, "{m} should be treated as reasoning-heavy");
+            assert_eq!(max_tokens_for(m), 131072, "{m} should be treated as reasoning-heavy");
         }
     }
 
     #[test]
     fn plain_models_keep_default() {
         for m in ["gpt-5.5", "gemini-3-pro", "grok-4.7", "meta-llama/llama-3.3-70b-instruct"] {
-            assert_eq!(max_tokens_for(m), 4096, "{m} should keep the default cap");
+            assert_eq!(max_tokens_for(m), 65536, "{m} should keep the default cap");
         }
     }
 
     #[test]
     fn claude_models_get_extended_output() {
         for m in ["claude-opus-5-5", "anthropic/claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"] {
-            assert_eq!(max_tokens_for(m), 32768, "{m} should get 32k for ReAct+JSON output");
+            assert_eq!(max_tokens_for(m), 131072, "{m} should get 128k for ReAct+JSON output");
         }
     }
 

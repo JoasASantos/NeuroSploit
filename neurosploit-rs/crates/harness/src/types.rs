@@ -262,6 +262,11 @@ pub struct RunConfig {
     /// refused rather than tested against whatever network this host is on.
     #[serde(default)]
     pub transport: Option<String>,
+    /// Pivot proxy mode: `auto` (detect unreachable subnets, set up tunnels via
+    /// compromised hosts), `off` (disabled), or `host:domain:user:pass` to
+    /// register a specific pivot host manually.
+    #[serde(default)]
+    pub pivot_proxy: Option<String>,
     /// Out-of-band interaction domain (a wildcard pointed at our listeners).
     /// Without it the blind classes — SSRF, XXE, blind RCE — cannot be proven,
     /// only suspected.
@@ -333,7 +338,8 @@ pub struct RunConfig {
     /// the default and the most tested path.
     #[serde(default)]
     pub reactive: bool,
-    /// MCP tool profile: `web`, `mobile-android`, `mobile-ios`, `binary`, `burp`.
+    /// MCP tool profile: `web`, `mobile-android`, `mobile-ios`, `binary`, `burp`,
+    /// `cobaltstrike`, `infra`, `ad`, `cloud`, `kali`, `nmap`, `full`.
     /// When set, the matching MCP server and tool allowlist are auto-configured.
     #[serde(default)]
     pub mcp_profile: Option<String>,
@@ -405,6 +411,7 @@ impl RunConfig {
             policy: Default::default(),
             budget: Default::default(),
             transport: None,
+            pivot_proxy: None,
             oob_domain: None,
             oob_http: None,
             oob_dns: None,

