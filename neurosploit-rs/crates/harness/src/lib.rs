@@ -77,6 +77,7 @@ pub mod taint;
 pub mod toolbox;
 pub mod traces;
 pub mod transport;
+pub mod pivot;
 pub mod types;
 pub mod usage;
 pub mod typesafe;

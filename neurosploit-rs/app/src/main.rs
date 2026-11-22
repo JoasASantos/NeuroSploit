@@ -59,6 +59,13 @@ struct Cli {
     /// an interactive session cannot change its own route mid-engagement.
     #[arg(long = "transport", global = true)]
     transport: Option<String>,
+    /// Pivot proxy: auto-establish tunnels through compromised hosts to reach
+    /// deeper subnets. When enabled, the chain engine detects unreachable targets
+    /// and sets up portproxy/chisel/SOCKS tunnels via the engagement's foothold.
+    /// Values: `auto` (detect and tunnel), `off` (default, no pivot tunneling),
+    /// or `host:domain:user:pass` to register a specific pivot host.
+    #[arg(long = "pivot-proxy", global = true)]
+    pivot_proxy: Option<String>,
     /// Out-of-band domain (a wildcard pointed at this host). Without it the
     /// blind classes — SSRF, XXE, blind RCE — can only be reported as leads.
     #[arg(long = "oob-domain", global = true)]
@@ -2605,6 +2612,13 @@ fn apply_network(cfg: &mut RunConfig, cli: &Cli) -> anyhow::Result<()> {
         let egress = harness::transport::Egress::parse(&spec).map_err(|e| anyhow::anyhow!(e))?;
         println!("  \x1b[2megress: {}\x1b[0m", egress.label());
         cfg.transport = Some(spec);
+    }
+    if let Some(pivot) = &cli.pivot_proxy {
+        let mode = pivot.to_lowercase();
+        if mode != "off" {
+            println!("  \x1b[2mpivot-proxy: {}\x1b[0m", if mode == "auto" { "auto-detect" } else { pivot });
+            cfg.pivot_proxy = Some(pivot.clone());
+        }
     }
     if let Some(d) = oob_domain {
         if !d.contains('.') {
