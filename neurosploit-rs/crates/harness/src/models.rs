@@ -902,7 +902,7 @@ pub async fn cli_login_status(provider: &str) -> LoginStatus {
 /// Gemini/Grok/Hermes have no CLI-level MCP hook, so they fall back to their
 /// own built-in tools (Hermes ships web/terminal/computer-use natively).
 pub fn mcp_supported(provider: &str) -> bool {
-    matches!(provider, "anthropic" | "openai" | "opencode")
+    matches!(provider, "anthropic" | "openai" | "opencode" | "zai")
 }
 
 /// Convert our `.mcp.json` (`{"mcpServers": {name: {command, args}}}`) into

@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::path::PathBuf;
 
 // ---------------------------------------------------------------------------
 // Profile enum
@@ -21,6 +22,7 @@ pub enum Profile {
     BinaryAnalysis,
     BurpSuite,
     CobaltStrike,
+    TurtleC2,
     Infra,
     Ad,
     Cloud,
@@ -28,6 +30,24 @@ pub enum Profile {
     Nmap,
     Full,
     Custom(String),
+}
+
+// ---------------------------------------------------------------------------
+// TurtleC2 install dir
+// ---------------------------------------------------------------------------
+
+/// Locate the local TurtleC2 MCP server package (contains `server.py` +
+/// the `.env` with teamserver connection and operator credentials).
+pub fn turtlec2_dir() -> String {
+    for base in [
+        std::env::var("TURTLEC2_MCP_DIR").unwrap_or_default(),
+        format!("{}/tools/TurtleC2-MCP-Server", std::env::var("HOME").unwrap_or_default()),
+    ] {
+        if !base.is_empty() && PathBuf::from(&base).is_dir() {
+            return base;
+        }
+    }
+    "tools/TurtleC2-MCP-Server".into()
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +151,26 @@ pub fn profile(p: &Profile) -> McpProfile {
                 }
             }),
         },
+        // TurtleC2 teamserver via its Python MCP server (stdio child). The
+        // server loads its own .env (teamserver host/port, operator creds)
+        // from its package directory, so no secrets are embedded here.
+        Profile::TurtleC2 => McpProfile {
+            name: "TurtleC2".into(),
+            description: "TurtleC2 teamserver C2 via the local stdio MCP server".into(),
+            server_name: "turtlec2".into(),
+            tools: tool_allowlist(p),
+            config: {
+                let mut cfg = json!({
+                    "command": "uv",
+                    "args": ["--directory", turtlec2_dir(), "run", "server.py"],
+                    "env": {}
+                });
+                if !PathBuf::from(turtlec2_dir()).is_dir() {
+                    cfg = json!({});
+                }
+                cfg
+            },
+        },
         Profile::Infra => McpProfile {
             name: "Infra".into(),
             description: "Network/infra testing with an Nmap MCP server".into(),
@@ -223,6 +263,10 @@ pub fn all_profiles() -> Vec<(Profile, &'static str)> {
             Profile::CobaltStrike,
             "Cobalt Strike team-server C2 via the official HTTP MCP",
         ),
+        (
+            Profile::TurtleC2,
+            "TurtleC2 teamserver C2 via the local stdio MCP server",
+        ),
         (Profile::Infra, "Network/infra testing with Nmap MCP"),
         (Profile::Ad, "Active Directory testing with Kali MCP"),
         (Profile::Cloud, "Cloud/container tooling via Kali MCP"),
@@ -308,6 +352,50 @@ pub fn tool_allowlist(p: &Profile) -> Vec<String> {
             "cs_fetch_screenshot",
             "cs_get_team_server",
         ],
+        Profile::TurtleC2 => &[
+            "list_agents",
+            "agent_info",
+            "agent_console",
+            "agent_command",
+            "agent_profile",
+            "execute_shell",
+            "execute_powershell",
+            "execute_raw",
+            "run_process",
+            "list_task_history",
+            "jobs_list",
+            "jobs_kill",
+            "aux_run",
+            "aux_list",
+            "aux_job_output",
+            "upload_file",
+            "download_file",
+            "list_downloads",
+            "get_downloaded_file",
+            "list_listeners",
+            "list_tunnels",
+            "port_forward",
+            "reverse_port_forward",
+            "stop_tunnel",
+            "webdelivery_add",
+            "webdelivery_list",
+            "list_credentials",
+            "loot_list",
+            "list_targets",
+            "list_processes",
+            "kill_process",
+            "tag_agent",
+            "set_agent_sleep",
+            "build",
+            "workspace_list",
+            "workspace_create",
+            "workspace_findings",
+            "workspace_finding_add",
+            "workspace_export",
+            "log_finding",
+            "save_writeup",
+            "view_session_notes",
+        ],
         Profile::Infra | Profile::Nmap => &[
             "do-nmap", "nmap_scan", "nmap_service_scan", "nmap_vuln_scan",
             "nmap_os_detect", "nmap_ping_sweep",
@@ -380,6 +468,21 @@ pub fn prompt_context(p: &Profile) -> String {
              inventory before acting, cs_execute_command to run one authorized command at a time, \
              and cs_read_command_output for the receipt. Every action is attributable to the \
              engagement — stay inside the authorized hosts, never run destructive or \
+             persistence-changing commands unless the operator explicitly approved them, \
+             and put the raw command output into the finding evidence."
+        ),
+        Profile::TurtleC2 => format!(
+            "You are operating in TURTLEC2 mode through the local teamserver MCP. \
+             Available tools: {tool_list}. Use list_agents to establish the current session \
+             inventory, agent_info for a session's host details, and agent_command to run one \
+             authorized command at a time — list_task_history then shows the receipt; \
+             agent_console drives an interactive session. Pivoting uses port_forward / \
+             reverse_port_forward and list_tunnels; staging uses webdelivery_add; \
+             evidence and bookkeeping use log_finding, workspace_finding_add, \
+             workspace_findings, save_writeup and view_session_notes; collected material is \
+             readable via list_credentials, loot_list, list_downloads and \
+             get_downloaded_file; payload generation is build. Every action is attributable \
+             to the engagement — stay inside the authorized hosts, never run destructive or \
              persistence-changing commands unless the operator explicitly approved them, \
              and put the raw command output into the finding evidence."
         ),
@@ -464,6 +567,7 @@ mod tests {
             Profile::BinaryAnalysis,
             Profile::BurpSuite,
             Profile::CobaltStrike,
+            Profile::TurtleC2,
             Profile::Infra,
             Profile::Ad,
             Profile::Cloud,

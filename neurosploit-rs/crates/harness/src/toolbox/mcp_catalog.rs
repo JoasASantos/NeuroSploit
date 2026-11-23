@@ -105,6 +105,22 @@ pub fn all() -> Vec<McpServerSpec> {
             notes: "Enable the Burp MCP/REST extension and adjust the URL/key in mcp.servers.json.".into(),
         },
         McpServerSpec {
+            name: "turtlec2".into(),
+            description: "TurtleC2 teamserver MCP: sessions, commands, listeners, tunnels, BOFs, workspace.".into(),
+            transport: "stdio".into(),
+            command: "uv".into(),
+            args: vec![
+                "--directory".into(),
+                crate::mcp_profiles::turtlec2_dir(),
+                "run".into(),
+                "server.py".into(),
+            ],
+            env: BTreeMap::new(),
+            url: String::new(),
+            install: BTreeMap::new(),
+            notes: "Needs uv + the TurtleC2-MCP-Server checkout with its .env (teamserver host/port/creds). Override the dir with TURTLEC2_MCP_DIR.".into(),
+        },
+        McpServerSpec {
             name: "rea".into(),
             description: "REA MCP: reverse engineering for mobile and native binaries.".into(),
             transport: "stdio".into(),
