@@ -666,7 +666,28 @@ textarea { resize: vertical; min-height: 72px; }
 }
 .poc-file { display: flex; align-items: center; gap: var(--sp-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-2); }
 .poc-file .fn { font-family: var(--mono); font-size: var(--fs-sm); flex: 1; }
-.poc-pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--sp-3); font-family: var(--mono); font-size: var(--fs-xs); max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin-top: var(--sp-2); }
+.poc-pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--sp-3); font-family: var(--mono); font-size: var(--fs-xs); max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin-top: var(--sp-2); }
+/* Script card — collapsible PoC scripts with header bar */
+.script-card { border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: var(--sp-3); overflow: hidden; }
+.script-card-head { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); background: var(--surface-2); cursor: pointer; user-select: none; }
+.script-card-head:hover { background: var(--surface-3, var(--surface-2)); }
+.script-card-head .script-icon { font-size: var(--fs-xs); color: var(--text-faint); transition: transform .15s; }
+.script-card-head[aria-expanded="true"] .script-icon { transform: rotate(90deg); }
+.script-card-head .script-name { flex: 1; font-family: var(--mono); font-size: var(--fs-sm); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.script-card-head .script-lang { font-size: var(--fs-2xs); color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.script-card-actions { display: flex; gap: var(--sp-1); margin-left: auto; }
+.script-card-body { display: none; }
+.script-card-body.open { display: block; }
+.script-card-body .poc-pre { margin: 0; border: none; border-top: 1px solid var(--border); border-radius: 0; max-height: 400px; }
+/* Copy button inside code blocks */
+.code-wrap { position: relative; }
+.code-wrap .copy-btn { position: absolute; top: var(--sp-2); right: var(--sp-2); font-size: var(--fs-2xs); padding: 2px 8px; opacity: 0; transition: opacity .15s; }
+.code-wrap:hover .copy-btn { opacity: 1; }
+/* PoC steps improvements */
+.poc-steps li { position: relative; }
+.poc-steps .step-wrap { position: relative; }
+.poc-steps .step-wrap .copy-btn { position: absolute; top: 4px; right: 4px; font-size: var(--fs-2xs); padding: 2px 8px; opacity: 0; transition: opacity .15s; }
+.poc-steps .step-wrap:hover .copy-btn { opacity: 1; }
 /* Evidence prose carries raw cookies, tokens and URLs — single "words" wider
    than the modal. Without a break they run under the modal's edge and the
    tail of the value is simply unreadable. */
@@ -698,7 +719,8 @@ textarea { resize: vertical; min-height: 72px; }
 .modal-overlay[hidden] { display: none; }
 .modal { width: 620px; max-width: calc(100vw - 40px); max-height: calc(100vh - 80px); max-height: calc(100dvh - 80px); background: var(--surface); border-radius: var(--radius-md); box-shadow: var(--shadow-float); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border); }
 .modal-sm { width: 520px; }
-.modal-lg { width: 760px; }
+.modal-lg { width: 960px; max-height: calc(100vh - 48px); max-height: calc(100dvh - 48px); }
+@media (max-width: 1000px) { .modal-lg { width: calc(100vw - 32px); } }
 .modal-foot { display: flex; justify-content: flex-end; gap: var(--sp-2); padding: var(--sp-3) var(--sp-5); border-top: 1px solid var(--border); }
 .modal-head { display: flex; align-items: center; justify-content: space-between; padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--border); }
 .modal-head .title { font-size: var(--fs-lg); font-weight: 600; }

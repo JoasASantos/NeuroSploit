@@ -75,10 +75,26 @@ pub fn parse_lenient(slice: &str) -> Option<Value> {
 fn strip_model_markup(text: &str) -> String {
     let mut out = text.to_string();
 
-    // DeepSeek DSML tags (fullwidth pipes ｜ = U+FF5C)
-    let dsml = "\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}";
-    if out.contains(dsml) {
-        out = out.replace(dsml, "\n");
+    // DeepSeek DSML tags — both double-pipe (｜｜DSML｜｜) and single-pipe
+    // (｜DSML｜) variants, plus the XML-like tags DeepSeek v4.1-flash emits:
+    // </｜DSML｜ parameter>, </｜DSML｜ invoke>, </｜DSML｜ calls>, etc.
+    let dsml_double = "\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}";
+    let dsml_single = "\u{FF5C}DSML\u{FF5C}";
+    if out.contains(dsml_double) {
+        out = out.replace(dsml_double, "\n");
+    }
+    if out.contains(dsml_single) {
+        // Strip XML-like DSML tags: <｜DSML｜ tag>, </｜DSML｜ tag>, <｜DSML｜ tag attr>
+        // These wrap tool-call invocations in DeepSeek v4.1+ models.
+        let re_open = regex::Regex::new(&format!(
+            r"</?{}\s*[^>]*>",
+            regex::escape(dsml_single)
+        ));
+        if let Ok(re) = re_open {
+            out = re.replace_all(&out, "\n").to_string();
+        } else {
+            out = out.replace(dsml_single, "\n");
+        }
     }
 
     // DeepSeek V2/V3 tool_call delimiters
@@ -94,6 +110,41 @@ fn strip_model_markup(text: &str) -> String {
     for tag in ["output", "result", "response", "answer", "json"] {
         out = out.replace(&format!("<{tag}>"), "\n");
         out = out.replace(&format!("</{tag}>"), "\n");
+    }
+
+    // Model function_call / invoke wrappers — models sometimes emit
+    // <function_call>{"name":"...","arguments":{...}}</function_call> around or
+    // instead of the JSON we asked for.  Strip the wrapper so the JSON inside
+    // is reachable by the balanced-bracket scanner.
+    for tag in ["function_call", "invoke", "calls", "parameters", "parameter",
+                "tool_use", "tool_result", "function", "action", "action_input"] {
+        out = out.replace(&format!("<{tag}>"), "\n");
+        out = out.replace(&format!("</{tag}>"), "\n");
+        // Also handle tags with attributes: <invoke name="run">
+        let pat = format!("<{tag} ");
+        while let Some(start) = out.find(&pat) {
+            if let Some(end) = out[start..].find('>') {
+                out.replace_range(start..start + end + 1, "\n");
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Qwen chat delimiters
+    for marker in ["<|im_start|>", "<|im_end|>", "<|im_start|>assistant", "<|im_start|>user"] {
+        out = out.replace(marker, "\n");
+    }
+
+    // Llama special tokens
+    for marker in ["<|python_tag|>", "<|eom_id|>", "<|start_header_id|>", "<|end_header_id|>",
+                   "<|begin_of_text|>", "<|end_of_text|>"] {
+        out = out.replace(marker, "\n");
+    }
+
+    // Gemma / Mistral
+    for marker in ["<start_of_turn>", "<end_of_turn>", "[INST]", "[/INST]"] {
+        out = out.replace(marker, "\n");
     }
 
     out
@@ -348,6 +399,30 @@ mod tests {
         let t = format!("{dsml}tool_call\ncurl -s http://target\n{dsml}\n[{{\"title\":\"XSS\",\"severity\":\"High\"}}]");
         let v = parse_reply(&t).unwrap();
         assert_eq!(v[0]["title"], "XSS");
+    }
+
+    #[test]
+    fn deepseek_v41_single_pipe_dsml_stripped() {
+        // DeepSeek v4.1-flash emits single-pipe DSML XML tags around tool calls
+        let dsml = "\u{FF5C}DSML\u{FF5C}";
+        let t = format!(
+            "<{d} calls>\n<{d} invoke name=\"run\">\n<{d} parameter name=\"command\" string=\"true\">curl http://t</{d} parameter>\n</{d} invoke>\n</{d} calls>\n[{{\"title\":\"CSRF\",\"severity\":\"Medium\"}}]",
+            d = dsml
+        );
+        let v = parse_reply(&t).unwrap();
+        assert_eq!(v[0]["title"], "CSRF");
+    }
+
+    #[test]
+    fn deepseek_v41_pure_toolcall_no_json() {
+        // When the model returns ONLY tool calls with no JSON findings, parse_reply
+        // correctly returns None (not a panic or garbage).
+        let dsml = "\u{FF5C}DSML\u{FF5C}";
+        let t = format!(
+            "<{d} calls>\n<{d} invoke name=\"run\">\n<{d} parameter name=\"command\" string=\"true\">cd /tmp && curl -s http://target | head -40</{d} parameter>\n</{d} invoke>\n</{d} calls>",
+            d = dsml
+        );
+        assert!(parse_reply(&t).is_none());
     }
 
     #[test]

@@ -2589,8 +2589,23 @@ pub async fn run_whitebox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: S
             async move {
                 let user = format!(
                     "{}\n\nSOURCE CODE TO REVIEW:\n```\n{}\n```\n\nReply ONLY with a JSON array of findings (may be empty []). \
-                     Each item: {{id,title,severity,cwe,endpoint,payload,evidence,impact,remediation,confidence}} \
-                     where `endpoint` is the file:line and `evidence` quotes the vulnerable code. \
+                     Each item MUST have: {{id, title, severity, cwe, cvss, source_file, affected_endpoint, payload, evidence, \
+                     evidence_type, impact, remediation, confidence, finding_type, detection_method, preconditions_checked}}.\n\
+                     FIELD RULES:\n\
+                     - `title`: a proper vulnerability name (e.g. \"Cross-Site Request Forgery in User Settings Endpoint\"), \
+                       NEVER include agent names, reviewer names, or file paths in the title.\n\
+                     - `source_file`: the file:line where vulnerable code lives (e.g. \"ajenti/plugins/core/api/endpoint.py:142\").\n\
+                     - `affected_endpoint`: the HTTP endpoint this vulnerability affects at runtime (e.g. \"POST /api/settings/apply\"). \
+                       If unknown from static analysis, write \"requires runtime verification\".\n\
+                     - `evidence`: quote the EXACT vulnerable code verbatim. This is SOURCE CODE evidence, not attack evidence.\n\
+                     - `evidence_type`: \"source-code\" for SAST.\n\
+                     - `finding_type`: \"sast\".\n\
+                     - `detection_method`: \"static-analysis\" | \"dataflow-trace\" | \"pattern-match\" | \"dependency-scan\".\n\
+                     - `confidence`: 0.0-1.0, how confident YOU are. 0.9+ only if the vulnerable path is fully traced source-to-sink.\n\
+                     - `preconditions_checked`: for CSRF findings you MUST check and report: (1) SameSite cookie attribute, \
+                       (2) CORS configuration, (3) Content-Type enforcement, (4) Origin/Referer validation in middleware, \
+                       (5) framework CSRF middleware/decorators. For auth findings: session management, token validation. \
+                       Format as \"checked: X=value, Y=value | not checked: Z\".\n\
                      When a finding warrants a runnable proof, write a repro script to $NEUROSPLOIT_POCS and put its path in `payload`.",
                     ag.user.replace("{target}", "the provided repository").replace("{recon_json}", "{}"),
                     ctx
@@ -2624,7 +2639,18 @@ pub async fn run_whitebox(cfg: RunConfig, lib: &Library, pool: &ModelPool, tx: S
 
     crate::traces::record_all(cfg.workdir.as_deref(), &raw);
     let transcript = transcript_of(&raw);
-    let candidates = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
+    let mut candidates: Vec<Finding> = dedup_findings(raw.iter().flat_map(|(_, _, f)| f.clone()).collect());
+    // Default SAST metadata for whitebox findings that agents did not set
+    for f in candidates.iter_mut() {
+        if f.finding_type.is_empty() { f.finding_type = "sast".into(); }
+        if f.validation_level.is_empty() { f.validation_level = "source-detection".into(); }
+        if f.detection_method.is_empty() { f.detection_method = "static-analysis".into(); }
+        if f.evidence_type.is_empty() { f.evidence_type = "source-code".into(); }
+        // Separate source_file from endpoint when agent put file:line in endpoint
+        if f.source_file.is_empty() && f.endpoint.contains(':') && !f.endpoint.contains("://") {
+            f.source_file = f.endpoint.clone();
+        }
+    }
     let _ = tx.send(format!("{} candidate finding(s) (deduped) — validating", candidates.len())).await;
     let findings = validate(candidates, pool, CODE_VOTE_SYS, effective_vote_n(&cfg), &tx).await;
     let findings = refute_pass(findings, pool, effective_vote_n(&cfg), &tx).await;
@@ -3884,6 +3910,9 @@ async fn validate_with_persist(candidates: Vec<Finding>, pool: &ModelPool, sys: 
                 // candidates are dropped as noise.
                 if f.validated {
                     f.review_status = "confirmed".into();
+                    if f.validation_level.is_empty() || f.validation_level == "source-detection" {
+                        f.validation_level = "ai-consensus".into();
+                    }
                 } else if yes >= 1 || total == 0 {
                     f.review_status = "needs-review".into();
                     f.review_reason = if total == 0 { "validator unavailable".into() }
@@ -4652,6 +4681,7 @@ async fn finish(cfg: RunConfig, _lib: &Library, pool: &ModelPool, recon: String,
                             f.confidence = f.confidence.max(c.probability);
                             if f.payload.trim().is_empty() { f.payload = c.payload.clone(); }
                             f.review_reason = format!("TypeSafe confirmation loop: {}", c.detail);
+                            f.validation_level = "control-verification".into();
                             confirmed_by_agent += 1;
                         }
                     }
@@ -5124,12 +5154,101 @@ fn persist(cfg: &RunConfig, recon: &str, transcript: &str, findings: &[Finding])
 }
 
 fn findings_md(target: &str, findings: &[Finding]) -> String {
-    let mut s = format!("# NeuroSploit findings — {}\n\n{} validated finding(s).\n", target, findings.len());
+    let is_sast = findings.iter().any(|f| {
+        f.finding_type == "sast" || f.detection_method.contains("static")
+            || f.endpoint.contains(':') && !f.endpoint.contains("://")
+    });
+    let mode_label = if is_sast { "White-Box (SAST)" } else { "Dynamic (DAST)" };
+    let mut s = format!(
+        "# NeuroSploit Findings — {}\n\n**Mode:** {} | **Findings:** {}\n\n---\n",
+        target, mode_label, findings.len()
+    );
     for (i, f) in findings.iter().enumerate() {
-        s.push_str(&format!(
-            "\n## {}. [{}] {}\n- agent: `{}`  CWE: {}  CVSS: {}  votes: {}  confidence: {:.2}\n- endpoint: {}\n\n**Payload**\n```\n{}\n```\n\n**Evidence**\n{}\n\n**Impact:** {}\n\n**Remediation:** {}\n",
-            i + 1, f.severity, f.title, f.agent, f.cwe, f.cvss, f.votes, f.confidence, f.endpoint, f.payload, f.evidence, f.impact, f.remediation
-        ));
+        // Validation level display
+        let val_level = if !f.validation_level.is_empty() {
+            f.validation_level.clone()
+        } else if f.validated && !f.votes.is_empty() {
+            "L2 — AI Consensus".into()
+        } else if f.validated {
+            "L1 — Source Detection".into()
+        } else {
+            "Unconfirmed".into()
+        };
+
+        // Evidence type
+        let ev_type = if !f.evidence_type.is_empty() {
+            &f.evidence_type
+        } else if is_sast {
+            "source-code"
+        } else {
+            "observed"
+        };
+
+        s.push_str(&format!("\n## {}. [{}] {}\n\n", i + 1, f.severity, f.title));
+        s.push_str(&format!("| Field | Value |\n|---|---|\n"));
+        s.push_str(&format!("| CWE | {} |\n", f.cwe));
+        s.push_str(&format!("| CVSS | {} |\n", f.cvss));
+        s.push_str(&format!("| Confidence | {:.0}% |\n", f.confidence * 100.0));
+        s.push_str(&format!("| Validation | {} |\n", val_level));
+        s.push_str(&format!("| Votes | {} |\n", if f.votes.is_empty() { "—" } else { &f.votes }));
+        if !f.detection_method.is_empty() {
+            s.push_str(&format!("| Detection | {} |\n", f.detection_method));
+        }
+        if !f.exploitability.is_empty() {
+            s.push_str(&format!("| Exploitability | {} |\n", f.exploitability));
+        }
+
+        // Source location vs affected endpoint (the core SAST distinction)
+        let source_loc = if !f.source_file.is_empty() {
+            &f.source_file
+        } else if f.endpoint.contains(':') && !f.endpoint.contains("://") {
+            &f.endpoint
+        } else {
+            ""
+        };
+        let http_endpoint = if !f.affected_endpoint.is_empty() {
+            f.affected_endpoint.as_str()
+        } else if f.endpoint.contains("://") || f.endpoint.starts_with('/') {
+            f.endpoint.as_str()
+        } else {
+            ""
+        };
+
+        if !source_loc.is_empty() {
+            s.push_str(&format!("\n**Source Location:** `{}`\n", source_loc));
+        }
+        if !http_endpoint.is_empty() {
+            s.push_str(&format!("\n**Affected Endpoint:** `{}`\n", http_endpoint));
+        }
+
+        // Preconditions (critical for CSRF and similar)
+        if !f.preconditions_checked.is_empty() {
+            s.push_str(&format!("\n**Security Preconditions Checked:**\n{}\n", f.preconditions_checked));
+        }
+
+        s.push_str(&format!("\n**Evidence** (type: {})\n", ev_type));
+        if is_sast && ev_type == "source-code" {
+            s.push_str(&format!("```\n{}\n```\n", f.evidence));
+        } else {
+            s.push_str(&format!("{}\n", f.evidence));
+        }
+
+        if !f.payload.is_empty() {
+            s.push_str(&format!("\n**Payload / PoC**\n```\n{}\n```\n", f.payload));
+        }
+        if !f.repro_steps.is_empty() {
+            s.push_str("\n**Reproduction Steps**\n");
+            for (j, step) in f.repro_steps.iter().enumerate() {
+                s.push_str(&format!("{}. {}\n", j + 1, step));
+            }
+        }
+        s.push_str(&format!("\n**Impact:** {}\n", f.impact));
+        s.push_str(&format!("\n**Remediation:** {}\n", f.remediation));
+
+        if !f.location.is_empty() {
+            s.push_str(&format!("\n**Precise Location:** {}\n", f.location));
+        }
+        s.push_str("\n---\n");
     }
     s
 }
@@ -5338,7 +5457,7 @@ pub(crate) fn extract_findings(text: &str, agent: &str) -> Vec<Finding> {
                     }
                 },
                 agent: agent.to_string(),
-                title,
+                title: clean_finding_title(&title, agent),
                 severity: norm_sev(&s(o, "severity")),
                 cwe: s(o, "cwe"),
                 cvss: s(o, "cvss"),
@@ -5349,10 +5468,6 @@ pub(crate) fn extract_findings(text: &str, agent: &str) -> Vec<Finding> {
                 repro_steps: o.get("repro_steps").and_then(|v| v.as_array())
                     .map(|a| a.iter().filter_map(|x| x.as_str().map(|t| t.to_string())).collect())
                     .unwrap_or_default(),
-                // Structured artifacts for the deterministic validators. Without
-                // this the evidence contract in the prompt goes to an agent that
-                // dutifully fills it in and a parser that throws it away — the
-                // whole validation engine would sit idle on live runs.
                 evidence_data: o.get("evidence_data").and_then(|v| serde_json::from_value(v.clone()).ok()),
                 claims: parse_claims(o),
                 impact: s(o, "impact"),
@@ -5361,6 +5476,13 @@ pub(crate) fn extract_findings(text: &str, agent: &str) -> Vec<Finding> {
                 validated: false,
                 votes: String::new(),
                 screenshots: screenshot_refs(o),
+                finding_type: s(o, "finding_type"),
+                validation_level: s(o, "validation_level"),
+                detection_method: s(o, "detection_method"),
+                source_file: s(o, "source_file"),
+                affected_endpoint: s(o, "affected_endpoint"),
+                evidence_type: s(o, "evidence_type"),
+                preconditions_checked: s(o, "preconditions_checked"),
                 ..Default::default()
             })
         })
@@ -5818,6 +5940,29 @@ fn title_overlap(a: &str, b: &str) -> f64 {
     let inter = x.iter().filter(|w| y.contains(*w)).count() as f64;
     let union = (x.len() + y.len()) as f64 - inter;
     if union == 0.0 { 0.0 } else { inter / union }
+}
+
+/// Strip internal agent names, "Source ... Reviewer at ..." patterns, and other
+/// pipeline artifacts from finding titles. A title should read like a
+/// vulnerability name, not an internal log line.
+fn clean_finding_title(raw: &str, agent: &str) -> String {
+    let mut t = raw.to_string();
+    // Remove agent name prefix/suffix (e.g. "Source CSRF-Disabled Reviewer at ...")
+    if !agent.is_empty() {
+        t = t.replace(agent, "");
+    }
+    // Strip common noise patterns from SAST agent titles
+    let noise = [
+        "Source ", "Reviewer at ", "Reviewer in ", " Reviewer",
+        " at /opt/", " at /tmp/", " at /home/", " at /var/",
+        " in /opt/", " in /tmp/", " in /home/", " in /var/",
+    ];
+    for pat in noise {
+        t = t.replace(pat, "");
+    }
+    // Remove leading/trailing dashes, spaces, colons
+    let t = t.trim_matches(|c: char| c == '-' || c == ' ' || c == ':' || c == '·').trim().to_string();
+    if t.is_empty() { raw.to_string() } else { t }
 }
 
 fn norm_sev(s: &str) -> String {

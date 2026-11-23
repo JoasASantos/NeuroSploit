@@ -143,9 +143,12 @@ pub fn html_with_pocs(target: &str, findings: &[Finding], meta: &EngagementMeta,
                  <table class=fieldgrid>\
                    <tr><td class=fk>Criticality</td><td>{sev}</td><td class=fk>Status</td><td>{status}</td></tr>\
                    <tr><td class=fk>OWASP / CWE</td><td>{owaspcwe}</td><td class=fk>Confidence</td><td>{confline}</td></tr>\
-                   <tr><td class=fk>Location</td><td colspan=3>{endpoint}</td></tr>\
+                   {source_row}\
+                   {aff_ep_row}\
+                   <tr><td class=fk>Validation</td><td>{val_level}</td><td class=fk>Detection</td><td>{det_method}</td></tr>\
                    <tr><td class=fk>Agent</td><td>{agent}</td>{authcell}</tr>\
                  </table>\
+                 {preconditions}\
                  {reviewnote}\
                  <h4>Where the problem is</h4><p class=where>{where_}</p>\
                  <h4>What it means</h4><p>{impact}</p>\
@@ -158,7 +161,30 @@ pub fn html_with_pocs(target: &str, findings: &[Finding], meta: &EngagementMeta,
                 agent = esc(&f.agent),
                 owaspcwe = [esc(&f.owasp), esc(&f.cwe)].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · "),
                 confline = if f.votes.is_empty() { format!("conf {:.2}", f.confidence) } else { format!("{} · conf {:.2}", esc(&f.votes), f.confidence) },
-                endpoint = esc(&f.endpoint),
+                source_row = {
+                    let src = if !f.source_file.is_empty() { &f.source_file }
+                        else if f.endpoint.contains(':') && !f.endpoint.contains("://") { &f.endpoint }
+                        else { "" };
+                    if src.is_empty() { format!("<tr><td class=fk>Endpoint</td><td colspan=3>{}</td></tr>", esc(&f.endpoint)) }
+                    else { format!("<tr><td class=fk>Source Location</td><td colspan=3><code>{}</code></td></tr>", esc(src)) }
+                },
+                aff_ep_row = {
+                    let ep = if !f.affected_endpoint.is_empty() { &f.affected_endpoint }
+                        else if f.endpoint.contains("://") || f.endpoint.starts_with('/') { &f.endpoint }
+                        else { "" };
+                    if ep.is_empty() { String::new() }
+                    else { format!("<tr><td class=fk>Affected Endpoint</td><td colspan=3>{}</td></tr>", esc(ep)) }
+                },
+                val_level = {
+                    let vl = if !f.validation_level.is_empty() { &f.validation_level }
+                        else if f.validated && !f.votes.is_empty() { "L2 — AI Consensus" }
+                        else if f.validated { "L1 — Source Detection" }
+                        else { "Unconfirmed" };
+                    esc(vl)
+                },
+                det_method = if f.detection_method.is_empty() { "—".to_string() } else { esc(&f.detection_method) },
+                preconditions = if f.preconditions_checked.is_empty() { String::new() }
+                    else { format!("<div class=precond><strong>Security preconditions checked:</strong> {}</div>", esc(&f.preconditions_checked)) },
                 where_ = esc(&location_line(f)),
                 steps = {
                     // Numbered, pasteable commands. A reader who cannot
@@ -236,6 +262,7 @@ pub fn html_with_pocs(target: &str, findings: &[Finding], meta: &EngagementMeta,
          .shots{{display:flex;flex-wrap:wrap;gap:12px;margin:6px 0}}\
          .shot{{margin:0;max-width:100%}}.shot img{{max-width:100%;border:0.5pt solid #ddd;border-radius:8px;display:block}}\
          .shot figcaption{{color:#888;font-size:11px;margin-top:3px;font-family:ui-monospace,Menlo,monospace}}\
+         .precond{{background:#fdf6e3;border:0.5pt solid #e0c97f;border-radius:6px;padding:8px 12px;margin:6px 0;font-size:12px;color:#5a4a1e}}\
          .footer{{color:#888;font-size:11px;margin-top:24px;border-top:0.5pt solid #ddd;padding-top:10px}}\
          </style></head><body>\
          <h1><span class=b>Neuro</span>Sploit</h1><div class=sub>Penetration Test Report</div>\
@@ -803,6 +830,12 @@ pub fn markdown(target: &str, findings: &[Finding], meta: &EngagementMeta) -> St
         }
     }
 
+    // --- Threat actor similarity ---
+    // TTP overlap with known intrusion sets, framed as prioritisation aid —
+    // the module itself refuses to render when the overlap is too thin to be
+    // defensible.
+    out.push_str(&crate::threat_actors::markdown(findings));
+
     // --- Vulnerability table ---
     out.push_str("## Vulnerability summary\n\n");
     if confirmed.is_empty() && review.is_empty() {
@@ -888,6 +921,7 @@ pub fn json_report(target: &str, findings: &[Finding], run_id: &str, meta: &Enga
             "needs_review": review.len(),
             "total": findings.len(),
         },
+        "threat_actor_similarity": crate::threat_actors::match_actors(findings),
         "confirmed": confirmed,
         "needs_review": review,
         "findings": findings,

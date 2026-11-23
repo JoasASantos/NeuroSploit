@@ -1530,7 +1530,7 @@ function openFindingModal(f, pocs, runId) {
   // Technical evidence (endpoint/payload/curl) reads as code; prose
   // (description/impact/remediation) reads as a paragraph, not a code block.
   const codeBlock = (label, text) => text
-    ? `<div class="field-group"><label class="field-label">${esc(label)}</label><pre class="poc-pre">${esc(text)}</pre></div>` : '';
+    ? `<div class="field-group"><label class="field-label">${esc(label)}</label><div class="code-wrap"><pre class="poc-pre">${esc(text)}</pre><button class="btn btn-sm copy-btn" onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)})">Copy</button></div></div>` : '';
   const proseBlock = (label, text) => text
     ? `<div class="field-group"><label class="field-label">${esc(label)}</label><div class="fm-prose">${esc(text)}</div></div>` : '';
 
@@ -1559,24 +1559,39 @@ function openFindingModal(f, pocs, runId) {
   // Scripts this finding cites are rendered inside the PoC block above; this
   // list is the run's remaining scripts, so nothing written is hidden.
   const citedIn = `${f.evidence || ''} ${f.payload || ''} ${(f.repro_steps || []).join(' ')}`;
-  const list = (pocs || []).filter((p) => !citedIn.includes(p));
+  const allUncited = (pocs || []).filter((p) => !citedIn.includes(p));
+  const fWords = [
+    ...(f.title || '').toLowerCase().replace(/[^a-z0-9_.-]+/g, ' ').split(/\s+/).filter(w => w.length > 3),
+    ...(f.endpoint || '').toLowerCase().replace(/[^a-z0-9_./:-]+/g, ' ').split(/\s+/).filter(Boolean),
+    ...(f.location || '').toLowerCase().replace(/[^a-z0-9_./:-]+/g, ' ').split(/\s+/).filter(Boolean),
+    (f.agent || '').toLowerCase(),
+    (f.cwe || '').toLowerCase(),
+  ].filter(Boolean);
+  const list = allUncited.filter((p) => {
+    const low = p.toLowerCase();
+    return fWords.some(w => low.includes(w));
+  });
   const pocRoot = $('#fmPocList');
+  const pocSection = $('#fmPocSection');
   if (!list.length) {
-    pocRoot.textContent = 'No other scripts from this run.';
+    pocSection.hidden = true;
+    pocRoot.textContent = '';
   } else {
+    pocSection.hidden = false;
     pocRoot.innerHTML = list.map((name) => `
-      <div class="poc-file">
-        <span class="fn">pocs/${esc(name)}</span>
-        <a class="btn btn-sm" href="/api/runs/${esc(runId)}/asset/pocs/${esc(name)}" target="_blank">Open raw</a>
+      <div class="script-card" data-script="${esc(name)}">
+        <div class="script-card-head" aria-expanded="false" onclick="this.setAttribute('aria-expanded',this.getAttribute('aria-expanded')==='true'?'false':'true');this.nextElementSibling.classList.toggle('open');loadScriptContent(this.parentElement,'${esc(runId)}','${esc(name)}')">
+          <span class="script-icon">&#9654;</span>
+          <span class="script-name">pocs/${esc(name)}</span>
+          <span class="script-lang">${scriptLang(name)}</span>
+          <div class="script-card-actions">
+            <a class="btn btn-sm" href="/api/runs/${esc(runId)}/asset/pocs/${esc(name)}" target="_blank" onclick="event.stopPropagation()">Open raw</a>
+            <button class="btn btn-sm" onclick="event.stopPropagation();copyScript(this,'${esc(runId)}','${esc(name)}')">Copy</button>
+          </div>
+        </div>
+        <div class="script-card-body"><pre class="poc-pre" data-poc="${esc(name)}"></pre></div>
       </div>
-      <pre class="poc-pre" data-poc="${esc(name)}">loading…</pre>
     `).join('');
-    for (const name of list) {
-      fetch(`/api/runs/${runId}/asset/pocs/${name}`).then((r) => r.text()).then((txt) => {
-        const pre = pocRoot.querySelector(`pre[data-poc="${CSS.escape(name)}"]`);
-        if (pre) pre.textContent = txt.slice(0, 4000);
-      }).catch(() => {});
-    }
   }
   // Wire evidence — the real request/response pairs behind the finding, plus
   // its re-test history. Loaded on demand; the section hides itself when the
@@ -1588,6 +1603,45 @@ function openFindingModal(f, pocs, runId) {
 }
 $('#btnCloseFinding').addEventListener('click', () => show($('#findingModal'), false));
 $('#findingModal').addEventListener('click', (e) => { if (e.target.id === 'findingModal') show($('#findingModal'), false); });
+
+function loadScriptContent(card, runId, name) {
+  const pre = card.querySelector(`pre[data-poc="${CSS.escape(name)}"]`) || card.querySelector(`pre[data-cited-poc="${CSS.escape(name)}"]`);
+  if (!pre || pre.dataset.loaded) return;
+  pre.textContent = 'loading…';
+  pre.dataset.loaded = '1';
+  fetch(`/api/runs/${runId}/asset/pocs/${name}`).then((r) => r.text()).then((txt) => {
+    pre.textContent = txt.slice(0, 8000);
+  }).catch(() => { pre.textContent = 'failed to load'; });
+}
+
+function copyScript(btn, runId, name) {
+  fetch(`/api/runs/${runId}/asset/pocs/${name}`).then((r) => r.text()).then((txt) => {
+    navigator.clipboard.writeText(txt).then(() => {
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+    });
+  }).catch(() => {});
+}
+
+$('#findingModal').addEventListener('click', (e) => {
+  const copyStep = e.target.closest('[data-copy-step]');
+  if (copyStep) {
+    const pre = copyStep.closest('.step-wrap')?.querySelector('.step');
+    if (pre) navigator.clipboard.writeText(pre.textContent).then(() => {
+      copyStep.textContent = 'Copied!';
+      setTimeout(() => { copyStep.textContent = 'Copy'; }, 1500);
+    });
+    return;
+  }
+  const copyPayload = e.target.closest('[data-copy-payload]');
+  if (copyPayload) {
+    const pre = copyPayload.closest('.code-wrap')?.querySelector('.poc-pre');
+    if (pre) navigator.clipboard.writeText(pre.textContent).then(() => {
+      copyPayload.textContent = 'Copied!';
+      setTimeout(() => { copyPayload.textContent = 'Copy'; }, 1500);
+    });
+  }
+});
 
 // ---- wire evidence + per-finding re-test -----------------------------------
 
@@ -1783,17 +1837,37 @@ function technicalEvidence(f) {
 
 /// The proof: numbered steps, then the payload, with any script offered as an
 /// extra artifact rather than as the proof itself.
+function scriptLang(name) {
+  if (name.endsWith('.py')) return 'Python';
+  if (name.endsWith('.sh') || name.endsWith('.bash')) return 'Shell';
+  if (name.endsWith('.rb')) return 'Ruby';
+  if (name.endsWith('.js')) return 'JavaScript';
+  if (name.endsWith('.md')) return 'Markdown';
+  if (name.endsWith('.yml') || name.endsWith('.yaml')) return 'YAML';
+  return 'Script';
+}
+
 function pocBlock(f, pocs, runId) {
-  const steps = reproSteps(f).map((s) => `<li><pre class="step">${esc(s)}</pre></li>`).join('');
+  const steps = reproSteps(f).map((s, i) => `<li><div class="step-wrap"><pre class="step">${esc(s)}</pre><button class="btn btn-sm copy-btn" data-copy-step="${i}">Copy</button></div></li>`).join('');
   const payload = f.payload?.trim()
-    ? `<div class="field-group"><label class="field-label">Payload</label><pre class="poc-pre">${esc(f.payload.trim())}</pre></div>` : '';
+    ? `<div class="field-group"><label class="field-label">Payload</label><div class="code-wrap"><pre class="poc-pre">${esc(f.payload.trim())}</pre><button class="btn btn-sm copy-btn" data-copy-payload>Copy</button></div></div>` : '';
   const cited = `${f.evidence || ''} ${f.payload || ''} ${(f.repro_steps || []).join(' ')}`;
   const scripts = (pocs || []).filter((p) => cited.includes(p));
   const scriptBlock = scripts.length
-    ? `<div class="field-group"><label class="field-label">Runnable script (extra)</label>
-       <div class="field-help">The steps above are the proof; this script automates them.</div>
-       ${scripts.map((n) => `<div class="poc-file"><span class="fn">pocs/${esc(n)}</span>
-         <a class="btn btn-sm" href="/api/runs/${esc(runId)}/asset/pocs/${esc(n)}" target="_blank">Open raw</a></div>`).join('')}</div>`
+    ? `<div class="field-group"><label class="field-label">Runnable scripts</label>
+       <div class="field-help" style="margin-bottom:var(--sp-2)">These scripts automate the proof above.</div>
+       ${scripts.map((n) => `<div class="script-card" data-script="${esc(n)}">
+         <div class="script-card-head" aria-expanded="false" onclick="this.setAttribute('aria-expanded',this.getAttribute('aria-expanded')==='true'?'false':'true');this.nextElementSibling.classList.toggle('open');loadScriptContent(this.parentElement,'${esc(runId)}','${esc(n)}')">
+           <span class="script-icon">&#9654;</span>
+           <span class="script-name">pocs/${esc(n)}</span>
+           <span class="script-lang">${scriptLang(n)}</span>
+           <div class="script-card-actions">
+             <a class="btn btn-sm" href="/api/runs/${esc(runId)}/asset/pocs/${esc(n)}" target="_blank" onclick="event.stopPropagation()">Open raw</a>
+             <button class="btn btn-sm" onclick="event.stopPropagation();copyScript(this,'${esc(runId)}','${esc(n)}')">Copy</button>
+           </div>
+         </div>
+         <div class="script-card-body"><pre class="poc-pre" data-cited-poc="${esc(n)}">click to expand…</pre></div>
+       </div>`).join('')}</div>`
     : '';
   return `<div class="field-group"><label class="field-label">Proof of concept — step by step</label>
             <ol class="poc-steps">${steps}</ol></div>${payload}${scriptBlock}`;

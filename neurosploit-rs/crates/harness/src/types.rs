@@ -105,6 +105,38 @@ pub struct Finding {
     /// `crate::validation` judges the class from it without consulting a model.
     #[serde(default)]
     pub evidence_data: Option<crate::validation::Evidence>,
+
+    // --- SAST / whitebox quality fields ---
+
+    /// "sast" | "dast" | "manual" | "hybrid" — how the finding was detected.
+    #[serde(default)]
+    pub finding_type: String,
+    /// Validation depth reached: "source-detection" (L1), "ai-consensus" (L2),
+    /// "control-verification" (L3), "runtime-validation" (L4), "impact-confirmed" (L5).
+    #[serde(default)]
+    pub validation_level: String,
+    /// How the issue was found: "static-analysis" | "pattern-match" |
+    /// "dataflow-trace" | "dependency-scan" | "manual-review".
+    #[serde(default)]
+    pub detection_method: String,
+    /// Source file + line where the vulnerable code lives (SAST). Distinct from
+    /// `endpoint` which is the HTTP endpoint affected at runtime.
+    #[serde(default)]
+    pub source_file: String,
+    /// The HTTP endpoint affected by this vulnerability (may differ from
+    /// `endpoint` which agents historically overloaded for both source files
+    /// and HTTP paths). When set, the report uses this for "Affected Endpoint"
+    /// and `source_file` for "Source Location".
+    #[serde(default)]
+    pub affected_endpoint: String,
+    /// "source-code" | "http-response" | "log-output" | "configuration" — what
+    /// kind of evidence backs this finding.
+    #[serde(default)]
+    pub evidence_type: String,
+    /// Security preconditions checked and their results, e.g. for CSRF:
+    /// "SameSite=Lax (checked), no CSRF middleware (checked), CORS permissive (not checked)".
+    #[serde(default)]
+    pub preconditions_checked: String,
 }
 
 impl Default for Finding {
@@ -141,6 +173,13 @@ impl Default for Finding {
             claims: None,
             evidence_data: None,
             observed_at: 0,
+            finding_type: String::new(),
+            validation_level: String::new(),
+            detection_method: String::new(),
+            source_file: String::new(),
+            affected_endpoint: String::new(),
+            evidence_type: String::new(),
+            preconditions_checked: String::new(),
         }
     }
 }
