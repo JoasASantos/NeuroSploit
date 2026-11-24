@@ -764,7 +764,35 @@ async function readJsonSafe(p, fallback) {
   }
 }
 
+// runId -> launch mode, from the persisted web-job records. The CLI does not
+// write the mode into the run dir, so without this a whitebox run shows up as
+// blackbox in the Pentests list.
+function runModes() {
+  const map = new Map();
+  try {
+    for (const f of fs.readdirSync(JOBS_DIR)) {
+      if (!f.endsWith('.json')) continue;
+      try {
+        const j = JSON.parse(fs.readFileSync(path.join(JOBS_DIR, f), 'utf8'));
+        if (j.runId && j.launch && j.launch.mode) map.set(j.runId, j.launch.mode);
+      } catch { /* skip a corrupt record */ }
+    }
+  } catch { /* no persisted jobs */ }
+  return map;
+}
+
+// A target that is really a filesystem path means a source/whitebox run. The
+// target may be stored either absolute ("/opt/app") or as the id slug
+// ("opt_app"), so both shapes are recognised.
+function looksLikeSourcePath(t) {
+  const s = String(t || '').trim();
+  if (!s) return false;
+  if (s.startsWith('/')) return true;
+  return /^(opt|home|var|usr|srv|root|tmp|mnt|app|sites|workspace|projects|code|src|repos?)[_/]/i.test(s);
+}
+
 async function listRuns() {
+  const modes = runModes();
   let ids = [];
   try {
     ids = (await fsp.readdir(RUNS_DIR)).filter((d) => d.startsWith('ns-'));
@@ -803,13 +831,19 @@ async function listRuns() {
       }
       if (!fresh) state = 'interrupted';
     }
+    // The target is often absent from status/meta for CLI runs; fall back to
+    // the id slug, and use that same effective target for the mode heuristic.
+    const target = status.target || meta.target || id.replace(/^ns-\d+-/, '');
     return {
       id,
       ts,
       name: engagementNames.get(id) || '',
-      target: status.target || meta.target || id.replace(/^ns-\d+-/, ''),
+      target,
       projectId: runProjects.get(id) || null,
       state,
+      // Persisted launch mode when known; otherwise a source-path target ("/opt/app")
+      // is a whitebox run, anything else is treated as blackbox.
+      mode: modes.get(id) || (looksLikeSourcePath(target) ? 'whitebox' : 'run'),
       findings: findings.length,
       severities: sevCount,
       hasReport: fs.existsSync(path.join(dir, 'report.html')) || fs.existsSync(path.join(dir, 'report.pdf')),
@@ -833,6 +867,7 @@ async function listRuns() {
       target: j.target || '',
       projectId: j.projectId || null,
       state: 'running',
+      mode: modes.get(j.runId) || j.launch?.mode || 'run',
       findings: (j.findings || []).length,
       severities: sevCount,
       hasReport: false,

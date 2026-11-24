@@ -54,6 +54,15 @@ const state = {
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+// Quote a value as a JS string literal that is ALSO safe inside a
+// double-quoted HTML attribute. esc() is not enough in an inline handler: the
+// HTML parser entity-decodes the attribute BEFORE the JS engine parses it, so
+// a value containing a quote would break out of the string literal (DOM XSS).
+// Escape for JS first, then for the HTML attribute context.
+function jsq(s) {
+  const lit = "'" + String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'";
+  return lit.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
 async function api(path, opts) {
   const res = await fetch(path, opts);
   if (!res.ok) {
@@ -296,8 +305,14 @@ $('#fieldCloudProvider')?.addEventListener('change', (e) => {
 // ---------------------------------------------------------------------------
 
 async function loadAgents() {
-  const data = await api('/api/agents');
-  state.categories = data.categories;
+  // A failure here must not reject boot(): one dead endpoint used to abort
+  // every later boot step and leave the sidebar empty all session.
+  try {
+    const data = await api('/api/agents');
+    state.categories = data.categories || [];
+  } catch {
+    state.categories = state.categories || [];
+  }
   renderBoard();
 }
 
@@ -534,10 +549,10 @@ $('#btnLeadGenerate').addEventListener('click', async () => {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: text }),
     });
     await loadAgents(); // re-read agents_md/ so the new file appears in its category
-    state.selected.add(agent.id);
+    if (agent?.id) state.selected.add(agent.id);
     renderBoard();
     closeLeadModal();
-    toast(`Generated and pinned: ${agent.title}`, 'ok');
+    toast(`Generated and pinned: ${agent?.title || title || 'custom lead'}`, 'ok');
   } catch (e) {
     // Fall back to the old behavior — fold the raw text into --focus context
     // — so a missing/logged-out Claude CLI doesn't lose the operator's intent.
@@ -588,8 +603,13 @@ $('#btnClearAll').addEventListener('click', () => {
 // ---------------------------------------------------------------------------
 
 async function loadProviders() {
-  state.providers = await api('/api/providers');
+  try {
+    state.providers = await api('/api/providers');
+  } catch {
+    state.providers = state.providers || [];
+  }
   const sel = $('#fieldProvider');
+  if (!sel) return; // wizard not present — nothing to populate, but boot continues
   sel.innerHTML = state.providers.map((p) => `<option value="${esc(p.key)}">${esc(p.label)} (${p.kind === 'cli' ? 'API or subscription' : 'API key only'})</option>`).join('');
   sel.addEventListener('change', onProviderChange);
   try {
@@ -904,6 +924,7 @@ function attachLiveJob(id, target, name, pinnedAgents) {
   $('#logList').innerHTML = '';
   state.tables.live.sev = null;
   state.tables.live.query = '';
+  state.coverageFilter = ''; // a pill left over from the last run must not leak into this one
   $('#liveFindingSearch').value = '';
   renderFindings('live');
   $('#progressBar').classList.add('indeterminate');
@@ -917,19 +938,23 @@ function attachLiveJob(id, target, name, pinnedAgents) {
 
   const es = new EventSource(`/api/exploit/${id}/events`);
   state.currentJob.es = es;
-  es.addEventListener('log', (e) => appendLog(JSON.parse(e.data).line));
-  es.addEventListener('finding', (e) => addFinding(JSON.parse(e.data).finding));
-  es.addEventListener('agent', (e) => { const a = JSON.parse(e.data); if (state.currentJob) { (state.currentJob.agentStatus ||= {})[a.name] = { status: a.status, found: a.found || 0 }; renderAgentPanel(state.currentJob.agentStatus); } });
-  es.addEventListener('adaptive', (e) => updateAdaptiveTab(JSON.parse(e.data)));
-  es.addEventListener('graph', (e) => updateGraphTab(JSON.parse(e.data)));
-  es.addEventListener('planner', (e) => updatePlannerTab(JSON.parse(e.data)));
-  es.addEventListener('noise', (e) => updateNoiseTab(JSON.parse(e.data)));
-  es.addEventListener('snapshot', (e) => applySnapshot(JSON.parse(e.data)));
+  // One malformed frame must not throw inside the listener (an exception there
+  // is invisible except as a dead live view). Parse defensively and drop junk.
+  const sseJson = (e) => { try { return JSON.parse(e.data); } catch { return null; } };
+  es.addEventListener('log', (e) => { const d = sseJson(e); if (d && typeof d.line === 'string') appendLog(d.line); });
+  es.addEventListener('finding', (e) => { const d = sseJson(e); if (d?.finding) addFinding(d.finding); });
+  es.addEventListener('agent', (e) => { const a = sseJson(e); if (a && state.currentJob) { (state.currentJob.agentStatus ||= {})[a.name] = { status: a.status, found: a.found || 0 }; renderAgentPanel(state.currentJob.agentStatus); } });
+  es.addEventListener('adaptive', (e) => { const d = sseJson(e); if (d) updateAdaptiveTab(d); });
+  es.addEventListener('graph', (e) => { const d = sseJson(e); if (d) updateGraphTab(d); });
+  es.addEventListener('planner', (e) => { const d = sseJson(e); if (d) updatePlannerTab(d); });
+  es.addEventListener('noise', (e) => { const d = sseJson(e); if (d) updateNoiseTab(d); });
+  es.addEventListener('snapshot', (e) => { const d = sseJson(e); if (d) applySnapshot(d); });
   es.addEventListener('done', (e) => {
-    applySnapshot(JSON.parse(e.data));
+    const d = sseJson(e);
+    if (d) applySnapshot(d);
     es.close();
-    clearInterval(state.currentJob.pocPoll);
-    refreshRuns();
+    if (state.currentJob) clearInterval(state.currentJob.pocPoll);
+    refreshRuns().catch(() => {});
   });
   es.onerror = () => {
     if (es.readyState === EventSource.CLOSED) return;
@@ -946,17 +971,8 @@ function attachLiveJob(id, target, name, pinnedAgents) {
     });
   };
 
-  // PoC scripts land in runs/<id>/pocs/ during the run — poll for them once
-  // the CLI's own run id is known (see applySnapshot), so the finding modal
-  // can offer a generated PoC as soon as one exists, not just after the run
-  // finishes.
-  state.currentJob.pocPoll = setInterval(async () => {
-    if (!state.currentJob?.runId) return;
-    try {
-      const detail = await api(`/api/runs/${state.currentJob.runId}`);
-      state.currentJob.pocs = detail.pocs || [];
-    } catch { /* run dir not written yet */ }
-  }, 5000);
+  // PoC scripts are refreshed by the live-extras poll below (it re-reads the
+  // same /api/runs/:id payload), so no second poll is needed here.
 }
 
 function updatePinnedLine() {
@@ -991,7 +1007,10 @@ async function tryResumeActiveJob() {
     // Only resume a job that is STILL RUNNING. A finished/stopped job must not
     // hijack every page reload onto its old live screen — clear it and fall
     // through to the normal landing view.
-    if (snap.done || snap.state === 'complete' || snap.state === 'interrupted' || snap.state === 'stopped') {
+    // The snapshot's lifecycle fields are `phase` and the `interrupted` flag;
+    // there is no `state` key, so the old comparisons were always false and a
+    // persisted interrupted job re-attached the live view on every reload.
+    if (snap.done || snap.interrupted || ['complete', 'stopped', 'interrupted'].includes(snap.phase)) {
       localStorage.removeItem(ACTIVE_JOB_KEY);
       return false;
     }
@@ -1058,8 +1077,22 @@ function wireState(f) {
   return { key: 'pending', rank: 2, label: 'pending', title: 'Not checked yet — the wire pass runs before final validation.' };
 }
 
+// Review status arrives in two spellings: the finding's `review_status` uses
+// "needs-review" while graph-node props carry "needs_review". Normalise to the
+// hyphenated form so comparisons and badges agree across every view.
+function normReview(v) {
+  return String(v || '').toLowerCase().replace(/_/g, '-');
+}
 function reviewStatus(f) {
-  return f.review_status || (f.validated ? 'confirmed' : 'candidate');
+  return normReview(f.review_status || (f.validated ? 'confirmed' : 'candidate'));
+}
+// A confidence may be a number or a numeric string (graph props serialise it as
+// "0.60"); never call .toFixed on a string, and never print "0.5" next to
+// "0.60" in the same report.
+function fmtConf(v) {
+  if (v === null || v === undefined || v === '') return '—';
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toFixed(2) : '—';
 }
 
 function findingRow(f, idx) {
@@ -1076,7 +1109,7 @@ function findingRow(f, idx) {
     <td><span class="status-badge st-${esc(st)}">${esc(st)}</span></td>
     <td><span class="wire-badge wire-${w.key}" title="${esc(w.title)}">${esc(w.label)}</span></td>
     <td class="col-agent">${esc(f.agent)}</td>
-    <td class="col-conf">${f.confidence ? f.confidence.toFixed(2) : '—'}</td>
+    <td class="col-conf">${fmtConf(f.confidence)}</td>
   </tr>`;
 }
 
@@ -1316,12 +1349,19 @@ function renderAgentsTab(statusMap) {
 }
 
 function applySnapshot(snap) {
+  if (!snap) return;
   if (snap.agentStatus) {
     if (state.currentJob) state.currentJob.agentStatus = snap.agentStatus;
     renderAgentPanel(snap.agentStatus);
   }
-  $('#livePhase').textContent = snap.phase;
+  const phaseEl = $('#livePhase');
+  if (phaseEl) phaseEl.textContent = snap.phase;
+  // The live view may have been torn down (errored stream, navigated away)
+  // between the event being queued and this handler running.
+  if (!state.currentJob) return;
   state.currentJob.runId = snap.runId;
+  state.currentJob.phase = snap.phase || state.currentJob.phase;
+  state.currentJob.done = !!snap.done;
   state.currentJob.interactive = !!snap.interactive;
   show($('#sendPromptRow'), snap.interactive && !snap.done);
   show($('#sendPromptHelp'), snap.interactive && !snap.done);
@@ -1348,9 +1388,17 @@ function applySnapshot(snap) {
   if (snap.done) $('#phaseDot').classList.add('static');
 }
 
-$('#btnStopRun').addEventListener('click', async () => {
+$('#btnStopRun').addEventListener('click', async (e) => {
   if (!state.currentJob) return;
-  await api(`/api/exploit/${state.currentJob.id}/stop`, { method: 'POST' });
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    await api(`/api/exploit/${state.currentJob.id}/stop`, { method: 'POST' });
+  } catch (err) {
+    toast(`Couldn't stop the run: ${err.message}`, 'error', 8000);
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 // Pause is a toggle against the run's own phase, so the button always says
@@ -1441,7 +1489,7 @@ $('#btnRerun')?.addEventListener('click', () => {
     if (launch.target) $('#fieldTarget').value = launch.target;
     if (launch.name) $('#fieldName').value = launch.name + ' (re-run)';
     if (launch.repo) $('#fieldRepo').value = launch.repo;
-    if (launch.mode) { const sel = $('#fieldMode'); if (sel) sel.value = launch.mode; }
+    if (launch.mode) selectMode(launch.mode);
     if (launch.votes) $('#fieldVotes').value = launch.votes;
     if (launch.chainDepth !== undefined) $('#fieldChain').value = launch.chainDepth;
     if (launch.recon) $('#fieldRecon').value = launch.recon;
@@ -1495,7 +1543,7 @@ function openFindingModal(f, pocs, runId) {
     { label: 'CVSS', value: cvssHtml, raw: true },
     { label: 'CWE', value: f.cwe },
     { label: 'Endpoint', value: endpointHtml, raw: true },
-    { label: 'Confidence', value: f.confidence ? f.confidence.toFixed(2) : '' },
+    { label: 'Confidence', value: (f.confidence === null || f.confidence === undefined || f.confidence === '') ? '' : fmtConf(f.confidence) },
     { label: 'Stage', value: f.stage },
     { label: 'Review status', value: f.review_status },
     { label: 'Agent', value: f.agent },
@@ -1512,7 +1560,13 @@ function openFindingModal(f, pocs, runId) {
     `;
     actionsEl.querySelector('[data-action="copy-md"]')?.addEventListener('click', () => {
       const md = `## ${f.severity} — ${f.title}\n\n**CVSS:** ${cvssScore || '—'} ${cvssVector} | **CWE:** ${f.cwe || '—'}\n**Endpoint:** ${method} ${endpoint}\n\n${f.impact || f.evidence || ''}\n\n### Remediation\n${f.remediation || '—'}`;
-      navigator.clipboard.writeText(md).then(() => toast('Finding copied as Markdown'));
+      navigator.clipboard.writeText(md).then(() => toast('Finding copied as Markdown')).catch(() => toast('Clipboard unavailable — copy manually', 'error'));
+    });
+    // /api/runs/:id/poc/:fid does not exist. Per-finding re-validation is the
+    // retest route, which the static retest button already wires. Delegate to
+    // it instead of shipping a dead button.
+    actionsEl.querySelector('[data-action="retest"]')?.addEventListener('click', () => {
+      $('#btnFindingRetest')?.click();
     });
   }
 
@@ -1530,7 +1584,7 @@ function openFindingModal(f, pocs, runId) {
   // Technical evidence (endpoint/payload/curl) reads as code; prose
   // (description/impact/remediation) reads as a paragraph, not a code block.
   const codeBlock = (label, text) => text
-    ? `<div class="field-group"><label class="field-label">${esc(label)}</label><div class="code-wrap"><pre class="poc-pre">${esc(text)}</pre><button class="btn btn-sm copy-btn" onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)})">Copy</button></div></div>` : '';
+    ? `<div class="field-group"><label class="field-label">${esc(label)}</label><div class="code-wrap"><pre class="poc-pre">${esc(text)}</pre><button class="btn btn-sm copy-btn" onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)}).catch(()=>{this.textContent='Copy failed';setTimeout(()=>this.textContent='Copy',1500)})">Copy</button></div></div>` : '';
   const proseBlock = (label, text) => text
     ? `<div class="field-group"><label class="field-label">${esc(label)}</label><div class="fm-prose">${esc(text)}</div></div>` : '';
 
@@ -1580,13 +1634,13 @@ function openFindingModal(f, pocs, runId) {
     pocSection.hidden = false;
     pocRoot.innerHTML = list.map((name) => `
       <div class="script-card" data-script="${esc(name)}">
-        <div class="script-card-head" aria-expanded="false" onclick="this.setAttribute('aria-expanded',this.getAttribute('aria-expanded')==='true'?'false':'true');this.nextElementSibling.classList.toggle('open');loadScriptContent(this.parentElement,'${esc(runId)}','${esc(name)}')">
+        <div class="script-card-head" aria-expanded="false" onclick="this.setAttribute('aria-expanded',this.getAttribute('aria-expanded')==='true'?'false':'true');this.nextElementSibling.classList.toggle('open');loadScriptContent(this.parentElement,${jsq(runId)},${jsq(name)})">
           <span class="script-icon">&#9654;</span>
           <span class="script-name">pocs/${esc(name)}</span>
           <span class="script-lang">${scriptLang(name)}</span>
           <div class="script-card-actions">
             <a class="btn btn-sm" href="/api/runs/${esc(runId)}/asset/pocs/${esc(name)}" target="_blank" onclick="event.stopPropagation()">Open raw</a>
-            <button class="btn btn-sm" onclick="event.stopPropagation();copyScript(this,'${esc(runId)}','${esc(name)}')">Copy</button>
+            <button class="btn btn-sm" onclick="event.stopPropagation();copyScript(this,${jsq(runId)},${jsq(name)})">Copy</button>
           </div>
         </div>
         <div class="script-card-body"><pre class="poc-pre" data-poc="${esc(name)}"></pre></div>
@@ -1619,8 +1673,8 @@ function copyScript(btn, runId, name) {
     navigator.clipboard.writeText(txt).then(() => {
       btn.textContent = 'Copied!';
       setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
-    });
-  }).catch(() => {});
+    }).catch(() => toast('Clipboard unavailable — open the raw script instead', 'error'));
+  }).catch(() => toast('Could not load the script', 'error'));
 }
 
 $('#findingModal').addEventListener('click', (e) => {
@@ -1630,7 +1684,7 @@ $('#findingModal').addEventListener('click', (e) => {
     if (pre) navigator.clipboard.writeText(pre.textContent).then(() => {
       copyStep.textContent = 'Copied!';
       setTimeout(() => { copyStep.textContent = 'Copy'; }, 1500);
-    });
+    }).catch(() => toast('Clipboard unavailable — select and copy manually', 'error'));
     return;
   }
   const copyPayload = e.target.closest('[data-copy-payload]');
@@ -1639,7 +1693,7 @@ $('#findingModal').addEventListener('click', (e) => {
     if (pre) navigator.clipboard.writeText(pre.textContent).then(() => {
       copyPayload.textContent = 'Copied!';
       setTimeout(() => { copyPayload.textContent = 'Copy'; }, 1500);
-    });
+    }).catch(() => toast('Clipboard unavailable — select and copy manually', 'error'));
   }
 });
 
@@ -1768,19 +1822,22 @@ function isSecretHeader(k) {
 /// A pasteable curl for the recorded request. Credentials are redacted: a
 /// finding gets shared, and a live session cookie in a document is a new bug.
 function curlCommand(f) {
+  // POSIX single-quote escaping: close, emit an escaped quote, reopen. Without
+  // it a header or URL containing an apostrophe produced a broken command.
+  const shq = (s) => `'${String(s ?? '').replace(/'/g, "'\\''")}'`;
   const a = f.evidence_data?.attack;
   if (a) {
     let cmd = 'curl -i -s';
     const m = (a.method || 'GET').toUpperCase();
     if (m !== 'GET') cmd += ` -X ${m}`;
     for (const [k, v] of Object.entries(a.request_headers || {})) {
-      cmd += ` \\\n  -H '${k}: ${isSecretHeader(k) ? '<redacted — use your own>' : v}'`;
+      cmd += ` \\\n  -H ${shq(`${k}: ${isSecretHeader(k) ? '<redacted — use your own>' : v}`)}`;
     }
-    if (f.payload && m !== 'GET') cmd += ` \\\n  --data-raw '${String(f.payload).replace(/'/g, "'\\''")}'`;
-    cmd += ` \\\n  '${a.url}'`;
+    if (f.payload && m !== 'GET') cmd += ` \\\n  --data-raw ${shq(f.payload)}`;
+    cmd += ` \\\n  ${shq(a.url)}`;
     return cmd;
   }
-  return f.endpoint ? `curl -i -s '${f.endpoint}'` : '';
+  return f.endpoint ? `curl -i -s ${shq(f.endpoint)}` : '';
 }
 
 /// Ordered steps: what the agent recorded, or a minimal derived sequence.
@@ -1857,13 +1914,13 @@ function pocBlock(f, pocs, runId) {
     ? `<div class="field-group"><label class="field-label">Runnable scripts</label>
        <div class="field-help" style="margin-bottom:var(--sp-2)">These scripts automate the proof above.</div>
        ${scripts.map((n) => `<div class="script-card" data-script="${esc(n)}">
-         <div class="script-card-head" aria-expanded="false" onclick="this.setAttribute('aria-expanded',this.getAttribute('aria-expanded')==='true'?'false':'true');this.nextElementSibling.classList.toggle('open');loadScriptContent(this.parentElement,'${esc(runId)}','${esc(n)}')">
+         <div class="script-card-head" aria-expanded="false" onclick="this.setAttribute('aria-expanded',this.getAttribute('aria-expanded')==='true'?'false':'true');this.nextElementSibling.classList.toggle('open');loadScriptContent(this.parentElement,${jsq(runId)},${jsq(n)})">
            <span class="script-icon">&#9654;</span>
            <span class="script-name">pocs/${esc(n)}</span>
            <span class="script-lang">${scriptLang(n)}</span>
            <div class="script-card-actions">
              <a class="btn btn-sm" href="/api/runs/${esc(runId)}/asset/pocs/${esc(n)}" target="_blank" onclick="event.stopPropagation()">Open raw</a>
-             <button class="btn btn-sm" onclick="event.stopPropagation();copyScript(this,'${esc(runId)}','${esc(n)}')">Copy</button>
+             <button class="btn btn-sm" onclick="event.stopPropagation();copyScript(this,${jsq(runId)},${jsq(n)})">Copy</button>
            </div>
          </div>
          <div class="script-card-body"><pre class="poc-pre" data-cited-poc="${esc(n)}">click to expand…</pre></div>
@@ -2158,6 +2215,16 @@ async function loadRegression(id, token) {
 
 async function loadDetail(id) {
   clearInterval(state.detailPoll);
+  // Never leave the operator on a blank/stuck detail view with no feedback:
+  // any failure past this point is surfaced as a toast.
+  try {
+    return await loadDetailInner(id);
+  } catch (e) {
+    toast(`Couldn't open ${id}: ${e.message}`, 'error', 8000);
+  }
+}
+
+async function loadDetailInner(id) {
   // A poll for the previously opened run may still be in flight; when it
   // lands it must not repaint that run over the one the operator opened.
   const token = (state.detailToken = (state.detailToken || 0) + 1);
@@ -2202,12 +2269,18 @@ async function loadDetail(id) {
   const reportNav = $('#detailReportNav');
   if (reportNav) {
     if (detail.assets.includes('report.html')) {
-      const reportUrl = `/api/runs/${encodeURIComponent(id)}/asset/report.html`;
-      reportNav.innerHTML = `<div class="run-report-nav-title">Report sections</div>
-        <a href="${reportUrl}#executive-summary" target="_blank">Executive summary</a>
-        <a href="${reportUrl}#technical-analysis" target="_blank">Technical analysis</a>
-        <a href="${reportUrl}#methodology" target="_blank">Methodology</a>
-        <a href="${reportUrl}#recommendations" target="_blank">Recommendations</a>`;
+      const asset = (name) => `/api/runs/${encodeURIComponent(id)}/asset/${name}`;
+      const nFindings = (detail.findings || []).length;
+      // The generated report.html has no section anchors (its headings are
+      // plain <h2>), so the old "#executive-summary"-style links landed at the
+      // top of the page — every "section" lost. Offer the artifacts that exist
+      // and route the in-app views, which is where the content actually lives.
+      reportNav.innerHTML = `<div class="run-report-nav-title">Report</div>
+        <a href="${asset('report.html')}" target="_blank" rel="noopener">Full report (HTML)</a>
+        ${detail.assets.includes('report.pdf') ? `<a href="${asset('report.pdf')}" target="_blank" rel="noopener">Download PDF</a>` : ''}
+        ${detail.assets.includes('report.md') ? `<a href="${asset('report.md')}" target="_blank" rel="noopener">Markdown source</a>` : ''}
+        <a href="#" data-report-tab="findings">Findings (${nFindings})</a>
+        <a href="#" data-report-tab="graph">Attack graph</a>`;
       reportNav.hidden = false;
     } else { reportNav.hidden = true; }
   }
@@ -2361,7 +2434,7 @@ function openAuthModal() {
   $('#collectionPath').value = state.collectionPath;
   refreshKeyStatus();
 }
-$('#btnOpenAuth')?.addEventListener('click', () => switchView('vault'));
+
 ['#btnOpenAuth2', '#btnOpenAuth3'].forEach((sel) => $(sel)?.addEventListener('click', openAuthModal));
 $('#btnCloseAuth').addEventListener('click', () => show($('#authModal'), false));
 $('#authModal').addEventListener('click', (e) => { if (e.target.id === 'authModal') show($('#authModal'), false); });
@@ -2637,8 +2710,11 @@ function termComplete() {
   for (const h of hits) { while (!h.startsWith(common)) common = common.slice(0, -1); }
   const line = term.line;
   termWrite('\r\n' + hits.join('  ') + '\r\n');
+  // Rebuild from the raw line: `common` already carries the typed prefix, and
+  // the tail after the cursor must be preserved (the old code could duplicate
+  // or drop it when completing mid-line).
   term.line = ''; term.cursor = 0;
-  termInsert(common.length > word.length ? common + line.slice(word.length) : line);
+  termSetLine(common.length > word.length ? common + line.slice(word.length) : line);
 }
 
 async function termSubmit() {
@@ -2741,15 +2817,23 @@ function termOnData(data) {
       return;
     }
     default:
+      // Unknown escape/CSI sequences (PgUp/PgDn, F-keys, Alt-…) must be
+      // swallowed, not stripped into literal "[5~" text in the input line.
+      if (data.includes('\x1b')) return;
       if (data >= ' ' || data.length > 1) termInsert(data.replace(/[\x00-\x1f]/g, ''));
   }
 }
 
 function termClear() {
   term.xterm?.clear();
-  // `clear` keeps the current row: redraw what was being typed so the cursor
-  // and the buffer don't disagree.
-  if (term.line) { const l = term.line, c = term.cursor; term.line = ''; term.cursor = 0; termInsert(l); term.cursor = c; }
+  // `clear` keeps the current row: redraw what was being typed and move the
+  // visual cursor back to where it was, so buffer and display agree.
+  if (term.line) {
+    const l = term.line, c = term.cursor;
+    term.line = ''; term.cursor = 0;
+    termInsert(l);
+    if (c < l.length) { termWrite(`\x1b[${l.length - c}D`); term.cursor = c; }
+  }
 }
 
 /* ---- session wiring ---- */
@@ -2786,7 +2870,7 @@ function termSetMode(mode) {
   term.mode = mode;
   if (mode === 'job') {
     const job = state.currentJob;
-    termStatus(job && !job.done ? 'on' : 'off', job ? `engagement ${esc(job.name || job.target)}` : 'no live engagement');
+    termStatus(job && !job.done ? 'on' : 'off', job ? `engagement ${job.name || job.target}` : 'no live engagement');
     termNote(job
       ? `attached to the running engagement — what you type goes to the same harness process that is testing ${job.name || job.target}.`
       : 'no engagement is running; start one first.');
@@ -2832,7 +2916,6 @@ function termOpen(mode) {
 function termClose() { show($('#termDock'), false); }
 function termToggle() { $('#termDock').hidden ? termOpen() : termClose(); }
 
-$('#btnOpenRepl')?.addEventListener('click', () => termOpen());
 $('#btnOpenTerm2').addEventListener('click', () => termOpen());
 $('#btnOpenTerm3').addEventListener('click', () => termOpen());
 $('#btnSendPromptTerm').addEventListener('click', () => termOpen('job'));
@@ -2953,7 +3036,7 @@ function fairForFinding(f, params) {
   const tef = params.tef[(f.exploitability || 'unknown').toLowerCase()] ?? params.tef.unknown;
   // A finding flagged for human review is a maybe, not a fact — halving its
   // frequency keeps it visible without letting unreviewed leads drive the total.
-  const reviewFactor = f.reviewStatus === 'needs-review' ? 0.5 : 1;
+  const reviewFactor = reviewStatus(f) === 'needs-review' ? 0.5 : 1;
   const vuln = Math.min(0.95, Math.max(0.2, f.confidence || 0.5));
   const lef = tef * vuln * reviewFactor;
   return lm.map((m) => lef * m);
@@ -3012,8 +3095,10 @@ async function renderDashboard() {
     return;
   }
   const cutoff = dashRangeCutoff();
-  const runs = data.runs.filter((r) => !cutoff || r.ts >= cutoff);
-  const findings = data.findings.filter((f) => !cutoff || f.ts >= cutoff);
+  // Guard the shape too: an unexpected /api/stats payload must render an empty
+  // state, not throw out of the (already-resolved) promise.
+  const runs = (Array.isArray(data.runs) ? data.runs : []).filter((r) => !cutoff || (r.ts || 0) >= cutoff);
+  const findings = (Array.isArray(data.findings) ? data.findings : []).filter((f) => !cutoff || (f.ts || 0) >= cutoff);
   const params = fairParams();
 
   if (!runs.length) {
@@ -3027,7 +3112,7 @@ async function renderDashboard() {
     const s = SEV_ORDER[sevRank(f.severity)];
     sevCounts[s] = (sevCounts[s] || 0) + 1;
   }
-  const needsReview = findings.filter((f) => f.reviewStatus === 'needs-review').length;
+  const needsReview = findings.filter((f) => reviewStatus(f) === 'needs-review').length;
   const score = exposureScore(findings);
   const band = scoreBand(score);
 
@@ -3254,7 +3339,7 @@ function openFairParams(params) {
     close();
     renderDashboard();
   });
-  body.scrollTop = body.scrollTop; // keep the page anchored while the modal opens
+
 }
 
 // ---------------------------------------------------------------------------
@@ -3275,7 +3360,7 @@ async function renderHome() {
           <span class="run-dot" style="background:${r.state === 'running' ? 'var(--accent)' : 'var(--sev-low-fg)'}"></span>
           <span class="home-recent-name">${esc(r.name || r.target || r.id)}</span>
           <span class="home-recent-target">${esc(r.target || '')}</span>
-          <span class="home-recent-time">${esc(r.when ? timeAgo(Math.floor(new Date(r.when).getTime() / 1000)) : '')}</span>
+          <span class="home-recent-time">${esc(r.ts ? timeAgo(r.ts) : '')}</span>
         </button>`).join('')}
       </div>`;
     $$('.home-recent-item', recent).forEach(btn => {
@@ -3680,7 +3765,7 @@ document.addEventListener('click', async (ev) => {
   try {
     if (action === 'enable') {
       const auth = $('#c2Auth')?.value.trim();
-      if (!auth) { fieldError('c2EnableError', 'an authorization reference is required'); return; }
+      if (!auth) { fieldError('#c2EnableError', 'an authorization reference is required'); return; }
       await c2Post('/api/c2/enable', {
         authorization: auth,
         hosts: $('#c2Hosts')?.value || '',
@@ -4059,13 +4144,15 @@ async function boot() {
     $('#sbVersion').textContent = `v${meta.version}`;
     document.title = `NeuroSploit v${meta.version} — Console`;
   }
-  await Promise.all([loadAgents(), loadProviders()]);
-  await refreshRuns();
-  await tryResumeActiveJob(); // survive an F5 while watching a live run
-  await offerInterruptedJobs(); // a run the server lost on restart/crash
-  setInterval(refreshRuns, 6000);
+  // Each boot step is independent: a single failing endpoint must never stop
+  // the poll loop or the interrupted-job recovery from starting.
+  await Promise.all([loadAgents().catch(() => {}), loadProviders().catch(() => {})]);
+  await refreshRuns().catch(() => {});
+  await tryResumeActiveJob().catch(() => false); // survive an F5 while watching a live run
+  await offerInterruptedJobs().catch(() => {}); // a run the server lost on restart/crash
+  setInterval(() => { refreshRuns().catch(() => {}); }, 6000);
 }
-boot();
+boot().catch((e) => console.error('boot failed:', e));
 
 // A job that was live when the server stopped is reloaded from disk as
 // `interrupted`. When it is resumable (a REPL-backed run/whitebox/greybox, the
@@ -4259,6 +4346,39 @@ function makeExtras(viewSel, uid, getRunId) {
   return x;
 }
 
+// The graph file the CLI wrote can be stale by the last few findings (it is
+// rewritten during the run, not necessarily after the final one), so the
+// attack graph would silently show fewer findings than the run actually has.
+// Merge any missing finding from the run's own findings list as an isolated
+// node: it appears in the Attack Paths list right away, and the operator sees
+// a hint to recompute so it gains its edges.
+function mergeRunFindingsIntoGraph(x, data) {
+  const graph = data?.graph;
+  if (!graph) return;
+  const live = x.root?.id === 'liveView';
+  const list = live ? (state.currentJob?.findings || []) : (state.detailFindings || []);
+  if (!list.length) return;
+  graph.nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+  graph.edges = Array.isArray(graph.edges) ? graph.edges : [];
+  const present = new Set(graph.nodes.filter((n) => n.label === 'Finding').map((n) => n.props?.finding_id).filter(Boolean));
+  let added = 0;
+  for (const f of list) {
+    if (!f?.id || present.has(f.id)) continue;
+    present.add(f.id);
+    added++;
+    graph.nodes.push({
+      key: `missing:${f.id}`,
+      label: 'Finding',
+      props: {
+        title: f.title || f.id, finding_id: f.id, local_severity: f.severity,
+        status: String(f.review_status || '').replace(/-/g, '_'), stage: f.stage,
+        cwe: f.cwe, confidence: f.confidence, agent: f.agent,
+      },
+    });
+  }
+  graph._merged = added;
+}
+
 async function extrasGraph(x, force) {
   const id = x.getRunId();
   if (!id) return {};
@@ -4266,6 +4386,7 @@ async function extrasGraph(x, force) {
   const g = await api(`/api/runs/${encodeURIComponent(id)}/graph`);
   if (id !== x.getRunId()) return x.graphData || {};
   x.graphData = { id, ...g };
+  mergeRunFindingsIntoGraph(x, x.graphData);
   return x.graphData;
 }
 
@@ -4337,7 +4458,7 @@ function renderChains(x, g) {
         <span class="sev ${sevClass(c.chain_severity)}">${esc(c.chain_severity)}</span>
         ${c.potential_severity ? `<span class="chain-pot" title="Severity once every step is validated">→ ${esc(c.potential_severity)} once validated</span>` : ''}
         <span class="chain-title">${esc(c.title)}</span>
-        <span class="chain-meta">conf ${Number(c.confidence || 0).toFixed(2)} · blast ${c.blast_radius} · ${esc(c.exploitability)}</span>
+        <span class="chain-meta">conf ${Number(c.confidence || 0).toFixed(2)} · blast ${esc(c.blast_radius)} · ${esc(c.exploitability)}</span>
       </summary>
       <div class="chain-body">
         <div class="chain-impact"><b>Impact:</b> ${chainText(c.impact)}</div>
@@ -4401,7 +4522,7 @@ function renderTodo(x, g) {
         <span class="muted">${done}/${steps.length}</span></header>
       <ol class="todo-steps">${steps.map((s) => `
         <li class="todo-step ts-${esc(s.state)}">
-          <span class="ts-badge">${s.state === 'done' ? '✓ done' : s.state === 'ready' ? '▶ ready' : `⏸ after step ${s.blocked_by}`}</span>
+          <span class="ts-badge">${s.state === 'done' ? '✓ done' : s.state === 'ready' ? '▶ ready' : `⏸ after step ${esc(s.blocked_by)}`}</span>
           <div><div class="ts-step">${esc(s.step)}</div>${s.state !== 'done' ? `<div class="ts-action">${esc(s.action)}</div>` : ''}</div>
         </li>`).join('')}</ol>
     </section>`;
@@ -4492,8 +4613,10 @@ function renderGraphFindingList(x) {
   const runIds = new Set();
   for (const f of findings) for (const part of (f.key || '').split(':')) { if (part.startsWith('ns-')) runIds.add(part); }
   const cumulative = runIds.size > 1;
+  const merged = data._merged || 0;
   list.innerHTML = `<div class="gfl-header">Attack Paths</div>
     ${cumulative ? '<div class="gfl-note">Cumulative — includes findings from previous runs of this target.</div>' : ''}
+    ${merged ? `<div class="gfl-note">+${merged} finding${merged === 1 ? '' : 's'} from this run not yet in the graph file — press ↻ Graph to attach their edges.</div>` : ''}
     <button class="gfl-item ${sel === 'overview' ? 'active' : ''}" data-gf="overview">Overview (${findings.length})</button>
     ${findings.map(f => {
       const sev = f.props?.local_severity || 'info';
@@ -4636,9 +4759,10 @@ function renderGraphMemory(x) {
       const mitre = finding.mitre || props.mitre || '';
       const stageVal = finding.stage || props.stage || '';
       const exploitability = finding.exploitability || '';
-      const confidence = finding.confidence ?? props.confidence ?? '';
+      const confidenceRaw = finding.confidence ?? props.confidence ?? '';
+      const confidence = confidenceRaw === '' ? '' : fmtConf(confidenceRaw);
       const votes = finding.votes || '';
-      const reviewStatus = finding.review_status || props.status || '';
+      const reviewStatus = normReview(finding.review_status || props.status || '');
       const agent = finding.agent || '';
       const whereText = finding.where_text || finding.proof || finding.endpoint || props.description || '';
       const payloadText = finding.payload || '';
@@ -4729,7 +4853,12 @@ function renderGraphMemory(x) {
       if (revalBtn) revalBtn.addEventListener('click', async () => {
         revalBtn.disabled = true; revalBtn.textContent = 'Validating...';
         try {
-          const res = await api(`/api/runs/${encodeURIComponent(revalBtn.dataset.run)}/poc/${encodeURIComponent(revalBtn.dataset.fid)}`, { method: 'POST' });
+          // Per-finding re-validation is the retest route with a finding body;
+          // there is no /poc/:fid endpoint (it 404'd and the button always
+          // landed on "Error").
+          const res = await api(`/api/runs/${encodeURIComponent(revalBtn.dataset.run)}/retest`, {
+            method: 'POST', body: JSON.stringify({ finding: revalBtn.dataset.fid }),
+          });
           revalBtn.textContent = res.ok ? 'Validated ✓' : 'Failed ✗';
         } catch { revalBtn.textContent = 'Error'; }
       });
@@ -5076,6 +5205,9 @@ setInterval(async () => {
   if (!id || !liveExtras || $('#liveView').hidden) return;
   try {
     const d = await api(`/api/runs/${encodeURIComponent(id)}`);
+    // Keep the live PoC list in step with the same fetch, so the finding modal
+    // can offer a generated PoC without a second polling loop.
+    if (state.currentJob && Array.isArray(d.pocs)) state.currentJob.pocs = d.pocs;
     await extrasRefresh(liveExtras, d.extras || {}, true);
   } catch { /* run dir not there yet */ }
 }, 5000);
@@ -5117,6 +5249,22 @@ $('#btnRetest')?.addEventListener('click', (e) => cliAction(e.currentTarget, 'Re
 //             integrations / settings
 // ---------------------------------------------------------------------------
 
+// The launch mode a run was started in. The server sends it when it knows it
+// (web-launched runs); for CLI runs fall back to the id convention and, last,
+// the target shape (a filesystem path is a whitebox target).
+function modeLabel(r) {
+  const raw = String(r.mode || '').toLowerCase();
+  const alias = { run: 'blackbox', blackbox: 'blackbox', whitebox: 'whitebox', greybox: 'greybox', host: 'host', mobile: 'mobile', container: 'container', ai: 'ai' };
+  if (raw && alias[raw]) return alias[raw];
+  const id = String(r.id || '');
+  if (id.startsWith('ns-wb-')) return 'whitebox';
+  if (id.startsWith('ns-gb-')) return 'greybox';
+  if (id.startsWith('ns-host-')) return 'host';
+  const t = String(r.target || '');
+  if (t.startsWith('/') || /^(opt|home|var|usr|srv|root|tmp|mnt|app|sites|workspace|projects|code|src|repos?)[_/]/i.test(t)) return 'whitebox';
+  return 'blackbox';
+}
+
 async function loadPentests() {
   const body = $('#pentestsBody');
   if (!body) return;
@@ -5139,8 +5287,8 @@ async function loadPentests() {
         return blob.includes(lq);
       }) : runs;
       const rows = filtered.map(r => {
-        const mode = (r.id || '').startsWith('ns-wb-') ? 'whitebox' : (r.id || '').startsWith('ns-gb-') ? 'greybox' : (r.id || '').startsWith('ns-host-') ? 'host' : 'blackbox';
-        const when = r.when ? timeAgo(Math.floor(new Date(r.when).getTime() / 1000)) : '';
+        const mode = modeLabel(r);
+        const when = r.ts ? timeAgo(r.ts) : '';
         const proj = projectFor(r);
         return `<tr class="pentest-row" data-id="${esc(r.id)}">
           <td class="mono">${esc(r.id)}</td>
@@ -5176,7 +5324,7 @@ async function loadPrReviews() {
     const prs = runs.filter(r => r.id && r.id.includes('-pr-'));
     if (!prs.length) { body.innerHTML = '<div class="empty-state">No PR reviews yet. Run <code>neurosploit pr owner/repo 123</code> or use the MCP server.</div>'; return; }
     const rows = prs.map(r => {
-      const when = r.when ? timeAgo(Math.floor(new Date(r.when).getTime() / 1000)) : '';
+      const when = r.ts ? timeAgo(r.ts) : '';
       return `<tr class="pentest-row" data-id="${esc(r.id)}"><td class="mono">${esc(r.id)}</td><td>${esc(r.target || r.name || '')}</td><td>${r.findings ?? 0}</td><td>${esc(r.state || 'done')}</td><td>${when}</td></tr>`;
     }).join('');
     body.innerHTML = `<table class="data-table"><thead><tr><th>ID</th><th>Repository</th><th>Findings</th><th>Status</th><th>When</th></tr></thead><tbody>${rows}</tbody></table>`;
@@ -5288,7 +5436,7 @@ async function loadRepos() {
       <div class="config-card-title">${esc(r.name || r.url)}</div>
       <div class="config-card-desc">${esc(r.description || r.url)}</div>
       <div class="config-card-meta">${esc(r.provider || 'git')} · ${esc(r.branch || 'main')}</div>
-      <div class="config-card-actions"><button class="btn btn-danger" onclick="deleteRepo('${esc(r.id)}')">Remove</button></div>
+      <div class="config-card-actions"><button class="btn btn-danger" onclick="deleteRepo(${jsq(r.id)})">Remove</button></div>
     </div>`).join('') + '</div>';
   } catch { body.innerHTML = '<div class="empty-state">No repositories connected yet. Click <strong>+ Add Repository</strong> to connect one.</div>'; }
 }
@@ -5304,7 +5452,7 @@ async function loadDomains() {
       <div class="config-card-title">${esc(d.domain)}</div>
       <div class="config-card-desc">${esc(d.description || 'Target domain')}</div>
       <div class="config-card-meta">${esc(typeLabel[d.type] || d.type || 'Web')} · ${d.subdomains ? d.subdomains.length + ' subdomains' : 'No subdomains'} · ${esc(d.scope || 'in-scope')}</div>
-      <div class="config-card-actions"><button class="btn btn-danger" onclick="deleteDomain('${esc(d.id)}')">Remove</button></div>
+      <div class="config-card-actions"><button class="btn btn-danger" onclick="deleteDomain(${jsq(d.id)})">Remove</button></div>
     </div>`).join('') + '</div>';
   } catch { body.innerHTML = '<div class="empty-state">No domains configured yet. Click <strong>+ Add Domain</strong> to add one.</div>'; }
 }
@@ -5322,6 +5470,24 @@ async function loadProjectOptions() {
       projects.map(p => `<option value="${esc(p.id)}">${esc(p.org ? p.org + ' / ' : '')}${esc(p.name)}</option>`).join('');
     if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
   } catch { /* keep the previous options */ }
+}
+
+// Collapse runs that are indistinguishable in a card (same name/target/state/
+// findings) into one row with a count. Interrupted jobs in particular pile up
+// dozens of identical "target · 0f · interrupted" entries that drown the card.
+function collapseRuns(runs) {
+  const groups = new Map();
+  for (const r of runs) {
+    const key = [r.name || '', r.target || '', r.state || '', r.findings || 0].join('\u0001');
+    const g = groups.get(key);
+    if (g) {
+      g.count++;
+      if ((r.ts || 0) > (g.latest.ts || 0)) g.latest = r;
+    } else {
+      groups.set(key, { latest: r, count: 1 });
+    }
+  }
+  return [...groups.values()].sort((a, b) => (b.latest.ts || 0) - (a.latest.ts || 0));
 }
 
 async function loadProjects() {
@@ -5355,15 +5521,17 @@ async function loadProjects() {
         <div class="config-grid">${list.map(p => {
           const rs = runs.filter(r => matches(p, r)).sort((a, b) => b.ts - a.ts);
           const findings = rs.reduce((n, r) => n + (r.findings || 0), 0);
+          const collapsed = collapseRuns(rs);
           return `<div class="config-card project-card">
             <div class="config-card-title">${esc(p.name)}</div>
             <div class="config-card-desc">${esc(p.description || 'No description')}</div>
-            <div class="config-card-meta">${rs.length} test${rs.length === 1 ? '' : 's'} · ${findings} finding${findings === 1 ? '' : 's'}${p.targets?.length ? ' · ' + esc(p.targets.join(', ')) : ''}</div>
-            ${rs.length ? `<div class="project-runs">${rs.slice(0, 6).map(r => `<button class="project-run" data-run="${esc(r.id)}" title="${esc(r.target || r.id)}">
+            <div class="config-card-meta">${rs.length} test${rs.length === 1 ? '' : 's'} · ${findings} finding${findings === 1 ? '' : 's'}</div>
+            ${p.targets?.length ? `<div class="config-card-meta" style="margin-top:2px;opacity:.7">${esc(p.targets.join(' · '))}</div>` : ''}
+            ${collapsed.length ? `<div class="project-runs">${collapsed.slice(0, 6).map(({ latest: r, count }) => `<button class="project-run" data-run="${esc(r.id)}" title="${esc(`${r.target || r.id}${count > 1 ? ` · ${count} runs` : ''}${r.ts ? ` · ${new Date(r.ts * 1000).toLocaleString()}` : ''}`)}">
               <span class="state-dot state-${esc(r.state || 'unknown')}"></span>
               <span class="project-run-name">${esc(r.name || r.target || r.id)}</span>
-              <span class="project-run-meta">${r.findings || 0}f · ${esc(r.state || '')}</span>
-            </button>`).join('')}${rs.length > 6 ? `<div class="project-run-more">+${rs.length - 6} more</div>` : ''}</div>` : '<div class="project-empty">No tests matched yet.</div>'}
+              <span class="project-run-meta">${r.findings || 0}f · ${esc(r.state || '')}${count > 1 ? ` · ×${count}` : ''}</span>
+            </button>`).join('')}${collapsed.length > 6 ? `<div class="project-run-more">+${collapsed.length - 6} more</div>` : ''}</div>` : '<div class="project-empty">No tests matched yet.</div>'}
             <div class="config-card-actions">
               <button class="btn btn-sm btn-primary" data-manage-runs="${esc(p.id)}">Manage Runs</button>
               <button class="btn btn-sm" data-edit-project="${esc(p.id)}">Edit</button>
@@ -5454,7 +5622,7 @@ function openProjectRuns(projectId, projects, allRuns, matchFn) {
         <input type="checkbox" data-rid="${esc(r.id)}" ${checked ? 'checked' : ''} ${autoMatch ? 'title="Auto-matched by target"' : ''} />
         <span class="state-dot state-${esc(r.state || 'unknown')}" style="flex-shrink:0"></span>
         <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name || r.target || r.id)}</span>
-        <span class="muted" style="flex-shrink:0;font-size:12px">${r.findings || 0}f · ${esc(r.state || '')}</span>
+        <span class="muted" style="flex-shrink:0;font-size:12px">${r.findings || 0}f · ${esc(r.state || '')}${r.ts ? ` · ${timeAgo(r.ts)}` : ''}</span>
         ${autoMatch ? '<span style="font-size:10px;color:var(--accent);flex-shrink:0">auto</span>' : ''}
       </label>`;
     }).join('');
@@ -5492,7 +5660,7 @@ async function loadNetworks() {
       <div class="config-card-title">${esc(n.name || n.cidr)}</div>
       <div class="config-card-desc">${esc(n.description || n.cidr)}</div>
       <div class="config-card-meta">${esc(n.cidr)} · ${esc(n.transport || 'direct')}</div>
-      <div class="config-card-actions"><button class="btn btn-danger" onclick="deleteNetwork('${esc(n.id)}')">Remove</button></div>
+      <div class="config-card-actions"><button class="btn btn-danger" onclick="deleteNetwork(${jsq(n.id)})">Remove</button></div>
     </div>`).join('') + '</div>';
   } catch { body.innerHTML = '<div class="empty-state">No networks configured yet. Click <strong>+ Add Network</strong> to add one.</div>'; }
 }
@@ -5909,6 +6077,9 @@ async function openProviderKeysModal() {
         <div class="modal-foot"><button class="btn btn-accent" onclick="$('#providerKeysModal').hidden=true">Done</button></div>
       </div></div>`);
     existing = $('#providerKeysModal');
+    // Created lazily after the global modal-close wiring runs, so bind its
+    // click-outside close here (the Escape path finds it by id at keydown).
+    existing.addEventListener('click', (e) => { if (e.target === existing) closeModal('#providerKeysModal'); });
   }
   const body = $('#providerKeysModalBody');
   body.innerHTML = state.providers.map((p) => {
@@ -6065,12 +6236,24 @@ $('#btnIntegSubmit')?.addEventListener('click', async () => {
   } finally { btn.disabled = false; btn.textContent = 'Save & Validate'; }
 });
 
-['#repoModal', '#domainModal', '#networkModal', '#projectModal', '#guardrailsModal', '#integrationModal'].forEach(sel => {
+// Report panel links that jump to an in-app tab instead of a report anchor
+// that does not exist. Delegated because the nav is re-rendered per run.
+document.addEventListener('click', (e) => {
+  const a = e.target.closest?.('[data-report-tab]');
+  if (!a) return;
+  e.preventDefault();
+  const tab = a.dataset.reportTab;
+  const btn = document.querySelector(`.run-tab[data-tab="${tab}"]`);
+  btn?.click();
+});
+
+const CLOSE_ON_OUTSIDE = ['#repoModal', '#domainModal', '#networkModal', '#projectModal', '#projectRunsModal', '#guardrailsModal', '#integrationModal', '#providerKeysModal'];
+CLOSE_ON_OUTSIDE.forEach(sel => {
   $(sel)?.addEventListener('click', (e) => { if (e.target === $(sel)) closeModal(sel); });
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    ['#repoModal', '#domainModal', '#networkModal', '#projectModal', '#guardrailsModal', '#integrationModal'].forEach(sel => {
+    CLOSE_ON_OUTSIDE.forEach(sel => {
       if (!$(sel)?.hidden) closeModal(sel);
     });
   }
@@ -6100,7 +6283,7 @@ function updateAdaptiveTab(data) {
   if (data.waf) {
     const el = $('#adaptiveWaf');
     if (el) {
-      el.innerHTML = `Vendor: <code>${esc(data.waf.vendor || 'unknown')}</code> | Block status: <code>${data.waf.block_status || '?'}</code>${data.waf.blocked_keywords?.length ? ` | Blocked: ${data.waf.blocked_keywords.map(k => `<code>${esc(k)}</code>`).join(', ')}` : ''}${data.waf.allowed_encodings?.length ? ` | Bypass: ${data.waf.allowed_encodings.map(e => `<code>${esc(e)}</code>`).join(', ')}` : ''}`;
+      el.innerHTML = `Vendor: <code>${esc(data.waf.vendor || 'unknown')}</code> | Block status: <code>${esc(data.waf.block_status || '?')}</code>${data.waf.blocked_keywords?.length ? ` | Blocked: ${data.waf.blocked_keywords.map(k => `<code>${esc(k)}</code>`).join(', ')}` : ''}${data.waf.allowed_encodings?.length ? ` | Bypass: ${data.waf.allowed_encodings.map(e => `<code>${esc(e)}</code>`).join(', ')}` : ''}`;
       el.closest('.adaptive-section')?.classList.add('has-data');
     }
   }
