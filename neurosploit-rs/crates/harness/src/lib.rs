@@ -80,6 +80,7 @@ pub mod sandbox;
 pub mod sarif;
 pub mod scope;
 pub mod taint;
+pub mod threat_actors;
 pub mod toolbox;
 pub mod traces;
 pub mod transport;
