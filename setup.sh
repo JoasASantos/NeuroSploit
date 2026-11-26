@@ -165,15 +165,23 @@ elif command -v pacman  >/dev/null 2>&1; then PKG="pacman"
 elif command -v apk     >/dev/null 2>&1; then PKG="apk"; fi
 [ "$(id -u)" = "0" ] || command -v sudo >/dev/null 2>&1 && [ "$(id -u)" != "0" ] && SUDO="sudo"
 
-pkg_install() { # pkg_install <name...>
+pkg_install() { # pkg_install <name...>  — best-effort: never aborts the installer (set -e)
   [ -n "$PKG" ] || { warn "no supported package manager — install manually: $*"; return 0; }
+  local log; log="$(mktemp 2>/dev/null || echo /tmp/neurosploit-pkg.log)"
+  local rc=0
   case "$PKG" in
-    apt)    $SUDO apt-get update -qq >/dev/null 2>&1; $SUDO apt-get install -y "$@" >/dev/null 2>&1 ;;
-    brew)   brew install "$@" >/dev/null 2>&1 ;;
-    dnf)    $SUDO dnf install -y "$@" >/dev/null 2>&1 ;;
-    pacman) $SUDO pacman -Sy --noconfirm "$@" >/dev/null 2>&1 ;;
-    apk)    $SUDO apk add "$@" >/dev/null 2>&1 ;;
+    apt)    { $SUDO apt-get update -qq && DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y "$@"; } >"$log" 2>&1 || rc=$? ;;
+    brew)   brew install "$@" >"$log" 2>&1 || rc=$? ;;
+    dnf)    $SUDO dnf install -y "$@" >"$log" 2>&1 || rc=$? ;;
+    pacman) $SUDO pacman -Sy --noconfirm "$@" >"$log" 2>&1 || rc=$? ;;
+    apk)    $SUDO apk add "$@" >"$log" 2>&1 || rc=$? ;;
   esac
+  if [ "$rc" != "0" ]; then
+    warn "$PKG failed installing: $* (exit $rc) — last lines:"
+    tail -n 5 "$log" 2>/dev/null | sed 's/^/      /'
+  fi
+  rm -f "$log"
+  return 0
 }
 
 # Map a required command to its package name on the detected manager.
